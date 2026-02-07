@@ -74,6 +74,7 @@ type Window struct {
 	previewLinkMap     *markdown.LinkMap   // maps rendered positions to link URLs
 	previewUpdateTimer *time.Timer         // debounce timer for preview updates
 	imageCache         *rich.ImageCache    // cache for loaded images in preview mode
+	selectionContext   *SelectionContext   // context metadata for the current preview selection
 }
 
 var (
@@ -599,6 +600,247 @@ func (w *Window) UpdateTag(newtagstatus file.TagStatus) {
 	w.setTag1()
 }
 
+// SelectionContentType identifies the markdown formatting type of a selection.
+type SelectionContentType int
+
+const (
+	ContentPlain      SelectionContentType = iota // Plain unformatted text
+	ContentHeading                                // Heading (# ... ######)
+	ContentBold                                   // Bold (**text**)
+	ContentItalic                                 // Italic (*text*)
+	ContentBoldItalic                             // Bold+Italic (***text***)
+	ContentCode                                   // Inline code (`text`)
+	ContentCodeBlock                              // Fenced code block (```...```)
+	ContentLink                                   // Link ([text](url))
+	ContentImage                                  // Image (![alt](url))
+	ContentMixed                                  // Selection spans multiple formatting types
+)
+
+// SelectionContext holds metadata about the current selection in preview mode,
+// including source and rendered positions, content type, and formatting style.
+// This is used for context-aware paste operations that adapt formatting based
+// on the source and destination context.
+type SelectionContext struct {
+	SourceStart   int                  // Start offset in source markdown text
+	SourceEnd     int                  // End offset in source markdown text
+	RenderedStart int                  // Start offset in rendered text
+	RenderedEnd   int                  // End offset in rendered text
+	ContentType   SelectionContentType // Type of content selected
+	PrimaryStyle  rich.Style           // Dominant style of the selection
+	CodeLanguage  string               // Language tag for code blocks (e.g., "go")
+
+	IncludesOpenMarker  bool // Selection includes the opening formatting marker
+	IncludesCloseMarker bool // Selection includes the closing formatting marker
+}
+
+// classifyStyle maps a rich.Style to its SelectionContentType.
+func classifyStyle(s rich.Style) SelectionContentType {
+	switch {
+	case s.Image:
+		return ContentImage
+	case s.Link:
+		return ContentLink
+	case s.Code && s.Block:
+		return ContentCodeBlock
+	case s.Code:
+		return ContentCode
+	case s.Bold && s.Scale > 1.0:
+		return ContentHeading
+	case s.Bold && s.Italic:
+		return ContentBoldItalic
+	case s.Bold:
+		return ContentBold
+	case s.Italic:
+		return ContentItalic
+	default:
+		return ContentPlain
+	}
+}
+
+// analyzeSelectionContent examines the spans in the rendered RichText content
+// within the given rendered-position range [rStart, rEnd) and determines the
+// SelectionContentType. This is used during selection context updates to
+// classify what kind of markdown content the user has selected.
+func (w *Window) analyzeSelectionContent(rStart, rEnd int) SelectionContentType {
+	if w.richBody == nil || rStart >= rEnd {
+		return ContentPlain
+	}
+
+	content := w.richBody.Content()
+	if len(content) == 0 {
+		return ContentPlain
+	}
+
+	var foundType SelectionContentType
+	found := false
+	pos := 0
+
+	for _, span := range content {
+		runeLen := len([]rune(span.Text))
+		spanEnd := pos + runeLen
+
+		// Check if this span overlaps [rStart, rEnd)
+		if spanEnd > rStart && pos < rEnd {
+			ct := classifyStyle(span.Style)
+			if !found {
+				foundType = ct
+				found = true
+			} else if ct != foundType {
+				return ContentMixed
+			}
+		}
+
+		pos = spanEnd
+		if pos >= rEnd {
+			break
+		}
+	}
+
+	if !found {
+		return ContentPlain
+	}
+	return foundType
+}
+
+// updateSelectionContext reads the current selection from richBody, translates
+// the rendered positions to source positions via the previewSourceMap, analyzes
+// the content type, and stores the result in w.selectionContext. This should be
+// called after each selection change in preview mode.
+func (w *Window) updateSelectionContext() {
+	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
+		w.selectionContext = nil
+		return
+	}
+
+	p0, p1 := w.richBody.Selection()
+	contentType := w.analyzeSelectionContent(p0, p1)
+
+	// Translate rendered positions to source positions.
+	srcStart, srcEnd := w.previewSourceMap.ToSource(p0, p1)
+
+	// Determine the primary style from the first overlapping span.
+	var primaryStyle rich.Style
+	content := w.richBody.Content()
+	pos := 0
+	for _, span := range content {
+		runeLen := len([]rune(span.Text))
+		spanEnd := pos + runeLen
+		if spanEnd > p0 && pos < p1 {
+			primaryStyle = span.Style
+			break
+		}
+		pos = spanEnd
+	}
+
+	w.selectionContext = &SelectionContext{
+		SourceStart:   srcStart,
+		SourceEnd:     srcEnd,
+		RenderedStart: p0,
+		RenderedEnd:   p1,
+		ContentType:   contentType,
+		PrimaryStyle:  primaryStyle,
+	}
+}
+
+// transformForPaste adapts the pasted text based on source and destination
+// context. It applies formatting rules: re-wraps formatted text for plain
+// destinations, strips markers when destination already has the same format,
+// and handles structural elements (headings, code blocks) based on whether
+// the text includes a trailing newline.
+func transformForPaste(text []byte, sourceCtx, destCtx *SelectionContext) []byte {
+	// Pass through when context is missing or text is empty.
+	if sourceCtx == nil || destCtx == nil || len(text) == 0 {
+		return text
+	}
+
+	srcType := sourceCtx.ContentType
+	dstType := destCtx.ContentType
+
+	// If source and destination are the same formatting type, strip markers
+	// (the destination context already provides the formatting).
+	if srcType == dstType {
+		return stripMarkers(text, srcType)
+	}
+
+	// Handle structural elements (headings, code blocks).
+	switch srcType {
+	case ContentHeading:
+		// Trailing newline means structural paste — preserve as-is.
+		if len(text) > 0 && text[len(text)-1] == '\n' {
+			return text
+		}
+		// No trailing newline — strip the heading prefix, treat as text.
+		return stripHeadingPrefix(text)
+
+	case ContentCodeBlock:
+		// Trailing newline means structural paste — preserve fences.
+		if len(text) > 0 && text[len(text)-1] == '\n' {
+			return text
+		}
+		// No trailing newline — just the code text, no fences.
+		return text
+
+	case ContentBold:
+		if dstType == ContentPlain {
+			return wrapWith(text, "**")
+		}
+		return text
+
+	case ContentItalic:
+		if dstType == ContentPlain {
+			return wrapWith(text, "*")
+		}
+		return text
+
+	case ContentBoldItalic:
+		if dstType == ContentPlain {
+			return wrapWith(text, "***")
+		}
+		return text
+
+	case ContentCode:
+		if dstType == ContentPlain {
+			return wrapWith(text, "`")
+		}
+		return text
+	}
+
+	// Plain text or unrecognized — pass through.
+	return text
+}
+
+// stripMarkers removes formatting markers for same-type paste (e.g., heading prefix).
+func stripMarkers(text []byte, ct SelectionContentType) []byte {
+	switch ct {
+	case ContentHeading:
+		return stripHeadingPrefix(text)
+	default:
+		return text
+	}
+}
+
+// stripHeadingPrefix removes leading # characters and the following space.
+func stripHeadingPrefix(text []byte) []byte {
+	i := 0
+	for i < len(text) && text[i] == '#' {
+		i++
+	}
+	if i > 0 && i < len(text) && text[i] == ' ' {
+		i++
+	}
+	return text[i:]
+}
+
+// wrapWith wraps text in the given marker string (e.g., "**", "*", "`").
+func wrapWith(text []byte, marker string) []byte {
+	m := []byte(marker)
+	result := make([]byte, 0, len(m)+len(text)+len(m))
+	result = append(result, m...)
+	result = append(result, text...)
+	result = append(result, m...)
+	return result
+}
+
 // IsPreviewMode returns true if the window is in preview mode (showing rendered markdown).
 func (w *Window) IsPreviewMode() bool {
 	return w.previewMode
@@ -718,19 +960,46 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		}
 	}
 
-	// Handle button 1 in frame area for text selection
+	// Handle button 1 in frame area for text selection and chording
 	frameRect := rt.Frame().Rect()
 	if m.Point.In(frameRect) && m.Buttons&1 != 0 {
+		var chordButtons int
 		if mc != nil {
-			// Use Frame.Select() for proper drag selection
-			// This reads subsequent mouse events from mc.C until button release
-			p0, p1 := rt.Frame().Select(mc, m)
+			// Use SelectWithChord for drag selection with chord detection.
+			// Detects B2/B3 pressed while B1 is held for Cut/Paste/Snarf.
+			var p0, p1 int
+			p0, p1, chordButtons = rt.Frame().SelectWithChord(mc, m)
 			rt.SetSelection(p0, p1)
 		} else {
-			// Fallback: just set point selection if no Mousectl available
 			charPos := rt.Frame().Charofpt(m.Point)
 			rt.SetSelection(charPos, charPos)
 		}
+
+		// Sync the preview selection to the source body buffer
+		w.syncSourceSelection()
+
+		// Process chords
+		switch {
+		case chordButtons == 7: // B1+B2+B3: Snarf (copy, no delete)
+			cut(&w.body, &w.body, nil, true, false, "")
+			global.snarfContext = w.selectionContext
+
+		case chordButtons&2 != 0: // B1+B2: Cut (copy + delete)
+			w.body.TypeCommit()
+			global.seq++
+			w.body.file.Mark(global.seq)
+			cut(&w.body, &w.body, nil, true, true, "")
+			global.snarfContext = w.selectionContext
+			w.UpdatePreview()
+
+		case chordButtons&4 != 0: // B1+B3: Paste (replace selection with snarf)
+			w.body.TypeCommit()
+			global.seq++
+			w.body.file.Mark(global.seq)
+			paste(&w.body, &w.body, nil, true, false, "")
+			w.UpdatePreview()
+		}
+
 		w.Draw()
 		if w.display != nil {
 			w.display.Flush()
@@ -738,17 +1007,77 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		return true
 	}
 
+	// Handle button 2 (B2/middle-click) in frame area for Execute action
+	if m.Point.In(frameRect) && m.Buttons&2 != 0 {
+		var p0, p1 int
+		if mc != nil {
+			// Use Frame.Select() for proper drag selection with B2
+			p0, p1 = rt.Frame().Select(mc, m)
+			rt.SetSelection(p0, p1)
+		} else {
+			// Fallback: just set point selection if no Mousectl available
+			charPos := rt.Frame().Charofpt(m.Point)
+			p0, p1 = charPos, charPos
+			rt.SetSelection(charPos, charPos)
+		}
+		// If null click (no sweep), expand to word under cursor
+		if p0 == p1 {
+			_, wordStart, wordEnd := w.PreviewExpandWord(p0)
+			if wordStart != wordEnd {
+				rt.SetSelection(wordStart, wordEnd)
+				p0, p1 = wordStart, wordEnd
+			}
+		}
+		// Sync the preview selection to the source body buffer
+		w.syncSourceSelection()
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+		// Execute the rendered text as a command
+		cmdText := w.PreviewExecText()
+		if cmdText != "" {
+			previewExecute(&w.body, cmdText)
+		}
+		return true
+	}
+
 	// Handle button 3 (B3/right-click) in frame area for Look action
 	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
-		// Get character position at click point
-		charPos := rt.Frame().Charofpt(m.Point)
+		// First, perform sweep selection (like B1/B2)
+		var p0, p1 int
+		if mc != nil {
+			p0, p1 = rt.Frame().Select(mc, m)
+			rt.SetSelection(p0, p1)
+		} else {
+			charPos := rt.Frame().Charofpt(m.Point)
+			p0, p1 = charPos, charPos
+			rt.SetSelection(charPos, charPos)
+		}
 
-		// Debug output: show position and link map status
-		warning(nil, "Markdeep B3 click: charPos=%d, linkMap=%v\n", charPos, w.previewLinkMap != nil)
+		// Determine the character position for link/image checks
+		charPos := p0
+
+		// If null click (no sweep), check for existing selection or expand to word
+		if p0 == p1 {
+			// Check if click is inside an existing selection
+			q0, q1 := rt.Selection()
+			if q0 != q1 && charPos >= q0 && charPos < q1 {
+				// Click inside existing selection - use it as-is
+				p0, p1 = q0, q1
+				rt.SetSelection(q0, q1)
+			} else {
+				// Expand to word under cursor
+				_, wordStart, wordEnd := w.PreviewExpandWord(p0)
+				if wordStart != wordEnd {
+					rt.SetSelection(wordStart, wordEnd)
+					p0, p1 = wordStart, wordEnd
+				}
+			}
+		}
 
 		// Check if this position is within a link
 		url := w.PreviewLookLinkURL(charPos)
-		warning(nil, "Markdeep B3 click: url=%q\n", url)
 
 		if url != "" {
 			// Plumb the URL using the same mechanism as look3
@@ -769,8 +1098,40 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			return true
 		}
 
-		// Not a link - fall through to normal Look behavior
-		return false
+		// Check if this position is within an image
+		imageURL := rt.Frame().ImageURLAt(charPos)
+		if imageURL != "" {
+			// Plumb the image path
+			if plumbsendfid != nil {
+				pm := &plumb.Message{
+					Src:  "acme",
+					Dst:  "",
+					Dir:  w.body.AbsDirName(""),
+					Type: "text",
+					Data: []byte(imageURL),
+				}
+				if err := pm.Send(plumbsendfid); err != nil {
+					warning(nil, "Markdeep B3 image: plumb failed: %v\n", err)
+				}
+			} else {
+				warning(nil, "Markdeep B3 image: plumber not running\n")
+			}
+			return true
+		}
+
+		// Not a link or image - use selected text for Look (search in body)
+		w.syncSourceSelection()
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+
+		lookText := w.PreviewLookText()
+		if lookText != "" {
+			// Search for the text in the body buffer
+			search(&w.body, []rune(lookText))
+		}
+		return true
 	}
 
 	return false
@@ -986,6 +1347,41 @@ func (w *Window) PreviewExpandWord(pos int) (word string, start, end int) {
 // isWordChar returns true if the rune is part of a word (alphanumeric or underscore).
 func isWordChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+// syncSourceSelection maps the current preview selection to the corresponding
+// positions in the source body buffer. This keeps body.q0 and body.q1 in sync
+// with the rendered preview selection, enabling Snarf and other Acme operations
+// to work correctly in preview mode.
+func (w *Window) syncSourceSelection() {
+	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
+		return
+	}
+
+	// Get selection from the rich text frame
+	p0, p1 := w.richBody.Selection()
+
+	// Map rendered positions to source positions
+	srcStart, srcEnd := w.previewSourceMap.ToSource(p0, p1)
+
+	// Clamp to body buffer bounds
+	bodyLen := w.body.file.Nr()
+	if srcStart < 0 {
+		srcStart = 0
+	}
+	if srcEnd < 0 {
+		srcEnd = 0
+	}
+	if srcStart > bodyLen {
+		srcStart = bodyLen
+	}
+	if srcEnd > bodyLen {
+		srcEnd = bodyLen
+	}
+
+	// Update the body's selection to match
+	w.body.q0 = srcStart
+	w.body.q1 = srcEnd
 }
 
 // HandlePreviewKey handles keyboard input when the window is in preview mode.

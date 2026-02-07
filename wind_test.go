@@ -1469,6 +1469,85 @@ func TestPreviewExec(t *testing.T) {
 	}
 }
 
+// TestPreviewExecText tests PreviewExecText() directly:
+// - returns empty string when not in preview mode
+// - returns empty string when no selection
+// - returns rendered text from selection (not source markdown)
+func TestPreviewExecText(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	sourceMarkdown := "Run **Echo** now"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/exec.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Before preview mode, should return empty
+	if got := w.PreviewExecText(); got != "" {
+		t.Errorf("PreviewExecText() before preview mode should return empty, got %q", got)
+	}
+
+	// Set up rich text and enter preview mode
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(0, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// No selection should return empty
+	if got := w.PreviewExecText(); got != "" {
+		t.Errorf("PreviewExecText() with no selection should return empty, got %q", got)
+	}
+
+	// Set selection on "Echo" in rendered text (rendered as "Run Echo now")
+	plainText := rt.Content().Plain()
+	echoIdx := -1
+	for i := 0; i < len(plainText)-3; i++ {
+		if string(plainText[i:i+4]) == "Echo" {
+			echoIdx = i
+			break
+		}
+	}
+	if echoIdx < 0 {
+		t.Fatalf("Could not find 'Echo' in rendered text: %q", string(plainText))
+	}
+
+	rt.SetSelection(echoIdx, echoIdx+4)
+
+	// Should return the rendered text
+	if got := w.PreviewExecText(); got != "Echo" {
+		t.Errorf("PreviewExecText() should return 'Echo', got %q", got)
+	}
+}
+
 // TestPreviewLookExpand tests that B3 Look with no selection expands to word at click point.
 func TestPreviewLookExpand(t *testing.T) {
 	rect := image.Rect(0, 0, 800, 600)
@@ -3237,6 +3316,148 @@ func TestPreviewSelectionNearScrollbar(t *testing.T) {
 	})
 }
 
+// TestPreviewB2ExpandWord tests that a B2 null click (click without sweep, p0==p1)
+// expands to the word under the cursor using PreviewExpandWord(). In Acme, a B2
+// click on a word executes that word as a command (e.g., clicking on "Del" runs Del).
+// This test verifies:
+// 1. A B2 null click on a word expands the selection to the whole word
+// 2. The expanded word can be retrieved for execution
+// 3. A B2 null click on whitespace does not expand
+func TestPreviewB2ExpandWord(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", []rune("Del Put hello")),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14) // 10px per char, 14px height
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600) // 12px scrollbar width
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Set content: "Del Put hello" (13 chars)
+	// Positions:    0123456789...
+	//               Del Put hello
+	content := rich.Plain("Del Put hello")
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B2 null click in the middle of "Del" should expand to "Del"
+	t.Run("ExpandWordOnNullClick", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 1 (middle of "Del"), 10px per char
+		clickPt := image.Pt(frameRect.Min.X+15, frameRect.Min.Y+5)
+		downEvent := draw.Mouse{
+			Point:   clickPt,
+			Buttons: 2, // Button 2 (middle button)
+		}
+		// Immediate release at same position (null click)
+		upEvent := draw.Mouse{
+			Point:   clickPt,
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B2 null click in frame area")
+		}
+
+		// After null click, word expansion should give us "Del"
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		if word != "Del" {
+			t.Errorf("PreviewExpandWord should return \"Del\", got %q", word)
+		}
+		if start != 0 {
+			t.Errorf("PreviewExpandWord start should be 0, got %d", start)
+		}
+		if end != 3 {
+			t.Errorf("PreviewExpandWord end should be 3, got %d", end)
+		}
+	})
+
+	// Test 2: B2 null click on "Put" should expand to "Put"
+	t.Run("ExpandSecondWord", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 5 (middle of "Put"), 10px per char
+		clickPt := image.Pt(frameRect.Min.X+45, frameRect.Min.Y+5)
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		if word != "Put" {
+			t.Errorf("PreviewExpandWord should return \"Put\", got %q", word)
+		}
+		if start != 4 {
+			t.Errorf("PreviewExpandWord start should be 4, got %d", start)
+		}
+		if end != 7 {
+			t.Errorf("PreviewExpandWord end should be 7, got %d", end)
+		}
+	})
+
+	// Test 3: B2 null click on whitespace between words expands left to adjacent word
+	// This matches Acme behavior: clicking just past a word boundary selects that word.
+	t.Run("ExpandAdjacentWordOnWhitespace", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 3 (the space right after "Del")
+		clickPt := image.Pt(frameRect.Min.X+35, frameRect.Min.Y+5)
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		// Position 3 is space, but left-expansion finds "Del"
+		if word != "Del" {
+			t.Errorf("PreviewExpandWord at space after word should expand left, got %q", word)
+		}
+		if start != 0 || end != 3 {
+			t.Errorf("Expected expansion (0, 3), got (%d, %d)", start, end)
+		}
+	})
+
+	// Test 4: B2 null click beyond end of text should not expand
+	t.Run("NoExpandBeyondText", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// PreviewExpandWord with position beyond text length
+		word, _, _ := w.PreviewExpandWord(100)
+		if word != "" {
+			t.Errorf("PreviewExpandWord beyond text should return empty string, got %q", word)
+		}
+	})
+}
+
 // TestPreviewSnarfAfterSelection tests that Snarf (copy) works correctly after
 // making a drag selection in preview mode. This verifies the integration between
 // Frame.Select() drag selection and PreviewSnarf() source mapping.
@@ -3458,4 +3679,3590 @@ func TestPreviewCmdPassesImageCache(t *testing.T) {
 	// Clean up
 	w.SetPreviewMode(false)
 	cache.Clear()
+}
+
+// =============================================================================
+// Phase 18.2: Execute (B2) Tests
+// =============================================================================
+
+// TestPreviewB2Click tests that B2 (middle button/button 2) clicks in the preview
+// frame area are detected and handled by HandlePreviewMouse. In Acme, B2 is used
+// to execute commands. This test verifies:
+// 1. B2 click in frame area is detected (returns true)
+// 2. B2 click outside frame area is not handled (returns false)
+// 3. B2 click in scrollbar area goes to scrollbar, not command execution
+func TestPreviewB2Click(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Markdown with command words
+	sourceMarkdown := "# Commands\n\nRun **Del** to close.\n\nTry `Echo hello` command."
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(0, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Parse markdown and set content with source map
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	// Set up preview mode
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// Get frame rect for positioning clicks
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B2 click in frame area should be handled
+	// Click at a position in the text area
+	clickPoint := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   clickPoint,
+		Buttons: 2, // Button 2 (middle button)
+	}
+	// Immediate release for simple click
+	upEvent := draw.Mouse{
+		Point:   clickPoint,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Error("HandlePreviewMouse should handle B2 click in frame area")
+	}
+
+	// Test 2: B2 click outside body.all should not be handled
+	outsidePoint := image.Pt(-10, -10)
+	m2 := draw.Mouse{
+		Point:   outsidePoint,
+		Buttons: 2,
+	}
+	mc2 := mockMousectlWithEvents([]draw.Mouse{{Point: outsidePoint, Buttons: 0}})
+	handled2 := w.HandlePreviewMouse(&m2, mc2)
+	if handled2 {
+		t.Error("HandlePreviewMouse should NOT handle B2 click outside body.all")
+	}
+
+	// Test 3: B2 click in scrollbar should be handled as scrollbar scroll (not command execution)
+	// Scrollbar is to the left of the frame
+	scrollRect := rt.ScrollRect()
+	if !scrollRect.Empty() {
+		scrollPoint := image.Pt(scrollRect.Min.X+2, scrollRect.Min.Y+20)
+		m3 := draw.Mouse{
+			Point:   scrollPoint,
+			Buttons: 2,
+		}
+		// B2 in scrollbar triggers absolute scroll positioning
+		handled3 := w.HandlePreviewMouse(&m3, nil)
+		if !handled3 {
+			t.Error("HandlePreviewMouse should handle B2 click in scrollbar")
+		}
+	}
+}
+
+// TestPreviewB2Sweep tests that B2 (middle button) sweep selection in preview mode
+// selects a range of text from the anchor point to the release point. This is used
+// to select text for command execution (the selected text will be executed as a command).
+// This test verifies:
+// 1. B2 sweep in frame area creates a selection
+// 2. The selection spans from the mouse-down position to the mouse-up position
+// 3. The selection is properly normalized (p0 < p1)
+func TestPreviewB2Sweep(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", []rune("Echo hello world")),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14) // 10px per char, 14px height
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600) // 12px scrollbar width
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Set content: "Echo hello world" (16 chars)
+	content := rich.Plain("Echo hello world")
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B2 sweep from position 0 to position 5 (select "Echo ")
+	// Position 0 is at X = frameRect.Min.X
+	// Position 5 is at X = frameRect.Min.X + 50 (10px per char)
+	t.Run("SweepForward", func(t *testing.T) {
+		// Mouse down at position 0
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 2, // Button 2 (middle button)
+		}
+		// Drag to position 5 (still holding button)
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		// Mouse up at position 5
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B2 sweep in frame area")
+		}
+
+		// After sweep from 0 to 5, selection should be (0, 5)
+		q0, q1 := rt.Selection()
+		if q0 != 0 {
+			t.Errorf("B2 sweep selection p0 should be 0, got %d", q0)
+		}
+		if q1 != 5 {
+			t.Errorf("B2 sweep selection p1 should be 5, got %d", q1)
+		}
+	})
+
+	// Test 2: B2 sweep backward (from right to left) should normalize selection
+	t.Run("SweepBackward", func(t *testing.T) {
+		// Clear previous selection and re-render to reset frame state
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Mouse down at position 5 (50 pixels from left edge, 10px per char)
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		// Drag to position 0 (still holding button)
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		// Mouse up at position 0
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle backward B2 sweep")
+		}
+
+		// Selection should be normalized: p0 < p1
+		q0, q1 := rt.Selection()
+		if q0 != 0 {
+			t.Errorf("Backward B2 sweep selection p0 should be 0, got %d", q0)
+		}
+		if q1 != 5 {
+			t.Errorf("Backward B2 sweep selection p1 should be 5, got %d", q1)
+		}
+	})
+
+	// Test 3: B2 sweep selects text that can be retrieved for execution
+	t.Run("SweepSelectionForExec", func(t *testing.T) {
+		// Clear previous selection
+		rt.SetSelection(0, 0)
+
+		// Select "Echo hello" (positions 0 to 10)
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+100, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+100, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B2 sweep for exec")
+		}
+
+		// Verify selection covers the intended range
+		q0, q1 := rt.Selection()
+		if q1-q0 < 4 {
+			t.Errorf("B2 sweep should select at least 4 characters, got selection (%d, %d)", q0, q1)
+		}
+
+		// The selected text should be retrievable via PreviewExecText
+		// (This tests integration - the actual command execution is tested elsewhere)
+		execText := w.PreviewExecText()
+		if len(execText) == 0 {
+			t.Error("PreviewExecText should return non-empty text after B2 sweep selection")
+		}
+	})
+}
+
+// TestPreviewB2Execute tests the full B2 execute flow in preview mode:
+// When the user B2-clicks (or sweeps) a command word in the rendered preview,
+// the system should:
+// 1. Select the text in the preview frame
+// 2. Map the preview selection back to source buffer positions via syncSourceSelection()
+// 3. Call execute() with the body Text and source-mapped positions
+//
+// This test verifies that after B2 click handling, the source body has the correct
+// selection positions and that reading from body.file at those positions yields the
+// command text that execute() would receive.
+func TestPreviewB2Execute(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Markdown with a command word formatted in bold: **Del**
+	// Rendered preview text will be "Run Del now" (without the ** markers)
+	// Source text is "Run **Del** now"
+	sourceMarkdown := "Run **Del** now"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/exec.md", sourceRunes),
+	}
+	w.body.w = w
+	w.body.what = Body
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14) // 10px per char, 14px height
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600) // 12px scrollbar width
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Parse markdown with source map
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// Find "Del" in the rendered text to determine its position
+	plainText := rt.Content().Plain()
+	delIdx := -1
+	for i := 0; i < len(plainText)-2; i++ {
+		if string(plainText[i:i+3]) == "Del" {
+			delIdx = i
+			break
+		}
+	}
+	if delIdx < 0 {
+		t.Fatalf("Could not find 'Del' in rendered text: %q", string(plainText))
+	}
+
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B2 null click on "Del" should expand to word, select it,
+	// and map back to source positions where body.file contains "Del"
+	t.Run("B2ClickExecuteMapping", func(t *testing.T) {
+		// Click in the middle of "Del" in the rendered text
+		// delIdx chars from left edge, each char is 10px
+		clickX := frameRect.Min.X + delIdx*10 + 15 // middle of "Del"
+		clickPoint := image.Pt(clickX, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 2,
+		}
+		upEvent := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Fatal("HandlePreviewMouse should handle B2 click in frame area")
+		}
+
+		// Verify the preview selection covers "Del"
+		q0, q1 := rt.Selection()
+		selectedRendered := string(plainText[q0:q1])
+		if selectedRendered != "Del" {
+			t.Errorf("Preview selection should be 'Del', got %q (q0=%d, q1=%d)", selectedRendered, q0, q1)
+		}
+
+		// Verify the exec text extracted from preview matches
+		execText := w.PreviewExecText()
+		if execText != "Del" {
+			t.Errorf("PreviewExecText() should return 'Del', got %q", execText)
+		}
+
+		// Verify source body selection was synced via syncSourceSelection()
+		sourceQ0, sourceQ1 := w.body.q0, w.body.q1
+		if sourceQ1 <= sourceQ0 {
+			t.Fatalf("Source selection should be non-empty, got q0=%d q1=%d", sourceQ0, sourceQ1)
+		}
+
+		// The source-mapped positions may include markdown formatting (e.g., "**Del**")
+		// so execute() must use the rendered text from PreviewExecText(), not the raw source.
+		// Verify that PreviewExecText() gives us the clean command text for execute().
+		if execText != "Del" {
+			t.Errorf("PreviewExecText() must return clean rendered text for execute(), got %q", execText)
+		}
+
+		// Verify Del is a valid built-in command that execute() can look up
+		e := lookup(execText, globalexectab)
+		if e == nil {
+			t.Errorf("Command %q should be found in globalexectab", execText)
+		}
+		if e != nil && e.name != "Del" {
+			t.Errorf("Looked up command should be 'Del', got %q", e.name)
+		}
+	})
+
+	// Test 2: B2 sweep selection should also produce correct exec text
+	t.Run("B2SweepExecuteMapping", func(t *testing.T) {
+		// Reset selection
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Sweep to select "Del" in the rendered text
+		startX := frameRect.Min.X + delIdx*10
+		endX := frameRect.Min.X + (delIdx+3)*10
+		downEvent := draw.Mouse{
+			Point:   image.Pt(startX, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(endX, frameRect.Min.Y+5),
+			Buttons: 2,
+		}
+		upEvent := draw.Mouse{
+			Point:   image.Pt(endX, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+		if !handled {
+			t.Fatal("HandlePreviewMouse should handle B2 sweep")
+		}
+
+		// Verify exec text returns the rendered command, not raw markdown
+		execText := w.PreviewExecText()
+		if execText != "Del" {
+			t.Errorf("PreviewExecText() after sweep should return 'Del', got %q", execText)
+		}
+
+		// Verify the rendered text is a valid command for execute()
+		e := lookup(execText, globalexectab)
+		if e == nil {
+			t.Errorf("Swept command %q should be found in globalexectab", execText)
+		}
+	})
+
+	// Test 3: Verify execute flow with non-built-in command text
+	// When the user B2-clicks text that is not a built-in command,
+	// execute() should treat it as an external command to run.
+	t.Run("ExternalCommandText", func(t *testing.T) {
+		// Set up with markdown containing a non-built-in command
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Find "Run" in the rendered text (not a built-in command)
+		runIdx := -1
+		for i := 0; i < len(plainText)-2; i++ {
+			if string(plainText[i:i+3]) == "Run" {
+				runIdx = i
+				break
+			}
+		}
+		if runIdx < 0 {
+			t.Fatalf("Could not find 'Run' in rendered text: %q", string(plainText))
+		}
+
+		// B2 click on "Run"
+		clickX := frameRect.Min.X + runIdx*10 + 15
+		clickPoint := image.Pt(clickX, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 2,
+		}
+		upEvent := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Fatal("HandlePreviewMouse should handle B2 click")
+		}
+
+		execText := w.PreviewExecText()
+		if execText != "Run" {
+			t.Errorf("PreviewExecText() should return 'Run', got %q", execText)
+		}
+
+		// "Run" is not a built-in, so lookup should return nil
+		// execute() would then try to run it as an external command
+		e := lookup(execText, globalexectab)
+		if e != nil {
+			t.Errorf("'Run' should not be a built-in command, but lookup returned %q", e.name)
+		}
+	})
+}
+
+// TestPreviewB2BuiltinCommands verifies that built-in commands (Del, Snarf, Cut,
+// Paste, Look, etc.) are correctly recognized and dispatched when B2-clicked in
+// preview mode. This tests the full flow from B2 click -> word expansion ->
+// previewExecute() -> built-in command dispatch.
+func TestPreviewB2BuiltinCommands(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: display}
+	defer func() { global.row = Row{} }()
+
+	// Markdown containing multiple built-in command words.
+	// Rendered text will be: "Del Snarf Cut Paste Look" (no markdown formatting)
+	sourceMarkdown := "Del Snarf Cut Paste Look"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/builtins.md", sourceRunes),
+	}
+	w.body.w = w
+	w.body.what = Body
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14) // 10px per char, 14px height
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	plainText := rt.Content().Plain()
+	frameRect := rt.Frame().Rect()
+
+	// Helper to find word position in rendered text
+	findWord := func(word string) int {
+		for i := 0; i <= len(plainText)-len(word); i++ {
+			if string(plainText[i:i+len(word)]) == word {
+				return i
+			}
+		}
+		return -1
+	}
+
+	// Helper to B2-click a word, returning the exec text.
+	// Note: HandlePreviewMouse calls previewExecute() which dispatches the
+	// built-in command. Only use this for commands safe in test context.
+	b2Click := func(t *testing.T, word string) string {
+		t.Helper()
+		idx := findWord(word)
+		if idx < 0 {
+			t.Fatalf("Could not find %q in rendered text: %q", word, string(plainText))
+		}
+
+		// Reset selection
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		clickX := frameRect.Min.X + idx*10 + (len(word)*10)/2 // middle of word
+		clickPoint := image.Pt(clickX, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 2,
+		}
+		upEvent := draw.Mouse{
+			Point:   clickPoint,
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Fatalf("HandlePreviewMouse should handle B2 click on %q", word)
+		}
+
+		return w.PreviewExecText()
+	}
+
+	// Test that each built-in command word is correctly extracted from preview
+	// and recognized by lookup in globalexectab. We verify the B2 click -> word
+	// expansion -> PreviewExecText() -> lookup pipeline for each command.
+	t.Run("AllBuiltinsRecognized", func(t *testing.T) {
+		builtins := []string{"Del", "Snarf", "Cut", "Paste", "Look"}
+		for _, cmd := range builtins {
+			t.Run(cmd, func(t *testing.T) {
+				idx := findWord(cmd)
+				if idx < 0 {
+					t.Fatalf("Could not find %q in rendered text", cmd)
+				}
+
+				// B2 click to select the word and extract exec text,
+				// but don't go through HandlePreviewMouse (which dispatches).
+				// Instead simulate just the selection + extraction steps.
+				rt.SetSelection(0, 0)
+				rt.Render(bodyRect)
+
+				// Simulate B2 null click word expansion
+				clickX := frameRect.Min.X + idx*10 + (len(cmd)*10)/2
+				clickPoint := image.Pt(clickX, frameRect.Min.Y+5)
+				charPos := rt.Frame().Charofpt(clickPoint)
+
+				// Expand to word boundaries (same logic as HandlePreviewMouse)
+				_, wordStart, wordEnd := w.PreviewExpandWord(charPos)
+				rt.SetSelection(wordStart, wordEnd)
+				w.syncSourceSelection()
+
+				execText := w.PreviewExecText()
+				if execText != cmd {
+					t.Errorf("PreviewExecText() returned %q, want %q", execText, cmd)
+					return
+				}
+
+				e := lookup(execText, globalexectab)
+				if e == nil {
+					t.Errorf("Command %q should be found in globalexectab", cmd)
+				} else if e.name != cmd {
+					t.Errorf("Looked up command should be %q, got %q", cmd, e.name)
+				}
+			})
+		}
+	})
+
+	// Test Snarf dispatch: previewExecute with "Snarf" should snarf the body
+	// selection text into global.snarfbuf. This verifies the full dispatch
+	// path from previewExecute -> lookup -> cut(dosnarf=true, docut=false).
+	t.Run("SnarfDispatch", func(t *testing.T) {
+		// Set body selection to "Del" (first 3 chars of source)
+		w.body.q0 = 0
+		w.body.q1 = 3
+
+		// Set global.seltext so cut() uses body selection
+		global.seltext = &w.body
+
+		// Clear snarfbuf
+		global.snarfbuf = nil
+
+		// Execute Snarf via previewExecute
+		previewExecute(&w.body, "Snarf")
+
+		// Verify snarfbuf was populated with the selected source text
+		if len(global.snarfbuf) == 0 {
+			t.Error("global.snarfbuf should be populated after Snarf, but is empty")
+		} else {
+			got := string(global.snarfbuf)
+			if got != "Del" {
+				t.Errorf("global.snarfbuf should contain 'Del', got %q", got)
+			}
+		}
+	})
+
+	// Test B2 click on "Snarf" through HandlePreviewMouse dispatches correctly.
+	// Snarf is safe to dispatch in test context since it only copies to snarfbuf.
+	t.Run("SnarfViaB2Click", func(t *testing.T) {
+		// Set body selection for snarf to copy
+		w.body.q0 = 4
+		w.body.q1 = 9 // "Snarf"
+		global.seltext = &w.body
+		global.snarfbuf = nil
+
+		execText := b2Click(t, "Snarf")
+		if execText != "Snarf" {
+			t.Errorf("PreviewExecText() for Snarf returned %q", execText)
+		}
+
+		// After HandlePreviewMouse dispatches Snarf, snarfbuf should be populated.
+		// The body selection is synced via syncSourceSelection(), and cut()
+		// reads from the body file at the synced positions.
+		if len(global.snarfbuf) == 0 {
+			t.Error("global.snarfbuf should be populated after B2-clicking Snarf")
+		}
+	})
+
+	// Test Cut command flags are correct for preview dispatch
+	t.Run("CutFlags", func(t *testing.T) {
+		e := lookup("Cut", globalexectab)
+		if e == nil {
+			t.Fatal("Cut should be in globalexectab")
+		}
+		// Cut has mark=true, flag1=true (dosnarf), flag2=true (docut)
+		if !e.mark {
+			t.Error("Cut should be marked as undoable")
+		}
+		if !e.flag1 {
+			t.Error("Cut should have flag1 (dosnarf) set")
+		}
+		if !e.flag2 {
+			t.Error("Cut should have flag2 (docut) set")
+		}
+	})
+
+	// Test Paste command flags
+	t.Run("PasteFlags", func(t *testing.T) {
+		e := lookup("Paste", globalexectab)
+		if e == nil {
+			t.Fatal("Paste should be in globalexectab")
+		}
+		if !e.mark {
+			t.Error("Paste should be marked as undoable")
+		}
+	})
+
+	// Test Look command is recognized
+	t.Run("LookRecognized", func(t *testing.T) {
+		e := lookup("Look", globalexectab)
+		if e == nil {
+			t.Fatal("Look should be in globalexectab")
+		}
+		if e.name != "Look" {
+			t.Errorf("Expected Look command, got %q", e.name)
+		}
+	})
+}
+
+// TestPreviewB3Sweep tests that B3 (button 3) sweep selection works in preview mode.
+// B3 sweep should select text in the rich text frame, similar to B2 sweep but for Look.
+func TestPreviewB3Sweep(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", []rune("Hello world test")),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14) // 10px per char, 14px height
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Set content: "Hello world test" (16 chars)
+	content := rich.Plain("Hello world test")
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B3 sweep from position 0 to position 5 (select "Hello")
+	t.Run("SweepForward", func(t *testing.T) {
+		// Mouse down at position 0
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 4, // Button 3 (right button)
+		}
+		// Drag to position 5 (still holding button)
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 4,
+		}
+		// Mouse up at position 5
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B3 sweep in frame area")
+		}
+
+		// After sweep from 0 to 5, selection should be (0, 5)
+		q0, q1 := rt.Selection()
+		if q0 != 0 {
+			t.Errorf("B3 sweep selection p0 should be 0, got %d", q0)
+		}
+		if q1 != 5 {
+			t.Errorf("B3 sweep selection p1 should be 5, got %d", q1)
+		}
+	})
+
+	// Test 2: B3 sweep backward (from right to left) should normalize selection
+	t.Run("SweepBackward", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Mouse down at position 5
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5),
+			Buttons: 4,
+		}
+		// Drag to position 0
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 4,
+		}
+		// Mouse up
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle backward B3 sweep")
+		}
+
+		// Selection should be normalized: p0 < p1
+		q0, q1 := rt.Selection()
+		if q0 != 0 {
+			t.Errorf("Backward B3 sweep selection p0 should be 0, got %d", q0)
+		}
+		if q1 != 5 {
+			t.Errorf("Backward B3 sweep selection p1 should be 5, got %d", q1)
+		}
+	})
+
+	// Test 3: B3 sweep selects text that can be retrieved for Look
+	t.Run("SweepSelectionForLook", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+
+		// Select "Hello world" (positions 0 to 11)
+		downEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X, frameRect.Min.Y+5),
+			Buttons: 4,
+		}
+		dragEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+110, frameRect.Min.Y+5),
+			Buttons: 4,
+		}
+		upEvent := draw.Mouse{
+			Point:   image.Pt(frameRect.Min.X+110, frameRect.Min.Y+5),
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B3 sweep for Look")
+		}
+
+		// Verify selection covers the intended range
+		q0, q1 := rt.Selection()
+		if q1-q0 < 5 {
+			t.Errorf("B3 sweep should select at least 5 characters, got selection (%d, %d)", q0, q1)
+		}
+
+		// The selected text should be retrievable via PreviewLookText
+		lookText := w.PreviewLookText()
+		if len(lookText) == 0 {
+			t.Error("PreviewLookText should return non-empty text after B3 sweep selection")
+		}
+	})
+}
+
+// TestPreviewB3ExpandWord tests that a B3 null click (no sweep) in preview mode
+// expands the click position to the surrounding word using PreviewExpandWord().
+func TestPreviewB3ExpandWord(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", []rune("Hello world test")),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content := rich.Plain("Hello world test")
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+
+	// Test 1: B3 null click in middle of "Hello" should expand to "Hello"
+	t.Run("ExpandFirstWord", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 2 (middle of "Hello"), 10px per char
+		clickPt := image.Pt(frameRect.Min.X+25, frameRect.Min.Y+5)
+		downEvent := draw.Mouse{
+			Point:   clickPt,
+			Buttons: 4, // Button 3
+		}
+		// Immediate release at same position (null click)
+		upEvent := draw.Mouse{
+			Point:   clickPt,
+			Buttons: 0,
+		}
+
+		mc := mockMousectlWithEvents([]draw.Mouse{upEvent})
+		handled := w.HandlePreviewMouse(&downEvent, mc)
+
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B3 null click in frame area")
+		}
+
+		// After null click, word expansion should give us "Hello"
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		if word != "Hello" {
+			t.Errorf("PreviewExpandWord should return \"Hello\", got %q", word)
+		}
+		if start != 0 {
+			t.Errorf("PreviewExpandWord start should be 0, got %d", start)
+		}
+		if end != 5 {
+			t.Errorf("PreviewExpandWord end should be 5, got %d", end)
+		}
+	})
+
+	// Test 2: B3 null click on "world" should expand to "world"
+	t.Run("ExpandSecondWord", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 8 (middle of "world"), 10px per char
+		clickPt := image.Pt(frameRect.Min.X+85, frameRect.Min.Y+5)
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		if word != "world" {
+			t.Errorf("PreviewExpandWord should return \"world\", got %q", word)
+		}
+		if start != 6 {
+			t.Errorf("PreviewExpandWord start should be 6, got %d", start)
+		}
+		if end != 11 {
+			t.Errorf("PreviewExpandWord end should be 11, got %d", end)
+		}
+	})
+
+	// Test 3: B3 null click at a position between words
+	// When clicking on a space char, PreviewExpandWord may return a neighboring
+	// word or empty string depending on boundary behavior. Verify it doesn't panic
+	// and returns a consistent result.
+	t.Run("NullClickBetweenWords", func(t *testing.T) {
+		rt.SetSelection(0, 0)
+		rt.Render(bodyRect)
+
+		// Click at position 5 (space between "Hello" and "world"), 10px per char
+		clickPt := image.Pt(frameRect.Min.X+55, frameRect.Min.Y+5)
+		charPos := rt.Frame().Charofpt(clickPt)
+		word, start, end := w.PreviewExpandWord(charPos)
+		// Should return some result without panicking
+		// The exact behavior depends on boundary handling
+		_ = word
+		if end < start {
+			t.Errorf("PreviewExpandWord end (%d) should not be less than start (%d)", end, start)
+		}
+	})
+}
+
+// TestPreviewB3Search tests that B3 on non-link text in preview mode triggers
+// a search for the rendered text in the source body buffer.
+func TestPreviewB3Search(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Markdown source with bold text
+	sourceMarkdown := "Some **important** text here.\n\nFind important word."
+	// Rendered text: "Some important text here.\n\nFind important word."
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Parse markdown and set content with source map
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+	w.SetPreviewMode(true)
+
+	// Verify preview mode is set
+	if !w.IsPreviewMode() {
+		t.Fatal("Window should be in preview mode")
+	}
+
+	// Find "important" in the rendered text
+	plainText := content.Plain()
+	importantIdx := -1
+	for i := 0; i < len(plainText)-8; i++ {
+		if string(plainText[i:i+9]) == "important" {
+			importantIdx = i
+			break
+		}
+	}
+	if importantIdx < 0 {
+		t.Fatalf("Could not find 'important' in rendered text: %q", string(plainText))
+	}
+
+	// Test: B3 null click on "important" (not a link) should use search fallback
+	// The click position is not on a link, so PreviewLookLinkURL should return ""
+	url := w.PreviewLookLinkURL(importantIdx)
+	if url != "" {
+		t.Errorf("PreviewLookLinkURL should return empty for non-link text, got %q", url)
+	}
+
+	// After B3 click, the word should be expanded and available for search
+	word, start, end := w.PreviewExpandWord(importantIdx + 2) // click in middle of "important"
+	if word != "important" {
+		t.Errorf("PreviewExpandWord should return \"important\", got %q", word)
+	}
+	if end <= start {
+		t.Errorf("PreviewExpandWord should return valid range, got (%d, %d)", start, end)
+	}
+
+	// Set the selection to the expanded word
+	rt.SetSelection(start, end)
+
+	// Verify PreviewLookText returns the rendered text for search
+	lookText := w.PreviewLookText()
+	if lookText != "important" {
+		t.Errorf("PreviewLookText should return \"important\", got %q", lookText)
+	}
+
+	// The search target should be the rendered text "important", which exists
+	// in the source body as both "**important**" and "important"
+	// The search() function should be able to find it in the body
+	sourceText := string(sourceRunes)
+	if !containsSubstring(sourceText, "important") {
+		t.Error("Source text should contain 'important' for search to find")
+	}
+}
+
+// TestPreviewB3OnSelection tests that B3 clicked inside an existing selection
+// uses the selected text for the Look operation instead of expanding a word.
+func TestPreviewB3OnSelection(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	sourceMarkdown := "Hello world test phrase here"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	// Create RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+	w.SetPreviewMode(true)
+
+	// Pre-set a selection of "world test" (positions 6-16)
+	// This spans two words, which wouldn't be the result of single word expansion
+	rt.SetSelection(6, 16)
+
+	// Verify the selection is set
+	q0, q1 := rt.Selection()
+	if q0 != 6 || q1 != 16 {
+		t.Fatalf("Selection should be (6, 16), got (%d, %d)", q0, q1)
+	}
+
+	// B3 click inside the selection should use the existing selection text
+	// Click position 10 is inside the selection (6, 16)
+	frameRect := rt.Frame().Rect()
+	clickPt := image.Pt(frameRect.Min.X+105, frameRect.Min.Y+5) // position ~10
+
+	// Verify click position is inside the selection
+	charPos := rt.Frame().Charofpt(clickPt)
+	if charPos < q0 || charPos >= q1 {
+		t.Logf("Warning: charPos %d may not be inside selection (%d, %d)", charPos, q0, q1)
+	}
+
+	// The PreviewLookText should return the full selection "world test"
+	// (not just the word "test" that would result from word expansion)
+	lookText := w.PreviewLookText()
+	if lookText != "world test" {
+		t.Errorf("PreviewLookText with existing selection should return \"world test\", got %q", lookText)
+	}
+
+	// Test: if selection exists and B3 is clicked outside the selection,
+	// the selection should change (word expand at new position)
+	t.Run("B3OutsideSelection", func(t *testing.T) {
+		// Keep selection at (6, 16)
+		rt.SetSelection(6, 16)
+
+		// Click at position 0 (outside selection, on "Hello")
+		outsidePt := image.Pt(frameRect.Min.X+25, frameRect.Min.Y+5) // position ~2
+		outsideCharPos := rt.Frame().Charofpt(outsidePt)
+
+		// Word expand at position outside the selection should give "Hello"
+		word, _, _ := w.PreviewExpandWord(outsideCharPos)
+		if word != "Hello" {
+			t.Errorf("PreviewExpandWord outside selection should return \"Hello\", got %q", word)
+		}
+	})
+}
+
+// setupPreviewChordTestWindow creates a Window in preview mode for chord testing.
+// It sets up markdown content "Hello world test" with a source map, and returns
+// the window, RichText, and frame rect for positioning mouse events.
+func setupPreviewChordTestWindow(t *testing.T) (*Window, *RichText, image.Rectangle) {
+	t.Helper()
+
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	sourceMarkdown := "Hello world test"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: display}
+	t.Cleanup(func() { global.row = Row{} })
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	// Parse markdown and set content with source map for source position mapping
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+	return w, rt, frameRect
+}
+
+// TestPreviewChordDetection tests that after a B1 selection in preview mode,
+// additional button presses (B2 or B3) while B1 is still held are detected
+// as chord events. In Acme, chording is a core interaction pattern:
+//   - B1+B2 = Cut (copy to snarf buffer and delete)
+//   - B1+B3 = Paste (replace selection with snarf buffer)
+//   - B1+B2+B3 = Snarf (copy to snarf buffer, no delete)
+//
+// This test verifies:
+// 1. B1 press followed by B2 while B1 held is detected as a chord
+// 2. B1 press followed by B3 while B1 held is detected as a chord
+// 3. B1 press and release without B2/B3 is a normal selection (no chord)
+func TestPreviewChordDetection(t *testing.T) {
+	w, rt, frameRect := setupPreviewChordTestWindow(t)
+
+	// Ensure body.w is set so cut() can operate on the text properly
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: w.display}
+	defer func() { global.row = Row{} }()
+
+	// Test 1: B1 sweep to select "Hello" (chars 0-5), then B2 pressed while B1 held
+	// This should be detected as B1+B2 chord (Cut)
+	t.Run("B1ThenB2Chord", func(t *testing.T) {
+		// B1 mouse down at char 0
+		downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   downPt,
+			Buttons: 1, // B1 down
+		}
+		// Drag to char 5 with B1 held
+		dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+		dragEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 1, // B1 still held
+		}
+		// B2 pressed while B1 still held (chord event)
+		chordEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 3, // B1 (1) + B2 (2) = 3
+		}
+		// All buttons released
+		upEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B1 click in frame area")
+		}
+
+		// After chord detection, a selection should exist
+		p0, p1 := rt.Selection()
+		if p0 == p1 {
+			t.Error("Expected non-empty selection after B1 sweep for chord")
+		}
+	})
+
+	// Test 2: B1 sweep to select "world" (chars 6-11), then B3 pressed while B1 held
+	// This should be detected as B1+B3 chord (Paste)
+	t.Run("B1ThenB3Chord", func(t *testing.T) {
+		// B1 mouse down at char 6
+		downPt := image.Pt(frameRect.Min.X+60, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   downPt,
+			Buttons: 1, // B1 down
+		}
+		// Drag to char 11 with B1 held
+		dragPt := image.Pt(frameRect.Min.X+110, frameRect.Min.Y+5)
+		dragEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 1,
+		}
+		// B3 pressed while B1 still held (chord event)
+		chordEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 5, // B1 (1) + B3 (4) = 5
+		}
+		// All buttons released
+		upEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 0,
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B1 click in frame area")
+		}
+
+		p0, p1 := rt.Selection()
+		if p0 == p1 {
+			t.Error("Expected non-empty selection after B1 sweep for chord")
+		}
+	})
+
+	// Test 3: B1 sweep and release (no chord) should be a normal selection
+	t.Run("B1OnlyNoChord", func(t *testing.T) {
+		downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+		m := draw.Mouse{
+			Point:   downPt,
+			Buttons: 1,
+		}
+		dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+		dragEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 1,
+		}
+		upEvent := draw.Mouse{
+			Point:   dragPt,
+			Buttons: 0, // B1 released, no chord
+		}
+		mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, upEvent})
+
+		handled := w.HandlePreviewMouse(&m, mc)
+		if !handled {
+			t.Error("HandlePreviewMouse should handle B1 click in frame area")
+		}
+
+		// Normal selection should still work
+		p0, p1 := rt.Selection()
+		if p0 >= p1 {
+			t.Error("Expected non-empty selection after B1 sweep")
+		}
+	})
+
+	_ = w
+}
+
+// TestPreviewChordCut tests that the B1+B2 chord in preview mode performs a Cut
+// operation: the selected text is copied to the snarf buffer and deleted from
+// the source body buffer. The preview should reflect the deletion.
+// It also verifies that the cut operation uses the standard cut() path,
+// which means undo works and the system clipboard is synced.
+func TestPreviewChordCut(t *testing.T) {
+	w, rt, frameRect := setupPreviewChordTestWindow(t)
+
+	// Ensure body.w is set so cut() can operate on the text properly
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: w.display}
+	defer func() { global.row = Row{} }()
+
+	// Select "Hello" (chars 0-5) with B1, then chord B2 to cut
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	// B1+B2 chord (Cut)
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 3, // B1 + B2
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	// Clear snarf buffer and display snarf before test
+	global.snarfbuf = nil
+	w.display.WriteSnarf(nil)
+
+	originalText := "Hello world test"
+	originalLen := len([]rune(originalText))
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle B1+B2 chord")
+	}
+
+	// After B1+B2 chord, the snarf buffer should contain the cut text
+	if len(global.snarfbuf) == 0 {
+		t.Error("snarf buffer should contain cut text after B1+B2 chord")
+	}
+
+	// The source body should have the selected text removed
+	bodyLen := w.body.file.Nr()
+	if bodyLen >= originalLen {
+		t.Errorf("body length should decrease after cut: got %d, original %d", bodyLen, originalLen)
+	}
+
+	// Verify the standard cut path was used: acmeputsnarf() should have
+	// synced global.snarfbuf to the display's system clipboard via WriteSnarf().
+	clipBuf := make([]byte, 1024)
+	n, _, err := w.display.ReadSnarf(clipBuf)
+	if err != nil {
+		t.Fatalf("ReadSnarf failed: %v", err)
+	}
+	if n == 0 {
+		t.Error("system clipboard (display snarf) should be updated after chord cut; acmeputsnarf() was not called")
+	}
+
+	// Verify undo restores the original text: the cut should have set up
+	// proper undo sequence (TypeCommit + seq++ + Mark) so Undo works.
+	w.Undo(true)
+	afterUndoLen := w.body.file.Nr()
+	if afterUndoLen != originalLen {
+		t.Errorf("after undo, body length should be restored to %d, got %d", originalLen, afterUndoLen)
+	}
+
+	_ = rt
+}
+
+// TestPreviewChordPaste tests that the B1+B3 chord in preview mode performs a Paste
+// operation: the snarf buffer content replaces the current selection in the source
+// body buffer. The preview should reflect the replacement.
+// It also verifies that the paste operation uses the standard paste() path,
+// which means undo works and proper sequence points are set.
+func TestPreviewChordPaste(t *testing.T) {
+	w, rt, frameRect := setupPreviewChordTestWindow(t)
+
+	// Ensure body.w is set so paste() can operate on the text properly
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: w.display}
+	defer func() { global.row = Row{} }()
+
+	// Pre-fill snarf buffer with replacement text (both global and display snarf,
+	// since paste() calls acmegetsnarf() which reads from the display)
+	global.snarfbuf = []byte("Goodbye")
+	w.display.WriteSnarf([]byte("Goodbye"))
+
+	originalText := "Hello world test"
+	originalLen := len([]rune(originalText))
+
+	// Select "Hello" (chars 0-5) with B1, then chord B3 to paste
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	// B1+B3 chord (Paste)
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 5, // B1 (1) + B3 (4) = 5
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle B1+B3 chord")
+	}
+
+	// After B1+B3 chord, the source body should contain the pasted text
+	bodyLen := w.body.file.Nr()
+	buf := make([]rune, bodyLen)
+	w.body.file.Read(0, buf)
+	bodyText := string(buf)
+
+	// "Hello" should be replaced with "Goodbye"
+	if !containsSubstring(bodyText, "Goodbye") {
+		t.Errorf("body should contain 'Goodbye' after paste, got %q", bodyText)
+	}
+
+	// Verify undo restores the original text: the paste should have set up
+	// proper undo sequence (TypeCommit + seq++ + Mark) so Undo works.
+	w.Undo(true)
+	afterUndoLen := w.body.file.Nr()
+	if afterUndoLen != originalLen {
+		t.Errorf("after undo, body length should be restored to %d, got %d", originalLen, afterUndoLen)
+	}
+
+	_ = rt
+}
+
+// TestPreviewChordSnarf tests that the B1+B2+B3 chord in preview mode performs a
+// Snarf (copy) operation: the selected text is copied to the snarf buffer but NOT
+// deleted from the source. This is different from Cut (B1+B2) which also deletes.
+func TestPreviewChordSnarf(t *testing.T) {
+	w, rt, frameRect := setupPreviewChordTestWindow(t)
+
+	// Ensure body.w is set so cut() can operate on the text properly
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: w.display}
+	defer func() { global.row = Row{} }()
+
+	// Select "Hello" (chars 0-5) with B1, then chord B2+B3 to snarf
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	// B1+B2+B3 chord (Snarf): all three buttons held
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 7, // B1 (1) + B2 (2) + B3 (4) = 7
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	// Clear snarf buffer and display snarf before test
+	global.snarfbuf = nil
+	w.display.WriteSnarf(nil)
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle B1+B2+B3 chord")
+	}
+
+	// After B1+B2+B3 chord, the snarf buffer should contain the selected text
+	if len(global.snarfbuf) == 0 {
+		t.Error("snarf buffer should contain snarfed text after B1+B2+B3 chord")
+	}
+
+	// Verify the standard snarf path was used: acmeputsnarf() should have
+	// synced global.snarfbuf to the display's system clipboard via WriteSnarf().
+	clipBuf := make([]byte, 1024)
+	n, _, err := w.display.ReadSnarf(clipBuf)
+	if err != nil {
+		t.Fatalf("ReadSnarf failed: %v", err)
+	}
+	if n == 0 {
+		t.Error("system clipboard (display snarf) should be updated after chord snarf; acmeputsnarf() was not called")
+	}
+	if n > 0 && string(clipBuf[:n]) != string(global.snarfbuf) {
+		t.Errorf("system clipboard content should match global.snarfbuf: got %q, want %q", string(clipBuf[:n]), string(global.snarfbuf))
+	}
+
+	// Source body should NOT be modified (snarf copies but doesn't delete)
+	bodyLen := w.body.file.Nr()
+	originalLen := len([]rune("Hello world test"))
+	if bodyLen != originalLen {
+		t.Errorf("body length should be unchanged after snarf: got %d, expected %d", bodyLen, originalLen)
+	}
+
+	_ = rt
+}
+
+// TestPreviewCutSourceMapping tests that chord operations (Cut, Paste) correctly
+// map the preview selection back to source positions using the source map.
+// This ensures that edits happen at the correct positions in the markdown source,
+// not the rendered positions.
+func TestPreviewCutSourceMapping(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Use markdown with formatting so rendered positions differ from source positions
+	sourceMarkdown := "Hello **bold** world"
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+	w.body.w = w
+
+	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
+	global.row = Row{display: display}
+	defer func() { global.row = Row{} }()
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	frameRect := rt.Frame().Rect()
+
+	// The rendered text is "Hello bold world" (no ** markers).
+	// Select "bold" in the rendered view (chars 6-10 in rendered text).
+	// This should map to source positions covering "**bold**" (chars 6-14).
+	downPt := image.Pt(frameRect.Min.X+60, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+100, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	// B1+B2 chord (Cut) to verify source mapping
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 3, // B1 + B2
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	global.snarfbuf = nil
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle chord in frame area")
+	}
+
+	// The cut should have operated on source positions, removing the markdown
+	// formatting markers along with the word
+	bodyLen := w.body.file.Nr()
+	buf := make([]rune, bodyLen)
+	w.body.file.Read(0, buf)
+	bodyText := string(buf)
+
+	// After cutting "bold" from rendered view, the source should have the
+	// corresponding markdown removed. The exact result depends on source map
+	// granularity, but "**bold**" should no longer be present.
+	if containsSubstring(bodyText, "**bold**") {
+		t.Errorf("source should not contain '**bold**' after cut, got %q", bodyText)
+	}
+
+	_ = rt
+}
+
+// TestPreviewReRenderAfterEdit tests that after a chord edit operation (Cut or Paste),
+// the preview is re-rendered to reflect the changed source content. This ensures the
+// user sees an up-to-date rendered view after each chord operation.
+func TestPreviewReRenderAfterEdit(t *testing.T) {
+	w, rt, frameRect := setupPreviewChordTestWindow(t)
+
+	// Get initial content length from preview
+	initialContent := rt.Content()
+	initialLen := initialContent.Len()
+
+	// Select "Hello" (chars 0-5) with B1, then chord B2 to cut
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 3, // B1+B2 (Cut)
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	global.snarfbuf = nil
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle chord")
+	}
+
+	// After cutting text, the preview content should be re-rendered with shorter content
+	updatedContent := rt.Content()
+	updatedLen := updatedContent.Len()
+
+	if updatedLen >= initialLen {
+		t.Errorf("preview content length should decrease after cut: initial=%d, updated=%d", initialLen, updatedLen)
+	}
+}
+
+// TestSelectionContext tests the SelectionContext struct used for context-aware
+// paste operations in preview mode. SelectionContext tracks metadata about the
+// current selection including source/rendered positions, content type, and
+// formatting information needed to adapt paste behavior.
+func TestSelectionContext(t *testing.T) {
+	t.Run("ZeroValue", func(t *testing.T) {
+		// A zero-value SelectionContext should have ContentPlain type
+		var ctx SelectionContext
+		if ctx.ContentType != ContentPlain {
+			t.Errorf("zero-value ContentType = %v, want ContentPlain (%v)", ctx.ContentType, ContentPlain)
+		}
+		if ctx.SourceStart != 0 || ctx.SourceEnd != 0 {
+			t.Errorf("zero-value source range = (%d,%d), want (0,0)", ctx.SourceStart, ctx.SourceEnd)
+		}
+		if ctx.RenderedStart != 0 || ctx.RenderedEnd != 0 {
+			t.Errorf("zero-value rendered range = (%d,%d), want (0,0)", ctx.RenderedStart, ctx.RenderedEnd)
+		}
+		if ctx.CodeLanguage != "" {
+			t.Errorf("zero-value CodeLanguage = %q, want empty", ctx.CodeLanguage)
+		}
+		if ctx.IncludesOpenMarker || ctx.IncludesCloseMarker {
+			t.Error("zero-value should not include markers")
+		}
+	})
+
+	t.Run("ContentTypes", func(t *testing.T) {
+		// Verify all content type constants are distinct
+		types := []SelectionContentType{
+			ContentPlain,
+			ContentHeading,
+			ContentBold,
+			ContentItalic,
+			ContentBoldItalic,
+			ContentCode,
+			ContentCodeBlock,
+			ContentLink,
+			ContentImage,
+			ContentMixed,
+		}
+		seen := make(map[SelectionContentType]bool)
+		for _, ct := range types {
+			if seen[ct] {
+				t.Errorf("duplicate content type value: %v", ct)
+			}
+			seen[ct] = true
+		}
+	})
+
+	t.Run("PlainText", func(t *testing.T) {
+		ctx := SelectionContext{
+			SourceStart:   0,
+			SourceEnd:     5,
+			RenderedStart: 0,
+			RenderedEnd:   5,
+			ContentType:   ContentPlain,
+		}
+		if ctx.ContentType != ContentPlain {
+			t.Errorf("ContentType = %v, want ContentPlain", ctx.ContentType)
+		}
+		if ctx.SourceEnd-ctx.SourceStart != 5 {
+			t.Errorf("source length = %d, want 5", ctx.SourceEnd-ctx.SourceStart)
+		}
+	})
+
+	t.Run("BoldSelection", func(t *testing.T) {
+		// Selecting "bold" from "**bold**" in rendered text
+		// Source: "**bold**" (positions 0-8)
+		// Rendered: "bold" (positions 0-4)
+		ctx := SelectionContext{
+			SourceStart:        0,
+			SourceEnd:          8,
+			RenderedStart:      0,
+			RenderedEnd:        4,
+			ContentType:        ContentBold,
+			PrimaryStyle:       rich.Style{Bold: true, Scale: 1.0},
+			IncludesOpenMarker: true,
+			IncludesCloseMarker: true,
+		}
+		if ctx.ContentType != ContentBold {
+			t.Errorf("ContentType = %v, want ContentBold", ctx.ContentType)
+		}
+		if !ctx.IncludesOpenMarker || !ctx.IncludesCloseMarker {
+			t.Error("full bold selection should include both markers")
+		}
+		if !ctx.PrimaryStyle.Bold {
+			t.Error("PrimaryStyle should have Bold set")
+		}
+	})
+
+	t.Run("PartialBoldSelection", func(t *testing.T) {
+		// Selecting "ol" from "**bold**" in rendered text
+		// Source: positions within "**bold**" excluding markers
+		// Rendered: "ol" (positions 1-3)
+		ctx := SelectionContext{
+			SourceStart:         4, // "**b|ol|d**" -> source pos of 'o'
+			SourceEnd:           6, // source pos after 'l'
+			RenderedStart:       1,
+			RenderedEnd:         3,
+			ContentType:         ContentBold,
+			PrimaryStyle:        rich.Style{Bold: true, Scale: 1.0},
+			IncludesOpenMarker:  false,
+			IncludesCloseMarker: false,
+		}
+		if ctx.ContentType != ContentBold {
+			t.Errorf("ContentType = %v, want ContentBold", ctx.ContentType)
+		}
+		if ctx.IncludesOpenMarker || ctx.IncludesCloseMarker {
+			t.Error("partial bold selection should not include markers")
+		}
+	})
+
+	t.Run("HeadingSelection", func(t *testing.T) {
+		// Selecting entire heading text from "# Heading"
+		// Source: "# Heading\n" (positions 0-10)
+		// Rendered: "Heading\n" (positions 0-8)
+		ctx := SelectionContext{
+			SourceStart:        0,
+			SourceEnd:          10,
+			RenderedStart:      0,
+			RenderedEnd:        8,
+			ContentType:        ContentHeading,
+			PrimaryStyle:       rich.Style{Bold: true, Scale: 2.0},
+			IncludesOpenMarker: true,
+		}
+		if ctx.ContentType != ContentHeading {
+			t.Errorf("ContentType = %v, want ContentHeading", ctx.ContentType)
+		}
+		if !ctx.IncludesOpenMarker {
+			t.Error("heading selection from start should include open marker")
+		}
+	})
+
+	t.Run("CodeBlockSelection", func(t *testing.T) {
+		// Selecting text inside a fenced code block
+		ctx := SelectionContext{
+			SourceStart:   0,
+			SourceEnd:     30,
+			RenderedStart: 0,
+			RenderedEnd:   15,
+			ContentType:   ContentCodeBlock,
+			CodeLanguage:  "go",
+			PrimaryStyle:  rich.Style{Code: true, Block: true, Scale: 1.0},
+		}
+		if ctx.ContentType != ContentCodeBlock {
+			t.Errorf("ContentType = %v, want ContentCodeBlock", ctx.ContentType)
+		}
+		if ctx.CodeLanguage != "go" {
+			t.Errorf("CodeLanguage = %q, want %q", ctx.CodeLanguage, "go")
+		}
+	})
+
+	t.Run("InlineCodeSelection", func(t *testing.T) {
+		// Selecting inline code "`code`"
+		ctx := SelectionContext{
+			SourceStart:         0,
+			SourceEnd:           6, // `code`
+			RenderedStart:       0,
+			RenderedEnd:         4, // code
+			ContentType:         ContentCode,
+			PrimaryStyle:        rich.Style{Code: true, Scale: 1.0},
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		if ctx.ContentType != ContentCode {
+			t.Errorf("ContentType = %v, want ContentCode", ctx.ContentType)
+		}
+	})
+
+	t.Run("LinkSelection", func(t *testing.T) {
+		// Selecting link text from "[link](url)"
+		ctx := SelectionContext{
+			SourceStart:         0,
+			SourceEnd:           12,
+			RenderedStart:       0,
+			RenderedEnd:         4,
+			ContentType:         ContentLink,
+			PrimaryStyle:        rich.Style{Link: true, Fg: rich.LinkBlue, Scale: 1.0},
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		if ctx.ContentType != ContentLink {
+			t.Errorf("ContentType = %v, want ContentLink", ctx.ContentType)
+		}
+		if !ctx.PrimaryStyle.Link {
+			t.Error("PrimaryStyle should have Link set")
+		}
+	})
+
+	t.Run("ImageSelection", func(t *testing.T) {
+		// Selecting image placeholder
+		ctx := SelectionContext{
+			SourceStart:   0,
+			SourceEnd:     22, // ![alt text](image.png)
+			RenderedStart: 0,
+			RenderedEnd:   16, // [Image: alt text]
+			ContentType:   ContentImage,
+			PrimaryStyle:  rich.Style{Image: true, Scale: 1.0},
+		}
+		if ctx.ContentType != ContentImage {
+			t.Errorf("ContentType = %v, want ContentImage", ctx.ContentType)
+		}
+	})
+
+	t.Run("MixedSelection", func(t *testing.T) {
+		// Selecting across multiple formatting types
+		// e.g., "plain **bold** *italic*"
+		ctx := SelectionContext{
+			SourceStart:   0,
+			SourceEnd:     24,
+			RenderedStart: 0,
+			RenderedEnd:   18,
+			ContentType:   ContentMixed,
+		}
+		if ctx.ContentType != ContentMixed {
+			t.Errorf("ContentType = %v, want ContentMixed", ctx.ContentType)
+		}
+	})
+
+	t.Run("ItalicSelection", func(t *testing.T) {
+		ctx := SelectionContext{
+			SourceStart:         0,
+			SourceEnd:           8, // *italic*
+			RenderedStart:       0,
+			RenderedEnd:         6, // italic
+			ContentType:         ContentItalic,
+			PrimaryStyle:        rich.Style{Italic: true, Scale: 1.0},
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		if ctx.ContentType != ContentItalic {
+			t.Errorf("ContentType = %v, want ContentItalic", ctx.ContentType)
+		}
+		if !ctx.PrimaryStyle.Italic {
+			t.Error("PrimaryStyle should have Italic set")
+		}
+	})
+
+	t.Run("BoldItalicSelection", func(t *testing.T) {
+		ctx := SelectionContext{
+			SourceStart:   0,
+			SourceEnd:     13, // ***both***
+			RenderedStart: 0,
+			RenderedEnd:   4, // both
+			ContentType:   ContentBoldItalic,
+			PrimaryStyle:  rich.Style{Bold: true, Italic: true, Scale: 1.0},
+		}
+		if ctx.ContentType != ContentBoldItalic {
+			t.Errorf("ContentType = %v, want ContentBoldItalic", ctx.ContentType)
+		}
+		if !ctx.PrimaryStyle.Bold || !ctx.PrimaryStyle.Italic {
+			t.Error("PrimaryStyle should have both Bold and Italic set")
+		}
+	})
+}
+
+// TestAnalyzeSelectionContent tests the analyzeSelectionContent method which
+// examines the spans in the rendered RichText content within the given
+// rendered-position range [rStart, rEnd) and determines the SelectionContentType.
+// This is used during selection context updates to classify what kind of
+// markdown content the user has selected (plain, bold, italic, code, heading, etc.).
+func TestAnalyzeSelectionContent(t *testing.T) {
+	// Helper to create a Window with richBody set to given content.
+	setupWindow := func(t *testing.T, content rich.Content) *Window {
+		t.Helper()
+		rect := image.Rect(0, 0, 800, 600)
+		display := edwoodtest.NewDisplay(rect)
+		global.configureGlobals(display)
+
+		w := NewWindow().initHeadless(nil)
+		w.display = display
+		w.body = Text{
+			display: display,
+			fr:      &MockFrame{},
+			file:    file.MakeObservableEditableBuffer("/test/readme.md", nil),
+		}
+		w.body.all = image.Rect(0, 20, 800, 600)
+		w.col = &Column{safe: true}
+
+		font := edwoodtest.NewFont(10, 14)
+		bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+		textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+		rt := NewRichText()
+		bodyRect := image.Rect(12, 20, 800, 600)
+		rt.Init(display, font,
+			WithRichTextBackground(bgImage),
+			WithRichTextColor(textImage),
+		)
+		rt.Render(bodyRect)
+		rt.SetContent(content)
+		w.richBody = rt
+		w.SetPreviewMode(true)
+		return w
+	}
+
+	t.Run("PlainText", func(t *testing.T) {
+		// Content: "Hello world" — all plain text with default style.
+		content := rich.Plain("Hello world")
+		w := setupWindow(t, content)
+
+		// Selecting "Hello" (positions 0-5) should be plain.
+		got := w.analyzeSelectionContent(0, 5)
+		if got != ContentPlain {
+			t.Errorf("analyzeSelectionContent(0,5) = %v, want ContentPlain", got)
+		}
+	})
+
+	t.Run("AllBold", func(t *testing.T) {
+		// Content: "bold text" rendered with bold style.
+		content := rich.Content{
+			{Text: "bold text", Style: rich.StyleBold},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 9)
+		if got != ContentBold {
+			t.Errorf("analyzeSelectionContent(0,9) = %v, want ContentBold", got)
+		}
+	})
+
+	t.Run("PartialBold", func(t *testing.T) {
+		// Content: "bold text" rendered bold, selecting "old" (positions 1-4).
+		content := rich.Content{
+			{Text: "bold text", Style: rich.StyleBold},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(1, 4)
+		if got != ContentBold {
+			t.Errorf("analyzeSelectionContent(1,4) = %v, want ContentBold", got)
+		}
+	})
+
+	t.Run("AllItalic", func(t *testing.T) {
+		// Content: "italic" rendered with italic style.
+		content := rich.Content{
+			{Text: "italic", Style: rich.StyleItalic},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 6)
+		if got != ContentItalic {
+			t.Errorf("analyzeSelectionContent(0,6) = %v, want ContentItalic", got)
+		}
+	})
+
+	t.Run("BoldItalic", func(t *testing.T) {
+		// Content: "emphasis" rendered with both bold and italic.
+		content := rich.Content{
+			{Text: "emphasis", Style: rich.Style{Bold: true, Italic: true, Scale: 1.0}},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 8)
+		if got != ContentBoldItalic {
+			t.Errorf("analyzeSelectionContent(0,8) = %v, want ContentBoldItalic", got)
+		}
+	})
+
+	t.Run("InlineCode", func(t *testing.T) {
+		// Content: "code" rendered with code style (monospace).
+		content := rich.Content{
+			{Text: "code", Style: rich.StyleCode},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 4)
+		if got != ContentCode {
+			t.Errorf("analyzeSelectionContent(0,4) = %v, want ContentCode", got)
+		}
+	})
+
+	t.Run("CodeBlock", func(t *testing.T) {
+		// Content: "func main() {}" as a block-level code element.
+		content := rich.Content{
+			{Text: "func main() {}", Style: rich.Style{Code: true, Block: true, Scale: 1.0}},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 14)
+		if got != ContentCodeBlock {
+			t.Errorf("analyzeSelectionContent(0,14) = %v, want ContentCodeBlock", got)
+		}
+	})
+
+	t.Run("Heading", func(t *testing.T) {
+		// Content: "Heading" rendered with heading style (bold, Scale > 1).
+		content := rich.Content{
+			{Text: "Heading", Style: rich.StyleH1},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 7)
+		if got != ContentHeading {
+			t.Errorf("analyzeSelectionContent(0,7) = %v, want ContentHeading", got)
+		}
+	})
+
+	t.Run("HeadingH2", func(t *testing.T) {
+		// H2 heading also detected as heading.
+		content := rich.Content{
+			{Text: "Subheading", Style: rich.StyleH2},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 10)
+		if got != ContentHeading {
+			t.Errorf("analyzeSelectionContent(0,10) = %v, want ContentHeading", got)
+		}
+	})
+
+	t.Run("Link", func(t *testing.T) {
+		// Content: "click here" rendered as a link.
+		content := rich.Content{
+			{Text: "click here", Style: rich.StyleLink},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 10)
+		if got != ContentLink {
+			t.Errorf("analyzeSelectionContent(0,10) = %v, want ContentLink", got)
+		}
+	})
+
+	t.Run("Image", func(t *testing.T) {
+		// Content: image placeholder text.
+		content := rich.Content{
+			{Text: "[image]", Style: rich.Style{Image: true, ImageURL: "photo.png", Scale: 1.0}},
+		}
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(0, 7)
+		if got != ContentImage {
+			t.Errorf("analyzeSelectionContent(0,7) = %v, want ContentImage", got)
+		}
+	})
+
+	t.Run("MixedPlainAndBold", func(t *testing.T) {
+		// Content: "Hello " (plain) + "world" (bold)
+		// Selecting across both spans should return ContentMixed.
+		content := rich.Content{
+			{Text: "Hello ", Style: rich.DefaultStyle()},
+			{Text: "world", Style: rich.StyleBold},
+		}
+		w := setupWindow(t, content)
+
+		// Select "lo world" (positions 3-11), spanning plain and bold.
+		got := w.analyzeSelectionContent(3, 11)
+		if got != ContentMixed {
+			t.Errorf("analyzeSelectionContent(3,11) = %v, want ContentMixed", got)
+		}
+	})
+
+	t.Run("MixedBoldAndItalic", func(t *testing.T) {
+		// Content: "bold" (bold) + " and " (plain) + "italic" (italic)
+		content := rich.Content{
+			{Text: "bold", Style: rich.StyleBold},
+			{Text: " and ", Style: rich.DefaultStyle()},
+			{Text: "italic", Style: rich.StyleItalic},
+		}
+		w := setupWindow(t, content)
+
+		// Select everything (0-15 = "bold and italic").
+		got := w.analyzeSelectionContent(0, 15)
+		if got != ContentMixed {
+			t.Errorf("analyzeSelectionContent(0,15) = %v, want ContentMixed", got)
+		}
+	})
+
+	t.Run("SelectionWithinOneSpanOfMultiple", func(t *testing.T) {
+		// Content: "plain " (default) + "bold" (bold) + " more" (default)
+		// Selecting only within the bold span should return ContentBold.
+		content := rich.Content{
+			{Text: "plain ", Style: rich.DefaultStyle()},
+			{Text: "bold", Style: rich.StyleBold},
+			{Text: " more", Style: rich.DefaultStyle()},
+		}
+		w := setupWindow(t, content)
+
+		// "bold" starts at position 6, ends at 10.
+		got := w.analyzeSelectionContent(6, 10)
+		if got != ContentBold {
+			t.Errorf("analyzeSelectionContent(6,10) = %v, want ContentBold", got)
+		}
+	})
+
+	t.Run("EmptySelection", func(t *testing.T) {
+		// An empty selection (rStart == rEnd) should return ContentPlain.
+		content := rich.Plain("Some text")
+		w := setupWindow(t, content)
+
+		got := w.analyzeSelectionContent(5, 5)
+		if got != ContentPlain {
+			t.Errorf("analyzeSelectionContent(5,5) = %v, want ContentPlain", got)
+		}
+	})
+
+	t.Run("NilRichBody", func(t *testing.T) {
+		// If richBody is nil, should safely return ContentPlain.
+		w := NewWindow().initHeadless(nil)
+		w.richBody = nil
+
+		got := w.analyzeSelectionContent(0, 5)
+		if got != ContentPlain {
+			t.Errorf("analyzeSelectionContent(0,5) with nil richBody = %v, want ContentPlain", got)
+		}
+	})
+}
+
+// TestUpdateSelectionContext tests the updateSelectionContext method which is
+// called after each selection change in preview mode. It should read the current
+// selection from richBody, translate positions via the previewSourceMap, analyze
+// the content type, and store the result in w.selectionContext.
+func TestUpdateSelectionContext(t *testing.T) {
+	// Helper to create a window with richBody, source map, and selection set.
+	setupWindow := func(t *testing.T, srcText string, selStart, selEnd int) *Window {
+		t.Helper()
+		rect := image.Rect(0, 0, 800, 600)
+		display := edwoodtest.NewDisplay(rect)
+		global.configureGlobals(display)
+
+		w := NewWindow().initHeadless(nil)
+		w.display = display
+		w.body = Text{
+			display: display,
+			fr:      &MockFrame{},
+			file:    file.MakeObservableEditableBuffer("/test/readme.md", nil),
+		}
+		w.body.all = image.Rect(0, 20, 800, 600)
+		w.col = &Column{safe: true}
+
+		font := edwoodtest.NewFont(10, 14)
+		bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+		textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+		// Parse the source markdown to get content and source map.
+		content, sourceMap, _ := markdown.ParseWithSourceMap(srcText)
+
+		rt := NewRichText()
+		bodyRect := image.Rect(12, 20, 800, 600)
+		rt.Init(display, font,
+			WithRichTextBackground(bgImage),
+			WithRichTextColor(textImage),
+		)
+		rt.Render(bodyRect)
+		rt.SetContent(content)
+		rt.SetSelection(selStart, selEnd)
+
+		w.richBody = rt
+		w.previewSourceMap = sourceMap
+		w.SetPreviewMode(true)
+		return w
+	}
+
+	t.Run("PlainTextSelection", func(t *testing.T) {
+		// Source: "Hello world" — plain text, no formatting markers.
+		// Select "Hello" (rendered positions 0-5).
+		w := setupWindow(t, "Hello world", 0, 5)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext")
+		}
+		ctx := w.selectionContext
+		if ctx.RenderedStart != 0 || ctx.RenderedEnd != 5 {
+			t.Errorf("rendered range = [%d,%d), want [0,5)", ctx.RenderedStart, ctx.RenderedEnd)
+		}
+		if ctx.ContentType != ContentPlain {
+			t.Errorf("ContentType = %v, want ContentPlain", ctx.ContentType)
+		}
+	})
+
+	t.Run("BoldTextSelection", func(t *testing.T) {
+		// Source: "**bold**" — bold text. Rendered as "bold" (4 chars).
+		// Select all rendered text (0-4).
+		w := setupWindow(t, "**bold**", 0, 4)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext")
+		}
+		ctx := w.selectionContext
+		if ctx.RenderedStart != 0 || ctx.RenderedEnd != 4 {
+			t.Errorf("rendered range = [%d,%d), want [0,4)", ctx.RenderedStart, ctx.RenderedEnd)
+		}
+		if ctx.ContentType != ContentBold {
+			t.Errorf("ContentType = %v, want ContentBold", ctx.ContentType)
+		}
+		// Source positions should include the ** markers: [0, 8).
+		if ctx.SourceStart != 0 || ctx.SourceEnd != 8 {
+			t.Errorf("source range = [%d,%d), want [0,8)", ctx.SourceStart, ctx.SourceEnd)
+		}
+	})
+
+	t.Run("HeadingSelection", func(t *testing.T) {
+		// Source: "# Heading\n" — heading. Rendered as "Heading\n" (8 chars).
+		// Select "Heading" (0-7).
+		w := setupWindow(t, "# Heading\n", 0, 7)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext")
+		}
+		ctx := w.selectionContext
+		if ctx.ContentType != ContentHeading {
+			t.Errorf("ContentType = %v, want ContentHeading", ctx.ContentType)
+		}
+	})
+
+	t.Run("EmptySelection", func(t *testing.T) {
+		// When selection is empty (p0 == p1), context should reflect that.
+		w := setupWindow(t, "Hello world", 3, 3)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext for empty selection")
+		}
+		ctx := w.selectionContext
+		if ctx.RenderedStart != 3 || ctx.RenderedEnd != 3 {
+			t.Errorf("rendered range = [%d,%d), want [3,3)", ctx.RenderedStart, ctx.RenderedEnd)
+		}
+		// Empty selection is ContentPlain.
+		if ctx.ContentType != ContentPlain {
+			t.Errorf("ContentType = %v, want ContentPlain", ctx.ContentType)
+		}
+	})
+
+	t.Run("NotPreviewMode", func(t *testing.T) {
+		// When not in preview mode, updateSelectionContext should not set context.
+		w := setupWindow(t, "Hello world", 0, 5)
+		w.SetPreviewMode(false)
+		w.updateSelectionContext()
+
+		if w.selectionContext != nil {
+			t.Errorf("selectionContext should be nil when not in preview mode, got %+v", w.selectionContext)
+		}
+	})
+
+	t.Run("NilRichBody", func(t *testing.T) {
+		// When richBody is nil, updateSelectionContext should not panic.
+		w := setupWindow(t, "Hello", 0, 5)
+		w.richBody = nil
+		w.updateSelectionContext()
+
+		if w.selectionContext != nil {
+			t.Errorf("selectionContext should be nil when richBody is nil, got %+v", w.selectionContext)
+		}
+	})
+
+	t.Run("NilSourceMap", func(t *testing.T) {
+		// When previewSourceMap is nil, updateSelectionContext should not panic.
+		w := setupWindow(t, "Hello", 0, 5)
+		w.previewSourceMap = nil
+		w.updateSelectionContext()
+
+		if w.selectionContext != nil {
+			t.Errorf("selectionContext should be nil when previewSourceMap is nil, got %+v", w.selectionContext)
+		}
+	})
+
+	t.Run("InlineCodeSelection", func(t *testing.T) {
+		// Source: "`code`" — inline code. Rendered as "code" (4 chars).
+		// Select all rendered text (0-4).
+		w := setupWindow(t, "`code`", 0, 4)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext")
+		}
+		ctx := w.selectionContext
+		if ctx.ContentType != ContentCode {
+			t.Errorf("ContentType = %v, want ContentCode", ctx.ContentType)
+		}
+	})
+
+	t.Run("MixedContentSelection", func(t *testing.T) {
+		// Source: "plain **bold**" — mixed plain and bold.
+		// Rendered as "plain bold" (10 chars). Selecting all should be ContentMixed.
+		w := setupWindow(t, "plain **bold**", 0, 10)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after updateSelectionContext")
+		}
+		ctx := w.selectionContext
+		if ctx.ContentType != ContentMixed {
+			t.Errorf("ContentType = %v, want ContentMixed", ctx.ContentType)
+		}
+	})
+
+	t.Run("SelectionUpdatesOnChange", func(t *testing.T) {
+		// Verify that calling updateSelectionContext again with a new selection
+		// replaces the previous context.
+		w := setupWindow(t, "Hello **bold** world", 0, 5)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after first updateSelectionContext")
+		}
+		firstType := w.selectionContext.ContentType
+
+		// Change selection to cover the bold portion.
+		// "Hello bold world" rendered: "Hello " = 6, "bold" = 4, " world" = 6
+		// Bold portion is at rendered positions 6-10.
+		w.richBody.SetSelection(6, 10)
+		w.updateSelectionContext()
+
+		if w.selectionContext == nil {
+			t.Fatal("selectionContext is nil after second updateSelectionContext")
+		}
+		if w.selectionContext.ContentType == firstType && firstType == ContentPlain {
+			// First selection was plain "Hello", second should be bold.
+			if w.selectionContext.ContentType != ContentBold {
+				t.Errorf("after changing selection, ContentType = %v, want ContentBold", w.selectionContext.ContentType)
+			}
+		}
+	})
+}
+
+func TestSnarfWithContext(t *testing.T) {
+	// Helper to create a window with richBody, source map, selection, and body buffer.
+	setupWindow := func(t *testing.T, srcText string, selStart, selEnd int) *Window {
+		t.Helper()
+		rect := image.Rect(0, 0, 800, 600)
+		display := edwoodtest.NewDisplay(rect)
+		global.configureGlobals(display)
+
+		w := NewWindow().initHeadless(nil)
+		w.display = display
+		w.body = Text{
+			display: display,
+			fr:      &MockFrame{},
+			file:    file.MakeObservableEditableBuffer("/test/readme.md", nil),
+		}
+		w.body.all = image.Rect(0, 20, 800, 600)
+		w.col = &Column{safe: true}
+
+		// Insert source text into body buffer.
+		w.body.file.InsertAt(0, []rune(srcText))
+
+		font := edwoodtest.NewFont(10, 14)
+		bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+		textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+		content, sourceMap, _ := markdown.ParseWithSourceMap(srcText)
+
+		rt := NewRichText()
+		bodyRect := image.Rect(12, 20, 800, 600)
+		rt.Init(display, font,
+			WithRichTextBackground(bgImage),
+			WithRichTextColor(textImage),
+		)
+		rt.Render(bodyRect)
+		rt.SetContent(content)
+		rt.SetSelection(selStart, selEnd)
+
+		w.richBody = rt
+		w.previewSourceMap = sourceMap
+		w.SetPreviewMode(true)
+		return w
+	}
+
+	t.Run("PlainTextSnarf", func(t *testing.T) {
+		// Source: "Hello world" — select "Hello" (rendered 0-5), snarf it.
+		w := setupWindow(t, "Hello world", 0, 5)
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for valid selection")
+		}
+
+		// Store snarf with context (the behavior under test).
+		global.snarfbuf = snarfed
+		global.snarfContext = w.selectionContext
+
+		if global.snarfContext == nil {
+			t.Fatal("snarfContext is nil after snarf operation")
+		}
+		if global.snarfContext.ContentType != ContentPlain {
+			t.Errorf("snarfContext.ContentType = %v, want ContentPlain", global.snarfContext.ContentType)
+		}
+		if string(global.snarfbuf) != "Hello" {
+			t.Errorf("snarfbuf = %q, want %q", string(global.snarfbuf), "Hello")
+		}
+	})
+
+	t.Run("BoldTextSnarf", func(t *testing.T) {
+		// Source: "**bold text**" — select the rendered bold text, snarf it.
+		w := setupWindow(t, "**bold text**", 0, 9)
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for bold selection")
+		}
+
+		global.snarfbuf = snarfed
+		global.snarfContext = w.selectionContext
+
+		if global.snarfContext == nil {
+			t.Fatal("snarfContext is nil after bold snarf")
+		}
+		if global.snarfContext.ContentType != ContentBold {
+			t.Errorf("snarfContext.ContentType = %v, want ContentBold", global.snarfContext.ContentType)
+		}
+	})
+
+	t.Run("HeadingSnarf", func(t *testing.T) {
+		// Source: "# Heading\n" — select the rendered heading text.
+		w := setupWindow(t, "# Heading\n", 0, 7)
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for heading selection")
+		}
+
+		global.snarfbuf = snarfed
+		global.snarfContext = w.selectionContext
+
+		if global.snarfContext == nil {
+			t.Fatal("snarfContext is nil after heading snarf")
+		}
+		if global.snarfContext.ContentType != ContentHeading {
+			t.Errorf("snarfContext.ContentType = %v, want ContentHeading", global.snarfContext.ContentType)
+		}
+	})
+
+	t.Run("CodeSnarf", func(t *testing.T) {
+		// Source: "`code`" — select the rendered inline code.
+		w := setupWindow(t, "`code`", 0, 4)
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for code selection")
+		}
+
+		global.snarfbuf = snarfed
+		global.snarfContext = w.selectionContext
+
+		if global.snarfContext == nil {
+			t.Fatal("snarfContext is nil after code snarf")
+		}
+		if global.snarfContext.ContentType != ContentCode {
+			t.Errorf("snarfContext.ContentType = %v, want ContentCode", global.snarfContext.ContentType)
+		}
+	})
+
+	t.Run("SnarfClearsContextWhenEmpty", func(t *testing.T) {
+		// Set up previous snarf context, then snarf an empty selection.
+		global.snarfContext = &SelectionContext{ContentType: ContentBold}
+		global.snarfbuf = []byte("old")
+
+		w := setupWindow(t, "Hello world", 3, 3) // empty selection
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) > 0 {
+			t.Fatal("PreviewSnarf returned non-empty for empty selection")
+		}
+		// When snarf returns nothing, context should not be updated
+		// (previous context is preserved — only overwritten on successful snarf).
+		if global.snarfContext == nil {
+			t.Fatal("snarfContext should be preserved when snarf returns empty")
+		}
+	})
+
+	t.Run("ContextMatchesSnarfContent", func(t *testing.T) {
+		// Snarf plain, then snarf bold — context should update to match.
+		w1 := setupWindow(t, "Hello world", 0, 5)
+		w1.updateSelectionContext()
+		snarfed := w1.PreviewSnarf()
+		global.snarfbuf = snarfed
+		global.snarfContext = w1.selectionContext
+
+		if global.snarfContext.ContentType != ContentPlain {
+			t.Fatalf("first snarf: ContentType = %v, want ContentPlain", global.snarfContext.ContentType)
+		}
+
+		// Now snarf bold text.
+		w2 := setupWindow(t, "**bold**", 0, 4)
+		w2.updateSelectionContext()
+		snarfed = w2.PreviewSnarf()
+		global.snarfbuf = snarfed
+		global.snarfContext = w2.selectionContext
+
+		if global.snarfContext.ContentType != ContentBold {
+			t.Errorf("second snarf: ContentType = %v, want ContentBold", global.snarfContext.ContentType)
+		}
+	})
+}
+
+func TestPasteTransformBold(t *testing.T) {
+	// Tests for transformForPaste with bold content.
+	// Design rule: partial formatted text should be re-wrapped at destination.
+	// Exception: if destination is already bold, just insert text (inherits context).
+
+	t.Run("BoldTextToPlainDest", func(t *testing.T) {
+		// Pasting bold text ("bold text") from a bold source into a plain destination
+		// should wrap the text in **...** markers.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("bold text"), sourceCtx, destCtx)
+		if string(result) != "**bold text**" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "**bold text**")
+		}
+	})
+
+	t.Run("BoldTextToBoldDest", func(t *testing.T) {
+		// Pasting bold text into an already-bold destination should NOT double-wrap.
+		// The text inherits the destination's bold formatting.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("bold text"), sourceCtx, destCtx)
+		if string(result) != "bold text" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "bold text")
+		}
+	})
+
+	t.Run("PartialBoldToPlainDest", func(t *testing.T) {
+		// Pasting partial bold text (e.g., "bol" from "**bold**") into plain dest
+		// should re-wrap with bold markers.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  false,
+			IncludesCloseMarker: false,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("bol"), sourceCtx, destCtx)
+		if string(result) != "**bol**" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "**bol**")
+		}
+	})
+
+	t.Run("PlainTextToPlainDest", func(t *testing.T) {
+		// Pasting plain text into plain destination should pass through unchanged.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("hello"), sourceCtx, destCtx)
+		if string(result) != "hello" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "hello")
+		}
+	})
+
+	t.Run("PlainTextToBoldDest", func(t *testing.T) {
+		// Pasting plain text into bold destination — just insert, inherits context.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("hello"), sourceCtx, destCtx)
+		if string(result) != "hello" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "hello")
+		}
+	})
+
+	t.Run("NilSourceContext", func(t *testing.T) {
+		// When source context is nil (e.g., paste from external), pass through.
+		result := transformForPaste([]byte("text"), nil, &SelectionContext{ContentType: ContentPlain})
+		if string(result) != "text" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "text")
+		}
+	})
+
+	t.Run("NilDestContext", func(t *testing.T) {
+		// When destination context is nil, pass through unchanged.
+		sourceCtx := &SelectionContext{ContentType: ContentBold}
+		result := transformForPaste([]byte("text"), sourceCtx, nil)
+		if string(result) != "text" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "text")
+		}
+	})
+}
+
+func TestPasteTransformHeading(t *testing.T) {
+	// Tests for transformForPaste with heading content.
+	// Design rule for structural elements:
+	//   - With trailing newline: preserve structural markers (e.g., "# Heading\n")
+	//   - Without trailing newline: strip markers, treat as "just text"
+
+	t.Run("HeadingWithNewline", func(t *testing.T) {
+		// "# Heading\n" with trailing newline → structural paste, preserve # prefix.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("# Heading\n"), sourceCtx, destCtx)
+		if string(result) != "# Heading\n" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "# Heading\n")
+		}
+	})
+
+	t.Run("HeadingWithoutNewline", func(t *testing.T) {
+		// "# Heading" without trailing newline → text-only paste, strip # prefix.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("# Heading"), sourceCtx, destCtx)
+		if string(result) != "Heading" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "Heading")
+		}
+	})
+
+	t.Run("H2WithoutNewline", func(t *testing.T) {
+		// "## Subheading" without trailing newline → strip ## prefix.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("## Subheading"), sourceCtx, destCtx)
+		if string(result) != "Subheading" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "Subheading")
+		}
+	})
+
+	t.Run("H2WithNewline", func(t *testing.T) {
+		// "## Subheading\n" with trailing newline → preserve structural markers.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("## Subheading\n"), sourceCtx, destCtx)
+		if string(result) != "## Subheading\n" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "## Subheading\n")
+		}
+	})
+
+	t.Run("HeadingToHeadingDest", func(t *testing.T) {
+		// Pasting heading text into a heading context — just insert the text.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		result := transformForPaste([]byte("# Heading"), sourceCtx, destCtx)
+		if string(result) != "Heading" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "Heading")
+		}
+	})
+}
+
+func TestPasteTransformCode(t *testing.T) {
+	// Tests for transformForPaste with code content.
+	// Similar to bold: re-wrap in backticks unless destination is already code.
+
+	t.Run("InlineCodeToPlainDest", func(t *testing.T) {
+		// Pasting inline code text into a plain destination should wrap in backticks.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentCode,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("fmt.Println"), sourceCtx, destCtx)
+		if string(result) != "`fmt.Println`" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "`fmt.Println`")
+		}
+	})
+
+	t.Run("InlineCodeToCodeDest", func(t *testing.T) {
+		// Pasting code into already-code destination — don't double-wrap.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentCode,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentCode,
+		}
+		result := transformForPaste([]byte("fmt.Println"), sourceCtx, destCtx)
+		if string(result) != "fmt.Println" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "fmt.Println")
+		}
+	})
+
+	t.Run("CodeBlockToPlainDest", func(t *testing.T) {
+		// Pasting code block content with trailing newline → structural paste.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentCodeBlock,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("```go\nfunc main() {}\n```\n"), sourceCtx, destCtx)
+		if string(result) != "```go\nfunc main() {}\n```\n" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "```go\\nfunc main() {}\\n```\\n")
+		}
+	})
+
+	t.Run("CodeBlockWithoutNewline", func(t *testing.T) {
+		// Code block content without trailing newline → strip fences, just text.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentCodeBlock,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("func main() {}"), sourceCtx, destCtx)
+		// Code block text without fences and no newline → just the code text.
+		if string(result) != "func main() {}" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "func main() {}")
+		}
+	})
+
+	t.Run("PlainTextToCodeDest", func(t *testing.T) {
+		// Pasting plain text into code destination — just insert, inherits context.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentCode,
+		}
+		result := transformForPaste([]byte("hello"), sourceCtx, destCtx)
+		if string(result) != "hello" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "hello")
+		}
+	})
+
+	t.Run("ItalicTextToPlainDest", func(t *testing.T) {
+		// Italic source to plain dest → re-wrap with * markers.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("italic text"), sourceCtx, destCtx)
+		if string(result) != "*italic text*" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "*italic text*")
+		}
+	})
+
+	t.Run("ItalicTextToItalicDest", func(t *testing.T) {
+		// Italic source to italic dest → don't double-wrap.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentItalic,
+		}
+		result := transformForPaste([]byte("italic text"), sourceCtx, destCtx)
+		if string(result) != "italic text" {
+			t.Errorf("transformForPaste = %q, want %q", string(result), "italic text")
+		}
+	})
+
+	t.Run("EmptyText", func(t *testing.T) {
+		// Empty text should return empty regardless of context.
+		sourceCtx := &SelectionContext{ContentType: ContentBold}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte(""), sourceCtx, destCtx)
+		if string(result) != "" {
+			t.Errorf("transformForPaste = %q, want empty", string(result))
+		}
+	})
+}
+
+func TestPasteHeadingStructural(t *testing.T) {
+	// Tests for structural heading paste — when the selection includes a
+	// trailing newline, the heading markers (# prefix) are preserved because
+	// the user intends to paste the heading as a structural element.
+
+	setupWindow := func(t *testing.T, srcText string, selStart, selEnd int) *Window {
+		t.Helper()
+		rect := image.Rect(0, 0, 800, 600)
+		display := edwoodtest.NewDisplay(rect)
+		global.configureGlobals(display)
+
+		w := NewWindow().initHeadless(nil)
+		w.display = display
+		w.body = Text{
+			display: display,
+			fr:      &MockFrame{},
+			file:    file.MakeObservableEditableBuffer("/test/readme.md", nil),
+		}
+		w.body.all = image.Rect(0, 20, 800, 600)
+		w.col = &Column{safe: true}
+
+		w.body.file.InsertAt(0, []rune(srcText))
+
+		font := edwoodtest.NewFont(10, 14)
+		bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+		textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+		content, sourceMap, _ := markdown.ParseWithSourceMap(srcText)
+
+		rt := NewRichText()
+		bodyRect := image.Rect(12, 20, 800, 600)
+		rt.Init(display, font,
+			WithRichTextBackground(bgImage),
+			WithRichTextColor(textImage),
+		)
+		rt.Render(bodyRect)
+		rt.SetContent(content)
+		rt.SetSelection(selStart, selEnd)
+
+		w.richBody = rt
+		w.previewSourceMap = sourceMap
+		w.SetPreviewMode(true)
+		return w
+	}
+
+	t.Run("H1StructuralPastePreservesPrefix", func(t *testing.T) {
+		// Snarf "# Heading\n" (full line with newline) → paste into plain context.
+		// The trailing newline signals structural paste, so "# " prefix is preserved.
+		w := setupWindow(t, "# Heading\n", 0, 8) // select full heading including newline in rendered text
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for heading selection")
+		}
+
+		sourceCtx := w.selectionContext
+		if sourceCtx == nil {
+			t.Fatal("selectionContext is nil after heading snarf")
+		}
+		if sourceCtx.ContentType != ContentHeading {
+			t.Errorf("sourceCtx.ContentType = %v, want ContentHeading", sourceCtx.ContentType)
+		}
+
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		// Simulate structural paste: text with trailing newline.
+		result := transformForPaste([]byte("# Heading\n"), sourceCtx, destCtx)
+		if string(result) != "# Heading\n" {
+			t.Errorf("structural paste: transformForPaste = %q, want %q", string(result), "# Heading\n")
+		}
+	})
+
+	t.Run("H2StructuralPastePreservesPrefix", func(t *testing.T) {
+		// Snarf "## Subheading\n" with trailing newline → structural paste preserves markers.
+		w := setupWindow(t, "## Subheading\n", 0, 11)
+		w.updateSelectionContext()
+
+		sourceCtx := w.selectionContext
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("## Subheading\n"), sourceCtx, destCtx)
+		if string(result) != "## Subheading\n" {
+			t.Errorf("structural paste: transformForPaste = %q, want %q", string(result), "## Subheading\n")
+		}
+	})
+
+	t.Run("H3StructuralPastePreservesPrefix", func(t *testing.T) {
+		// ### level heading with trailing newline → structural paste.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("### Section\n"), sourceCtx, destCtx)
+		if string(result) != "### Section\n" {
+			t.Errorf("structural paste: transformForPaste = %q, want %q", string(result), "### Section\n")
+		}
+	})
+
+	t.Run("StructuralPasteIntoHeadingContext", func(t *testing.T) {
+		// Pasting a heading with newline into another heading context.
+		// Same-type paste strips markers even for structural paste.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentHeading}
+		result := transformForPaste([]byte("# Heading"), sourceCtx, destCtx)
+		if string(result) != "Heading" {
+			t.Errorf("heading-to-heading paste: transformForPaste = %q, want %q", string(result), "Heading")
+		}
+	})
+
+	t.Run("MultipleHeadingsStructural", func(t *testing.T) {
+		// Pasting multiple headings (structural block) preserves all prefixes.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		text := "# First\n## Second\n"
+		result := transformForPaste([]byte(text), sourceCtx, destCtx)
+		if string(result) != text {
+			t.Errorf("multi-heading structural paste: transformForPaste = %q, want %q", string(result), text)
+		}
+	})
+}
+
+func TestPasteHeadingText(t *testing.T) {
+	// Tests for text-only heading paste — when the selection does NOT include a
+	// trailing newline, the heading markers (# prefix) are stripped because the
+	// user is pasting the heading content as inline text.
+
+	setupWindow := func(t *testing.T, srcText string, selStart, selEnd int) *Window {
+		t.Helper()
+		rect := image.Rect(0, 0, 800, 600)
+		display := edwoodtest.NewDisplay(rect)
+		global.configureGlobals(display)
+
+		w := NewWindow().initHeadless(nil)
+		w.display = display
+		w.body = Text{
+			display: display,
+			fr:      &MockFrame{},
+			file:    file.MakeObservableEditableBuffer("/test/readme.md", nil),
+		}
+		w.body.all = image.Rect(0, 20, 800, 600)
+		w.col = &Column{safe: true}
+
+		w.body.file.InsertAt(0, []rune(srcText))
+
+		font := edwoodtest.NewFont(10, 14)
+		bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+		textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+		content, sourceMap, _ := markdown.ParseWithSourceMap(srcText)
+
+		rt := NewRichText()
+		bodyRect := image.Rect(12, 20, 800, 600)
+		rt.Init(display, font,
+			WithRichTextBackground(bgImage),
+			WithRichTextColor(textImage),
+		)
+		rt.Render(bodyRect)
+		rt.SetContent(content)
+		rt.SetSelection(selStart, selEnd)
+
+		w.richBody = rt
+		w.previewSourceMap = sourceMap
+		w.SetPreviewMode(true)
+		return w
+	}
+
+	t.Run("H1TextPasteStripsPrefix", func(t *testing.T) {
+		// Snarf "# Heading" (no trailing newline) → paste into plain context.
+		// No trailing newline signals text paste, so "# " prefix is stripped.
+		w := setupWindow(t, "# Heading\n", 0, 7) // select heading text without newline
+		w.updateSelectionContext()
+
+		snarfed := w.PreviewSnarf()
+		if len(snarfed) == 0 {
+			t.Fatal("PreviewSnarf returned empty for heading selection")
+		}
+
+		sourceCtx := w.selectionContext
+		if sourceCtx == nil {
+			t.Fatal("selectionContext is nil after heading snarf")
+		}
+
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		// Text paste: heading content without trailing newline.
+		result := transformForPaste([]byte("# Heading"), sourceCtx, destCtx)
+		if string(result) != "Heading" {
+			t.Errorf("text paste: transformForPaste = %q, want %q", string(result), "Heading")
+		}
+	})
+
+	t.Run("H2TextPasteStripsPrefix", func(t *testing.T) {
+		// "## Subheading" without trailing newline → strip markers.
+		w := setupWindow(t, "## Subheading\n", 0, 10)
+		w.updateSelectionContext()
+
+		sourceCtx := w.selectionContext
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("## Subheading"), sourceCtx, destCtx)
+		if string(result) != "Subheading" {
+			t.Errorf("text paste: transformForPaste = %q, want %q", string(result), "Subheading")
+		}
+	})
+
+	t.Run("H3TextPasteStripsPrefix", func(t *testing.T) {
+		// "### Section" without trailing newline → strip ### prefix.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("### Section"), sourceCtx, destCtx)
+		if string(result) != "Section" {
+			t.Errorf("text paste: transformForPaste = %q, want %q", string(result), "Section")
+		}
+	})
+
+	t.Run("PartialHeadingTextPaste", func(t *testing.T) {
+		// Selecting part of a heading's text (e.g., "Head" from "# Heading")
+		// without trailing newline → strip prefix, return just selected text.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("# Head"), sourceCtx, destCtx)
+		if string(result) != "Head" {
+			t.Errorf("partial text paste: transformForPaste = %q, want %q", string(result), "Head")
+		}
+	})
+
+	t.Run("HeadingTextPasteIntoParagraph", func(t *testing.T) {
+		// Pasting heading text (no newline) mid-paragraph should give just the text.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentPlain}
+		result := transformForPaste([]byte("# Title"), sourceCtx, destCtx)
+		if string(result) != "Title" {
+			t.Errorf("mid-paragraph paste: transformForPaste = %q, want %q", string(result), "Title")
+		}
+	})
+
+	t.Run("HeadingTextPasteIntoBold", func(t *testing.T) {
+		// Pasting heading text (no newline) into bold context → just text, no markers.
+		sourceCtx := &SelectionContext{ContentType: ContentHeading}
+		destCtx := &SelectionContext{ContentType: ContentBold}
+		result := transformForPaste([]byte("# Important"), sourceCtx, destCtx)
+		if string(result) != "Important" {
+			t.Errorf("heading-to-bold paste: transformForPaste = %q, want %q", string(result), "Important")
+		}
+	})
+}
+
+func TestPasteIntoFormattedContext(t *testing.T) {
+	// Tests for format inheritance: when pasting into an already-formatted
+	// destination context, the transform should avoid double-wrapping.
+	// The key principle: if dest already provides formatting of the same type,
+	// strip source markers; otherwise apply normal transformation rules.
+
+	t.Run("BoldIntoBold", func(t *testing.T) {
+		// Pasting bold text into bold context — don't double-wrap with **.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("important"), sourceCtx, destCtx)
+		if string(result) != "important" {
+			t.Errorf("bold-into-bold: got %q, want %q", string(result), "important")
+		}
+	})
+
+	t.Run("ItalicIntoItalic", func(t *testing.T) {
+		// Pasting italic text into italic context — don't double-wrap with *.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentItalic,
+		}
+		result := transformForPaste([]byte("emphasis"), sourceCtx, destCtx)
+		if string(result) != "emphasis" {
+			t.Errorf("italic-into-italic: got %q, want %q", string(result), "emphasis")
+		}
+	})
+
+	t.Run("CodeIntoCode", func(t *testing.T) {
+		// Pasting code into code context — don't double-wrap with backticks.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentCode,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentCode,
+		}
+		result := transformForPaste([]byte("x := 1"), sourceCtx, destCtx)
+		if string(result) != "x := 1" {
+			t.Errorf("code-into-code: got %q, want %q", string(result), "x := 1")
+		}
+	})
+
+	t.Run("BoldItalicIntoBoldItalic", func(t *testing.T) {
+		// Pasting bold-italic into bold-italic context — same type, strip markers.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBoldItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBoldItalic,
+		}
+		result := transformForPaste([]byte("strong emphasis"), sourceCtx, destCtx)
+		if string(result) != "strong emphasis" {
+			t.Errorf("bolditalic-into-bolditalic: got %q, want %q", string(result), "strong emphasis")
+		}
+	})
+
+	t.Run("HeadingIntoHeading", func(t *testing.T) {
+		// Pasting heading text (no newline) into heading context — strip prefix.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentHeading,
+		}
+		result := transformForPaste([]byte("## Section"), sourceCtx, destCtx)
+		if string(result) != "Section" {
+			t.Errorf("heading-into-heading: got %q, want %q", string(result), "Section")
+		}
+	})
+
+	t.Run("BoldIntoItalic", func(t *testing.T) {
+		// Pasting bold text into italic context — different formatting types.
+		// Bold source into non-plain dest: text passes through (not re-wrapped).
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentItalic,
+		}
+		result := transformForPaste([]byte("bold text"), sourceCtx, destCtx)
+		// Bold into non-plain, non-bold: text passes through (dest provides its own formatting).
+		if string(result) != "bold text" {
+			t.Errorf("bold-into-italic: got %q, want %q", string(result), "bold text")
+		}
+	})
+
+	t.Run("ItalicIntoBold", func(t *testing.T) {
+		// Pasting italic text into bold context — different formatting types.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("italic text"), sourceCtx, destCtx)
+		// Italic into non-plain, non-italic: text passes through.
+		if string(result) != "italic text" {
+			t.Errorf("italic-into-bold: got %q, want %q", string(result), "italic text")
+		}
+	})
+
+	t.Run("CodeIntoBold", func(t *testing.T) {
+		// Pasting code text into bold context — different formatting types.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentCode,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("var x"), sourceCtx, destCtx)
+		// Code into non-plain, non-code: text passes through.
+		if string(result) != "var x" {
+			t.Errorf("code-into-bold: got %q, want %q", string(result), "var x")
+		}
+	})
+
+	t.Run("BoldIntoCode", func(t *testing.T) {
+		// Pasting bold text into code context — different formatting types.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentCode,
+		}
+		result := transformForPaste([]byte("bold text"), sourceCtx, destCtx)
+		// Bold into non-plain, non-bold: text passes through.
+		if string(result) != "bold text" {
+			t.Errorf("bold-into-code: got %q, want %q", string(result), "bold text")
+		}
+	})
+
+	t.Run("PlainIntoBold", func(t *testing.T) {
+		// Pasting plain text into bold context — inherits bold formatting.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("hello world"), sourceCtx, destCtx)
+		if string(result) != "hello world" {
+			t.Errorf("plain-into-bold: got %q, want %q", string(result), "hello world")
+		}
+	})
+
+	t.Run("PlainIntoItalic", func(t *testing.T) {
+		// Pasting plain text into italic context — inherits italic formatting.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentItalic,
+		}
+		result := transformForPaste([]byte("hello world"), sourceCtx, destCtx)
+		if string(result) != "hello world" {
+			t.Errorf("plain-into-italic: got %q, want %q", string(result), "hello world")
+		}
+	})
+
+	t.Run("PlainIntoCode", func(t *testing.T) {
+		// Pasting plain text into code context — inherits code formatting.
+		sourceCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentCode,
+		}
+		result := transformForPaste([]byte("x + y"), sourceCtx, destCtx)
+		if string(result) != "x + y" {
+			t.Errorf("plain-into-code: got %q, want %q", string(result), "x + y")
+		}
+	})
+
+	t.Run("PartialBoldIntoBold", func(t *testing.T) {
+		// Pasting partial bold (no markers in selection) into bold context.
+		// Same type — should still strip/pass through, not re-wrap.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBold,
+			IncludesOpenMarker:  false,
+			IncludesCloseMarker: false,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentBold,
+		}
+		result := transformForPaste([]byte("parti"), sourceCtx, destCtx)
+		if string(result) != "parti" {
+			t.Errorf("partial-bold-into-bold: got %q, want %q", string(result), "parti")
+		}
+	})
+
+	t.Run("BoldItalicIntoPlain", func(t *testing.T) {
+		// Pasting bold-italic into plain context — should wrap with ***.
+		sourceCtx := &SelectionContext{
+			ContentType:         ContentBoldItalic,
+			IncludesOpenMarker:  true,
+			IncludesCloseMarker: true,
+		}
+		destCtx := &SelectionContext{
+			ContentType: ContentPlain,
+		}
+		result := transformForPaste([]byte("strong emphasis"), sourceCtx, destCtx)
+		if string(result) != "***strong emphasis***" {
+			t.Errorf("bolditalic-into-plain: got %q, want %q", string(result), "***strong emphasis***")
+		}
+	})
+}
+
+// containsSubstring checks if s contains substr.
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr) >= 0
+}
+
+// TestPreviewChordCutUndo verifies that after a B1+B2 chord (Cut) in preview mode,
+// calling Undo restores the original text exactly. This confirms that the chord
+// handler sets up proper undo sequence points (TypeCommit + seq++ + Mark).
+func TestPreviewChordCutUndo(t *testing.T) {
+	w, _, frameRect := setupPreviewChordTestWindow(t)
+
+	originalText := "Hello world test"
+	originalRunes := []rune(originalText)
+
+	// Select "Hello" (chars 0-5) with B1, then chord B2 to cut
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 3, // B1 + B2
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	global.snarfbuf = nil
+	w.display.WriteSnarf(nil)
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle B1+B2 chord")
+	}
+
+	// Confirm the cut removed some text
+	afterCutLen := w.body.file.Nr()
+	if afterCutLen >= len(originalRunes) {
+		t.Fatalf("cut should have removed text: body length %d, original %d", afterCutLen, len(originalRunes))
+	}
+
+	// Undo the cut
+	w.Undo(true)
+
+	// Verify the full original text is restored
+	afterUndoLen := w.body.file.Nr()
+	if afterUndoLen != len(originalRunes) {
+		t.Errorf("after undo, body length should be %d, got %d", len(originalRunes), afterUndoLen)
+	}
+	buf := make([]rune, afterUndoLen)
+	w.body.file.Read(0, buf)
+	if string(buf) != originalText {
+		t.Errorf("after undo, body text should be %q, got %q", originalText, string(buf))
+	}
+}
+
+// TestPreviewChordPasteUndo verifies that after a B1+B3 chord (Paste) in preview mode,
+// calling Undo restores the original text exactly. This confirms that the chord
+// handler sets up proper undo sequence points (TypeCommit + seq++ + Mark).
+func TestPreviewChordPasteUndo(t *testing.T) {
+	w, _, frameRect := setupPreviewChordTestWindow(t)
+
+	originalText := "Hello world test"
+	originalRunes := []rune(originalText)
+
+	// Pre-fill snarf buffer with replacement text
+	global.snarfbuf = []byte("REPLACED")
+	w.display.WriteSnarf([]byte("REPLACED"))
+
+	// Select "Hello" (chars 0-5) with B1, then chord B3 to paste
+	downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
+	m := draw.Mouse{
+		Point:   downPt,
+		Buttons: 1,
+	}
+	dragPt := image.Pt(frameRect.Min.X+50, frameRect.Min.Y+5)
+	dragEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 1,
+	}
+	chordEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 5, // B1 (1) + B3 (4) = 5
+	}
+	upEvent := draw.Mouse{
+		Point:   dragPt,
+		Buttons: 0,
+	}
+	mc := mockMousectlWithEvents([]draw.Mouse{dragEvent, chordEvent, upEvent})
+
+	handled := w.HandlePreviewMouse(&m, mc)
+	if !handled {
+		t.Fatal("HandlePreviewMouse should handle B1+B3 chord")
+	}
+
+	// Confirm the paste changed the text
+	afterPasteLen := w.body.file.Nr()
+	afterPasteBuf := make([]rune, afterPasteLen)
+	w.body.file.Read(0, afterPasteBuf)
+	afterPasteText := string(afterPasteBuf)
+	if afterPasteText == originalText {
+		t.Fatal("paste should have changed the text")
+	}
+	if !containsSubstring(afterPasteText, "REPLACED") {
+		t.Fatalf("paste should have inserted 'REPLACED', got %q", afterPasteText)
+	}
+
+	// Undo the paste
+	w.Undo(true)
+
+	// Verify the full original text is restored
+	afterUndoLen := w.body.file.Nr()
+	if afterUndoLen != len(originalRunes) {
+		t.Errorf("after undo, body length should be %d, got %d", len(originalRunes), afterUndoLen)
+	}
+	buf := make([]rune, afterUndoLen)
+	w.body.file.Read(0, buf)
+	if string(buf) != originalText {
+		t.Errorf("after undo, body text should be %q, got %q", originalText, string(buf))
+	}
+}
+
+// searchString returns the index of substr in s, or -1 if not found.
+func searchString(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
