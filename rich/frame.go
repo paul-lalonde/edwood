@@ -3,6 +3,7 @@ package rich
 import (
 	"image"
 	"image/color"
+	"strings"
 	"unicode/utf8"
 
 	"9fans.net/go/draw"
@@ -121,6 +122,11 @@ type frameImpl struct {
 	// Base path for resolving relative image paths (e.g., the markdown file path)
 	basePath string
 
+	// Callback invoked when an async image load completes. Runs on an
+	// unspecified goroutine; callers that need main-goroutine execution
+	// must marshal through the row lock or a channel.
+	onImageLoaded func(path string)
+
 	// Temporary sweep color override for colored selection during B2/B3 drags.
 	// When non-nil, drawSelectionTo uses this instead of selectionColor.
 	// Cleared after each SelectWithColor/SelectWithChordAndColor call.
@@ -139,6 +145,10 @@ type frameImpl struct {
 	// Number of non-wrapping blocks seen on the last layout pass.
 	// Used to detect when blocks are added or removed.
 	hscrollBlockCount int
+
+	// Offset from visible-region index to global hscrollOrigins index.
+	// Equal to the number of block regions entirely above the viewport.
+	hscrollRegionOffset int
 
 	// Cached adjusted block regions from the last layout pass.
 	// Used for hit-testing horizontal scrollbar clicks.
@@ -758,6 +768,9 @@ func (f *frameImpl) Redraw() {
 	if f.display == nil || f.background == nil {
 		return
 	}
+	if f.rect.Dx() <= 0 || f.rect.Dy() <= 0 {
+		return
+	}
 
 	screen := f.display.ScreenImage()
 
@@ -807,8 +820,11 @@ func (f *frameImpl) Redraw() {
 }
 
 // ensureScratchImage allocates or resizes the scratch image to match frame dimensions.
-// Returns nil if allocation fails.
+// Returns nil if allocation fails or dimensions are zero.
 func (f *frameImpl) ensureScratchImage() edwooddraw.Image {
+	if f.rect.Dx() <= 0 || f.rect.Dy() <= 0 {
+		return nil
+	}
 	frameSize := image.Rect(0, 0, f.rect.Dx(), f.rect.Dy())
 
 	// Check if we already have a correctly-sized scratch image
@@ -1043,6 +1059,12 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 			pt := image.Point{
 				X: offset.X + pb.X - hOff,
 				Y: offset.Y + line.Y,
+			}
+
+			// Check for loading placeholder case (async load in progress)
+			if pb.Box.ImageData != nil && pb.Box.ImageData.Loading {
+				f.drawImageLoadingPlaceholder(target, pt, string(pb.Box.Text))
+				continue
 			}
 
 			// Check for error placeholder case
@@ -1285,6 +1307,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 		regions := findBlockRegions(lines)
 		f.syncHScrollState(len(regions))
+		f.hscrollRegionOffset = 0
 		// Apply scrollbar height adjustments so all callers get correct Y.
 		scrollbarHeight := 12 // Scrollwid
 		adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
@@ -1337,6 +1360,15 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		startLineIdx = lineIdx
 		originY = line.Y
 	}
+
+	// Count block regions entirely above the viewport.
+	offset := 0
+	for _, r := range regions {
+		if r.EndLine <= startLineIdx {
+			offset++
+		}
+	}
+	f.hscrollRegionOffset = offset
 
 	// Extract lines from the origin line onwards and adjust Y coordinates.
 	// Y values already include scrollbar heights from the adjustment above.
@@ -1738,21 +1770,25 @@ func (f *frameImpl) syncHScrollState(regionCount int) {
 }
 
 // SetHScrollOrigin sets the horizontal scroll offset for a block region by index.
-// Out-of-range indices are ignored.
+// The regionIndex is viewport-local; hscrollRegionOffset is added to map it to
+// the global hscrollOrigins slice. Out-of-range indices are ignored.
 func (f *frameImpl) SetHScrollOrigin(regionIndex, pixelOffset int) {
-	if regionIndex < 0 || regionIndex >= len(f.hscrollOrigins) {
+	idx := regionIndex + f.hscrollRegionOffset
+	if idx < 0 || idx >= len(f.hscrollOrigins) {
 		return
 	}
-	f.hscrollOrigins[regionIndex] = pixelOffset
+	f.hscrollOrigins[idx] = pixelOffset
 }
 
 // GetHScrollOrigin returns the horizontal scroll offset for a block region by index.
-// Out-of-range indices return 0.
+// The regionIndex is viewport-local; hscrollRegionOffset is added to map it to
+// the global hscrollOrigins slice. Out-of-range indices return 0.
 func (f *frameImpl) GetHScrollOrigin(regionIndex int) int {
-	if regionIndex < 0 || regionIndex >= len(f.hscrollOrigins) {
+	idx := regionIndex + f.hscrollRegionOffset
+	if idx < 0 || idx >= len(f.hscrollOrigins) {
 		return 0
 	}
-	return f.hscrollOrigins[regionIndex]
+	return f.hscrollOrigins[idx]
 }
 
 // HScrollBarAt checks if the given screen point falls within any horizontal
@@ -2079,7 +2115,7 @@ func (f *frameImpl) fontForStyle(style Style) edwooddraw.Font {
 // images and populate their ImageData. Otherwise, it uses the regular layout.
 func (f *frameImpl) layoutBoxes(boxes []Box, frameWidth, maxtab int) []Line {
 	if f.imageCache != nil {
-		return layoutWithCacheAndBasePath(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle, f.imageCache, f.basePath)
+		return layoutWithCacheAndBasePath(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle, f.imageCache, f.basePath, f.onImageLoaded)
 	}
 	return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 }
@@ -2172,6 +2208,30 @@ func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line 
 	}
 
 	target.Draw(clippedDst, srcImg, nil, srcPt)
+}
+
+// LoadingGray is the muted gray color for loading image placeholders.
+var LoadingGray = color.RGBA{R: 153, G: 153, B: 153, A: 255}
+
+// drawImageLoadingPlaceholder renders a loading placeholder for images being fetched asynchronously.
+// It displays "[Loading: alt]" in muted gray to distinguish from error placeholders (blue) and links.
+func (f *frameImpl) drawImageLoadingPlaceholder(target edwooddraw.Image, pt image.Point, boxText string) {
+	if f.font == nil || f.textColor == nil {
+		return
+	}
+
+	// Replace "[Image:" prefix with "[Loading:" if present
+	placeholder := boxText
+	if strings.HasPrefix(placeholder, "[Image:") {
+		placeholder = "[Loading:" + placeholder[len("[Image:"):]
+	}
+
+	grayColor := f.allocColorImage(LoadingGray)
+	if grayColor == nil {
+		grayColor = f.textColor
+	}
+
+	target.Bytes(pt, grayColor, image.ZP, f.font, []byte(placeholder))
 }
 
 // drawImageErrorPlaceholder renders an error placeholder for failed image loads.

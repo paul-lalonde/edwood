@@ -452,6 +452,13 @@ func (w *Window) Undo(isundo bool) {
 	// TODO(rjk): Updates the scrollbar and selection.
 	// Be sure not to do this inside of the Undo operation's callbacks.
 	body.Show(body.q0, body.q1, true)
+
+	// Undo/Redo bypasses the buffer's Insert/Delete observers, so the
+	// preview is not notified through the normal SchedulePreviewUpdate path.
+	// Update it immediately — undo is a discrete action, not rapid typing.
+	if w.IsPreviewMode() {
+		w.UpdatePreview()
+	}
 }
 
 func (w *Window) SetName(name string) {
@@ -465,7 +472,7 @@ func (w *Window) Type(t *Text, r rune) {
 		if w.HandlePreviewKey(r) {
 			return
 		}
-		// Key was not handled by preview mode (e.g., typing keys are ignored)
+		w.HandlePreviewType(t, r)
 		return
 	}
 	t.Type(r)
@@ -991,14 +998,18 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		}
 	}
 
-	// Handle button 1 in frame area for text selection and chording
+	// Handle button 1 in frame area for text selection and chording.
+	// Chord processing follows the same pattern as text.go: chords are
+	// handled inline in a loop while B1 is held, so that sequential
+	// B1+B2 (cut) then B1+B3 (paste) works correctly.
 	frameRect := rt.Frame().Rect()
-	if m.Point.In(frameRect) && m.Buttons&1 != 0 {
+	if m.Point.In(frameRect) && m.Buttons&1 != 0 && mc != nil {
 		var p0, p1 int
-		var chordButtons int
+		var lastButtons int // track button state for chord loop
 
 		selectq := rt.Frame().Charofpt(m.Point)
 		b := m.Buttons
+		fr := rt.Frame()
 
 		// Check for double-click: same richtext, same position, within 500ms.
 		prevP0, prevP1 := rt.Selection()
@@ -1007,45 +1018,48 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			prevP0 == prevP1 && selectq == prevP0 {
 
 			// Double-click: expand selection
-			p0, p1 = rt.Frame().ExpandAtPos(selectq)
+			p0, p1 = fr.ExpandAtPos(selectq)
 			rt.SetSelection(p0, p1)
-			rt.Frame().Redraw()
+			fr.Redraw()
 			if w.display != nil {
 				w.display.Flush()
 			}
 			w.previewClickRT = nil
 
-			// Wait for mouse state change (like acme: jitter tolerance)
-			if mc != nil {
-				x, y := m.Point.X, m.Point.Y
-				for {
-					me := <-mc.C
-					if !(me.Buttons == b &&
-						util.Abs(me.Point.X-x) < 3 &&
-						util.Abs(me.Point.Y-y) < 3) {
-						// If buttons still held, handle chords
-						if me.Buttons != 0 && me.Buttons != b {
-							chordButtons = me.Buttons
-						}
-						// Drain until all buttons released
-						for me.Buttons != 0 {
-							me = <-mc.C
-							if me.Buttons != 0 && me.Buttons != b && chordButtons == 0 {
-								chordButtons = me.Buttons
-							}
-						}
-						break
-					}
+			// Wait for mouse state change (jitter tolerance), then
+			// fall through to the chord processing loop below.
+			x, y := m.Point.X, m.Point.Y
+			for {
+				me := <-mc.C
+				lastButtons = me.Buttons
+				if !(me.Buttons == b &&
+					util.Abs(me.Point.X-x) < 3 &&
+					util.Abs(me.Point.Y-y) < 3) {
+					break
 				}
 			}
 		} else {
-			// Normal click/drag selection
-			if mc != nil {
-				p0, p1, chordButtons = rt.Frame().SelectWithChord(mc, m)
+			// Normal click/drag selection: track drag until a chord
+			// is detected or all buttons are released.
+			anchor := selectq
+			for {
+				me := <-mc.C
+				lastButtons = me.Buttons
+				current := fr.Charofpt(me.Point)
+				if anchor <= current {
+					p0, p1 = anchor, current
+				} else {
+					p0, p1 = current, anchor
+				}
 				rt.SetSelection(p0, p1)
-			} else {
-				p0, p1 = selectq, selectq
-				rt.SetSelection(p0, p1)
+				fr.Redraw()
+				if w.display != nil {
+					w.display.Flush()
+				}
+				// Chord detected or all buttons released: exit drag.
+				if me.Buttons != b || me.Buttons == 0 {
+					break
+				}
 			}
 
 			// Record double-click state
@@ -1060,27 +1074,72 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 		// Sync the preview selection to the source body buffer
 		w.syncSourceSelection()
+		q0 := w.body.q0
 
-		// Process chords
-		switch {
-		case chordButtons == 7: // B1+B2+B3: Snarf (copy, no delete)
-			cut(&w.body, &w.body, nil, true, false, "")
-			global.snarfContext = w.selectionContext
-
-		case chordButtons&2 != 0: // B1+B2: Cut (copy + delete)
-			w.body.TypeCommit()
-			global.seq++
-			w.body.file.Mark(global.seq)
-			cut(&w.body, &w.body, nil, true, true, "")
-			global.snarfContext = w.selectionContext
-			w.UpdatePreview()
-
-		case chordButtons&4 != 0: // B1+B3: Paste (replace selection with snarf)
-			w.body.TypeCommit()
-			global.seq++
-			w.body.file.Mark(global.seq)
-			paste(&w.body, &w.body, nil, true, false, "")
-			w.UpdatePreview()
+		// Chord processing loop: handle B2/B3 chords while B1 is held,
+		// matching the text.go pattern with undo/redo toggle semantics.
+		const (
+			chordNone = iota
+			chordCut
+			chordPaste
+			chordSnarf
+		)
+		state := chordNone
+		for lastButtons != 0 {
+			if lastButtons == 7 && state == chordNone {
+				// B1+B2+B3 simultaneous: snarf only (copy, no delete)
+				cut(&w.body, &w.body, nil, true, false, "")
+				global.snarfContext = w.selectionContext
+				state = chordSnarf
+			} else if (lastButtons&1) != 0 && (lastButtons&6) != 0 && state != chordSnarf {
+				if state == chordNone {
+					w.body.TypeCommit()
+					global.seq++
+					w.body.file.Mark(global.seq)
+				}
+				if lastButtons&2 != 0 {
+					// B2 chord: cut (or undo a previous paste)
+					if state == chordPaste {
+						w.Undo(true)
+						w.body.SetSelect(q0, w.body.q1)
+						state = chordNone
+					} else if state != chordCut {
+						cut(&w.body, &w.body, nil, true, true, "")
+						global.snarfContext = w.selectionContext
+						state = chordCut
+					}
+				} else {
+					// B3 chord: paste (or undo a previous cut)
+					if state == chordCut {
+						w.Undo(true)
+						w.body.SetSelect(q0, w.body.q1)
+						state = chordNone
+					} else if state != chordPaste {
+						paste(&w.body, &w.body, nil, true, false, "")
+						state = chordPaste
+					}
+				}
+				// Collapse the rich frame's selection before re-rendering
+				// so UpdatePreview doesn't draw a stale highlight.
+				mq0, mq1 := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+				rt.SetSelection(mq0, mq1)
+				w.UpdatePreview()
+				// Now use the new source map to set the correct selection.
+				if w.previewSourceMap != nil {
+					rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+					if rendStart >= 0 {
+						rt.SetSelection(rendStart, rendEnd)
+					}
+				}
+				clearmouse()
+			}
+			// Wait for button state to change
+			prev := lastButtons
+			for lastButtons == prev {
+				me := <-mc.C
+				lastButtons = me.Buttons
+			}
+			w.previewClickRT = nil
 		}
 
 		w.Draw()
@@ -1403,6 +1462,28 @@ func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int
 	for mc.Mouse.Buttons != 0 {
 		mc.Mouse = <-mc.C
 	}
+}
+
+// ShowInPreview maps source positions [q0, q1) to rendered positions,
+// updates the preview selection, scrolls to make it visible, and redraws.
+// Returns the rendered start position (for cursor warping), or -1 if
+// mapping failed.
+func (w *Window) ShowInPreview(q0, q1 int) int {
+	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
+		return -1
+	}
+	rt := w.richBody
+	rendStart, rendEnd := w.previewSourceMap.ToRendered(q0, q1)
+	if rendStart < 0 || rendEnd < 0 {
+		return -1
+	}
+	rt.SetSelection(rendStart, rendEnd)
+	w.scrollPreviewToMatch(rt, rendStart)
+	w.Draw()
+	if w.display != nil {
+		w.display.Flush()
+	}
+	return rendStart
 }
 
 // scrollPreviewToMatch scrolls the preview so that the match at rendStart
@@ -1903,6 +1984,143 @@ func (w *Window) HandlePreviewKey(key rune) bool {
 	default:
 		// Typing keys and other keys are not handled in preview mode
 		return false
+	}
+}
+
+// HandlePreviewType handles text editing keys in preview mode, inserting or
+// deleting characters in the source buffer and immediately re-rendering the
+// preview. It follows the same sync→edit→render→remap cycle used by the
+// chord cut/paste handlers.
+func (w *Window) HandlePreviewType(t *Text, r rune) {
+	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
+		return
+	}
+
+	// Only accept printable characters, newline, tab, and editing keys.
+	switch {
+	case r == '\n', r == '\t':
+		// accepted
+	case r == 0x08: // ^H: backspace
+	case r == 0x7F: // Del: delete right
+	case r == 0x15: // ^U: kill line
+	case r == 0x17: // ^W: kill word
+	case r >= 0x20 && r < KF: // printable, excluding draw key constants (0xF0xx, 0xF1xx)
+		// accepted
+	default:
+		return
+	}
+
+	// 1. Map rendered cursor/selection to source positions.
+	w.syncSourceSelection()
+
+	// 2. Create undo points matching text mode behavior.
+	// Deletion keys and newline always start a new undo group.
+	// Regular characters only create an undo point at the start of
+	// a typing sequence (eq0 == -1), so consecutive chars are grouped
+	// into one Undo operation.
+	switch r {
+	case 0x08, 0x7F, 0x15, 0x17, '\n': // deletion keys and newline
+		t.TypeCommit()
+		global.seq++
+		t.file.Mark(global.seq)
+	default:
+		if t.eq0 == -1 {
+			t.TypeCommit()
+			global.seq++
+			t.file.Mark(global.seq)
+		}
+	}
+
+	// 3. Handle deletion keys.
+	switch r {
+	case 0x08: // ^H: backspace
+		if t.q0 != t.q1 {
+			// Range selected: delete it.
+			cut(t, t, nil, false, true, "")
+		} else if t.q0 > 0 {
+			t.q0--
+			cut(t, t, nil, false, true, "")
+		}
+		w.previewTypeFinish(t)
+		return
+
+	case 0x7F: // Del: delete right
+		if t.q0 != t.q1 {
+			cut(t, t, nil, false, true, "")
+		} else if t.q1 < t.file.Nr() {
+			t.q1++
+			cut(t, t, nil, false, true, "")
+		}
+		w.previewTypeFinish(t)
+		return
+
+	case 0x15: // ^U: kill line
+		if t.q0 != t.q1 {
+			cut(t, t, nil, false, true, "")
+		} else if t.q0 > 0 {
+			nnb := t.BsWidth(0x15)
+			if nnb > 0 {
+				t.q0 -= nnb
+				cut(t, t, nil, false, true, "")
+			}
+		}
+		w.previewTypeFinish(t)
+		return
+
+	case 0x17: // ^W: kill word
+		if t.q0 != t.q1 {
+			cut(t, t, nil, false, true, "")
+		} else if t.q0 > 0 {
+			nnb := t.BsWidth(0x17)
+			if nnb > 0 {
+				t.q0 -= nnb
+				cut(t, t, nil, false, true, "")
+			}
+		}
+		w.previewTypeFinish(t)
+		return
+	}
+
+	// 4. If range selected, cut it first (like Text.Type).
+	if t.q1 > t.q0 {
+		cut(t, t, nil, false, true, "")
+	}
+
+	// 5. Insert the character into the source buffer.
+	t.file.InsertAt(t.q0, []rune{r})
+	t.q0++
+	t.q1 = t.q0
+
+	w.previewTypeFinish(t)
+}
+
+// previewTypeFinish completes a preview-mode edit by cancelling the debounce
+// timer, doing an immediate re-render, and remapping the cursor position.
+func (w *Window) previewTypeFinish(t *Text) {
+	// Cancel the debounce timer that the observer scheduled.
+	if w.previewUpdateTimer != nil {
+		w.previewUpdateTimer.Stop()
+	}
+
+	// Immediate re-render (uses incremental path via pendingEdits).
+	w.UpdatePreview()
+
+	// Remap source cursor to rendered position and update selection.
+	if w.previewSourceMap != nil {
+		rendStart, rendEnd := w.previewSourceMap.ToRendered(t.q0, t.q1)
+		if rendStart >= 0 {
+			w.richBody.SetSelection(rendStart, rendEnd)
+		} else if t.q0 == t.q1 {
+			// Cursor at end of content or in a gap between source map entries.
+			// Fall back to the end of the rendered content.
+			contentLen := w.richBody.Content().Len()
+			w.richBody.SetSelection(contentLen, contentLen)
+		}
+	}
+
+	w.Draw()
+	if w.display != nil {
+		w.display.Flush()
 	}
 }
 

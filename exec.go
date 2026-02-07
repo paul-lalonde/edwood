@@ -1223,9 +1223,9 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 			w.imageCache = nil
 		}
 		w.SetPreviewMode(false)
-		// Redraw to show the original body text
-		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
-		w.body.SetSelect(w.body.q0, w.body.q1)
+		// Scroll the source view to make the current selection visible.
+		// Show() handles ScrDraw + SetSelect + scrolling if off-screen.
+		w.body.Show(w.body.q0, w.body.q1, true)
 		if w.display != nil {
 			w.display.Flush()
 		}
@@ -1303,6 +1303,24 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	w.imageCache = rich.NewImageCache(0) // 0 means use default size
 	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
 
+	// Wire async image load completion callback. When a cache-miss image
+	// finishes loading in the background, re-render the preview to replace
+	// the placeholder with the actual image. This is lightweight — no
+	// markdown re-parse, just a layout+draw pass with the now-cached image.
+	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
+		go func() {
+			global.row.lk.Lock()
+			defer global.row.lk.Unlock()
+			if !w.previewMode || w.richBody == nil {
+				return
+			}
+			w.richBody.Render(w.body.all)
+			if w.display != nil {
+				w.display.Flush()
+			}
+		}()
+	}))
+
 	// Set the base path for resolving relative image paths
 	// The name variable contains the file path from the window tag
 	// Convert to absolute path for proper image resolution regardless of working directory
@@ -1334,14 +1352,15 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 		rt.SetSelection(rendStart, rendEnd)
 	}
 
-	// Set the scroll origin to match the text body's current position
-	rt.SetOrigin(w.body.org)
-
 	// Enter preview mode
 	w.SetPreviewMode(true)
 
-	// Redraw the preview - Render() with body rectangle
+	// Render the preview, then scroll to make the selection visible.
+	// Must render first so the frame has layout data for scrollPreviewToMatch.
 	rt.Render(bodyRect)
+	if rendStart >= 0 {
+		w.scrollPreviewToMatch(rt, rendStart)
+	}
 	w.Draw()
 	if display != nil {
 		display.Flush()

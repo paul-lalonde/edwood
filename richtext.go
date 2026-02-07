@@ -45,6 +45,9 @@ type RichText struct {
 
 	// Base path for resolving relative image paths (e.g., the markdown file path)
 	basePath string
+
+	// Callback invoked when an async image load completes
+	onImageLoaded func(path string)
 }
 
 // NewRichText creates a new RichText component.
@@ -97,6 +100,9 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	}
 	if rt.basePath != "" {
 		frameOpts = append(frameOpts, rich.WithBasePath(rt.basePath))
+	}
+	if rt.onImageLoaded != nil {
+		frameOpts = append(frameOpts, rich.WithOnImageLoaded(rt.onImageLoaded))
 	}
 	if rt.selectionColor != nil {
 		frameOpts = append(frameOpts, rich.WithSelectionColor(rt.selectionColor))
@@ -188,6 +194,9 @@ func (rt *RichText) Redraw() {
 // allowing the rectangle to be provided dynamically (e.g., from body.all).
 func (rt *RichText) Render(r image.Rectangle) {
 	rt.lastRect = r
+	if r.Dx() <= 0 || r.Dy() <= 0 {
+		return
+	}
 
 	// Compute scrollbar rectangle (left side)
 	scrollWid := rt.display.ScaleSize(Scrollwid)
@@ -571,6 +580,15 @@ func WithRichTextImageCache(cache *rich.ImageCache) RichTextOption {
 func WithRichTextBasePath(path string) RichTextOption {
 	return func(rt *RichText) {
 		rt.basePath = path
+	}
+}
+
+// WithRichTextOnImageLoaded sets a callback invoked when an asynchronous image
+// load completes. The callback runs on an unspecified goroutine; callers must
+// marshal to the main goroutine (e.g., via the row lock) before touching UI state.
+func WithRichTextOnImageLoaded(fn func(path string)) RichTextOption {
+	return func(rt *RichText) {
+		rt.onImageLoaded = fn
 	}
 }
 
