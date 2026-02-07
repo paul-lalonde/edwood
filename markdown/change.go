@@ -467,6 +467,10 @@ func ParseRegion(lines []string, sourceRuneOffset int, sourceByteOffset ...int) 
 		sm.entries[i].SourceStart += byteOff
 		sm.entries[i].SourceEnd += byteOff
 	}
+	// Byte positions have been shifted but rune positions are still relative
+	// to the region text. Mark rune positions as invalid to prevent mapping
+	// functions from using stale values.
+	sm.InvalidateRunePositions()
 
 	return content, sm, lm
 }
@@ -573,6 +577,9 @@ func Stitch(
 		for _, e := range newRegion.SM.entries {
 			e.RenderedStart += prefixRenderedEnd
 			e.RenderedEnd += prefixRenderedEnd
+			if e.Kind == KindTableCell {
+				e.CellBorderPos += prefixRenderedEnd
+			}
 			resultSM.entries = append(resultSM.entries, e)
 		}
 	}
@@ -588,6 +595,9 @@ func Stitch(
 			e.SourceEnd += sourceBytesDelta
 			e.RenderedStart += renderedDelta
 			e.RenderedEnd += renderedDelta
+			if e.Kind == KindTableCell {
+				e.CellBorderPos += renderedDelta
+			}
 			resultSM.entries = append(resultSM.entries, e)
 		}
 	}
