@@ -23,17 +23,17 @@ func contentToBoxes(c Content) []Box {
 }
 
 // appendSpanBoxes appends boxes from a single span to the slice.
-// It splits the span text on newlines and tabs.
+// It splits the span text on newlines, tabs, and spaces to enable word wrapping.
 func appendSpanBoxes(boxes []Box, span Span) []Box {
 	text := span.Text
 	style := span.Style
 
 	for len(text) > 0 {
-		// Find the next special character (newline or tab)
+		// Find the next break character (newline, tab, or space)
 		idx := -1
 		var special rune
 		for i, r := range text {
-			if r == '\n' || r == '\t' {
+			if r == '\n' || r == '\t' || r == ' ' {
 				idx = i
 				special = r
 				break
@@ -41,7 +41,7 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 		}
 
 		if idx == -1 {
-			// No more special characters, emit the rest as a text box
+			// No more break characters, emit the rest as a text box
 			boxes = append(boxes, Box{
 				Text:  []byte(text),
 				Nrune: utf8.RuneCountInString(text),
@@ -51,7 +51,7 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 			break
 		}
 
-		// Emit text before the special character (if any)
+		// Emit text before the break character (if any)
 		if idx > 0 {
 			prefix := text[:idx]
 			boxes = append(boxes, Box{
@@ -62,15 +62,26 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 			})
 		}
 
-		// Emit the special character box
-		boxes = append(boxes, Box{
-			Text:  nil,
-			Nrune: -1,
-			Bc:    special,
-			Style: style,
-		})
+		// Emit the break character box
+		if special == '\n' || special == '\t' {
+			// Newline and tab are special marker boxes
+			boxes = append(boxes, Box{
+				Text:  nil,
+				Nrune: -1,
+				Bc:    special,
+				Style: style,
+			})
+		} else {
+			// Space is a regular text box (so it has measurable width)
+			boxes = append(boxes, Box{
+				Text:  []byte{' '},
+				Nrune: 1,
+				Bc:    0,
+				Style: style,
+			})
+		}
 
-		// Continue with the rest of the text (after the special character)
+		// Continue with the rest of the text (after the break character)
 		text = text[idx+1:]
 	}
 
@@ -120,11 +131,15 @@ type PositionedBox struct {
 // FontHeightFunc returns the font height for a given style.
 type FontHeightFunc func(style Style) int
 
+// FontForStyleFunc returns the font for a given style.
+type FontForStyleFunc func(style Style) draw.Font
+
 // layout positions boxes into lines, handling wrapping when boxes exceed frameWidth.
 // It computes the Wid field for each box and assigns X/Y positions.
 // The returned Lines contain positioned boxes ready for rendering.
 // If fontHeightFn is nil, the default font height is used for all lines.
-func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn FontHeightFunc) []Line {
+// If fontForStyleFn is nil, the default font is used for all width calculations.
+func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn FontHeightFunc, fontForStyleFn FontForStyleFunc) []Line {
 	if len(boxes) == 0 {
 		return nil
 	}
@@ -139,11 +154,20 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		return defaultFontHeight
 	}
 
+	// Helper to get font for a style (for width calculation)
+	getFontForStyle := func(style Style) draw.Font {
+		if fontForStyleFn != nil {
+			return fontForStyleFn(style)
+		}
+		return font
+	}
+
 	var lines []Line
 	var currentLine Line
 	currentLine.Y = 0
 	currentLine.Height = defaultFontHeight
 	xPos := 0
+	pendingParaBreak := false // Track if we just had a paragraph break
 
 	for i := range boxes {
 		box := &boxes[i]
@@ -163,21 +187,37 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			})
 			lines = append(lines, currentLine)
 
-			// Start new line - use previous line's height for Y offset
+			// Calculate Y offset (just the line height for now)
+			yOffset := currentLine.Height
+
+			// Start new line
 			currentLine = Line{
-				Y:      currentLine.Y + currentLine.Height,
+				Y:      currentLine.Y + yOffset,
 				Height: defaultFontHeight,
 			}
 			xPos = 0
+
+			// Mark that we have a pending paragraph break if this newline is a para break
+			if box.Style.ParaBreak {
+				pendingParaBreak = true
+			}
 			continue
 		}
 
-		// Calculate width for this box
+		// If we have a pending paragraph break and this is the first content,
+		// add space before this paragraph based on the content's font height
+		if pendingParaBreak && !box.IsTab() {
+			// Add half the height of the upcoming text before this paragraph
+			currentLine.Y += boxHeight / 2
+			pendingParaBreak = false
+		}
+
+		// Calculate width for this box using the style-specific font
 		var width int
 		if box.IsTab() {
 			width = tabBoxWidth(box, xPos, 0, maxtab)
 		} else {
-			width = boxWidth(box, font)
+			width = boxWidth(box, getFontForStyle(box.Style))
 		}
 
 		// Check if we need to wrap
@@ -201,12 +241,12 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				}
 			} else {
 				// Box is wider than frame, need to split it
-				lines, currentLine, xPos = splitBoxAcrossLines(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight)
+				lines, currentLine, xPos = splitBoxAcrossLines(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight, getFontForStyle)
 				continue
 			}
 		} else if xPos == 0 && width > frameWidth {
 			// Box is at start of line but still too wide - split it
-			lines, currentLine, xPos = splitBoxAcrossLines(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight)
+			lines, currentLine, xPos = splitBoxAcrossLines(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight, getFontForStyle)
 			continue
 		}
 
@@ -235,7 +275,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 
 // splitBoxAcrossLines splits a text box that's too wide to fit on a single line.
 // It creates multiple boxes, each fitting within frameWidth.
-func splitBoxAcrossLines(lines []Line, currentLine Line, box *Box, font draw.Font, frameWidth, defaultFontHeight int, fontHeightFn func(Style) int) ([]Line, Line, int) {
+func splitBoxAcrossLines(lines []Line, currentLine Line, box *Box, defaultFont draw.Font, frameWidth, defaultFontHeight int, fontHeightFn func(Style) int, fontForStyleFn func(Style) draw.Font) ([]Line, Line, int) {
 	// Tabs and newlines should never need splitting
 	if box.IsTab() || box.IsNewline() {
 		box.Wid = 0
@@ -249,6 +289,12 @@ func splitBoxAcrossLines(lines []Line, currentLine Line, box *Box, font draw.Fon
 	text := box.Text
 	style := box.Style
 	xPos := 0
+
+	// Get the correct font for this box's style
+	font := defaultFont
+	if fontForStyleFn != nil {
+		font = fontForStyleFn(style)
+	}
 
 	// Get font height for this box's style
 	boxHeight := defaultFontHeight

@@ -234,10 +234,11 @@ func TestWindowDrawPreviewMode(t *testing.T) {
 	rt := NewRichText()
 	// Body area is below tag (approximately)
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Set some content in the RichText
 	content := rich.Plain("Hello World")
@@ -326,10 +327,11 @@ func TestWindowMousePreviewSelection(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Set content in the RichText
 	content := rich.Plain("Hello World")
@@ -416,10 +418,11 @@ func TestPreviewSnarf(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -495,10 +498,11 @@ func TestPreviewSnarfBold(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -581,10 +585,11 @@ func TestPreviewSnarfHeading(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -662,11 +667,12 @@ func TestWindowMousePreviewScroll(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 		WithScrollbarColors(scrBg, scrThumb),
 	)
+	rt.Render(bodyRect)
 
 	// Create content with many lines to enable scrolling
 	var content rich.Content
@@ -818,10 +824,11 @@ func TestPreviewCommandEnter(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(markdownContent)
@@ -911,10 +918,11 @@ func TestPreviewCommandExit(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	content, sourceMap, _ := markdown.ParseWithSourceMap(markdownContent)
 	rt.SetContent(content)
@@ -1007,10 +1015,11 @@ func TestPreviewLiveUpdate(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse initial markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
@@ -1099,10 +1108,11 @@ func TestPreviewLiveUpdatePreservesScroll(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse initial markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
@@ -1175,10 +1185,11 @@ func TestPreviewLiveUpdateMultipleTimes(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse initial markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
@@ -1255,10 +1266,11 @@ func TestPreviewLook(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1368,10 +1380,11 @@ func TestPreviewExec(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1484,10 +1497,11 @@ func TestPreviewLookExpand(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1552,10 +1566,11 @@ func TestPreviewKeyScroll(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1672,10 +1687,11 @@ func TestPreviewKeyIgnoresTyping(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown and set content with source map
 	content, sourceMap, _ := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1771,10 +1787,11 @@ func TestWindowPreviewLinkMap(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown with source map and link map
 	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1898,10 +1915,11 @@ func TestPreviewLookLink(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown with source map and link map
 	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -1979,10 +1997,11 @@ func TestPreviewLookNonLink(t *testing.T) {
 
 	rt := NewRichText()
 	bodyRect := image.Rect(0, 20, 800, 600)
-	rt.Init(bodyRect, display, font,
+	rt.Init(display, font,
 		WithRichTextBackground(bgImage),
 		WithRichTextColor(textImage),
 	)
+	rt.Render(bodyRect)
 
 	// Parse markdown with source map and link map
 	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
@@ -2038,5 +2057,241 @@ func TestPreviewLookNonLink(t *testing.T) {
 	url = w.PreviewLookLinkURL(10)
 	if url != "" {
 		t.Errorf("PreviewLookLinkURL with nil link map = %q, want empty string", url)
+	}
+}
+
+// TestWindowResizePreviewMode tests that when a window in preview mode is resized,
+// the richBody.Render() is called with the updated body.all rectangle, ensuring
+// the preview content is properly displayed in the new area.
+func TestWindowResizePreviewMode(t *testing.T) {
+	// Create initial rectangle and display
+	initialRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(initialRect)
+	global.configureGlobals(display)
+
+	// Create markdown content
+	markdownContent := "# Hello World\n\nThis is some **bold** text and *italic* text.\n\nParagraph here."
+	sourceRunes := []rune(markdownContent)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+
+	// Setup body with mock frame
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/resize.md", sourceRunes),
+	}
+	// Initial body.all rectangle (simulating window layout after Init)
+	w.body.all = image.Rect(0, 20, 800, 600)
+
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = initialRect
+
+	// Create and initialize RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+
+	// Initial render into the body area
+	rt.Render(w.body.all)
+
+	// Parse markdown and set content
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(markdownContent)
+	rt.SetContent(content)
+
+	// Assign the richBody to the window and enable preview mode
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+	w.SetPreviewMode(true)
+
+	// Verify initial state
+	if !w.IsPreviewMode() {
+		t.Fatal("Window should be in preview mode")
+	}
+
+	// Get the initial lastRect from richBody (via All() accessor)
+	initialLastRect := rt.All()
+	if !initialLastRect.Eq(w.body.all) {
+		t.Errorf("Initial lastRect should match body.all: got %v, want %v", initialLastRect, w.body.all)
+	}
+
+	// Simulate resize: update body.all to a new rectangle (e.g., window made smaller)
+	newBodyRect := image.Rect(0, 20, 600, 400)
+	w.body.all = newBodyRect
+
+	// Call Render with the new rectangle (as Window.Resize should do)
+	// This simulates what Window.Resize() should do when in preview mode:
+	// After updating body.all, it should call richBody.Render(body.all)
+	w.richBody.Render(w.body.all)
+
+	// Verify the richBody's lastRect was updated (via All() accessor)
+	afterResizeRect := rt.All()
+	if !afterResizeRect.Eq(newBodyRect) {
+		t.Errorf("After resize, lastRect should match new body.all: got %v, want %v", afterResizeRect, newBodyRect)
+	}
+
+	// Verify the frame rectangle was also updated
+	frameRect := rt.Frame().Rect()
+	// Frame rect should be to the right of scrollbar within the new body rect
+	if frameRect.Max.X > newBodyRect.Max.X {
+		t.Errorf("Frame rect.Max.X (%d) should not exceed newBodyRect.Max.X (%d)", frameRect.Max.X, newBodyRect.Max.X)
+	}
+	if frameRect.Min.Y != newBodyRect.Min.Y {
+		t.Errorf("Frame rect.Min.Y (%d) should match newBodyRect.Min.Y (%d)", frameRect.Min.Y, newBodyRect.Min.Y)
+	}
+	if frameRect.Max.Y != newBodyRect.Max.Y {
+		t.Errorf("Frame rect.Max.Y (%d) should match newBodyRect.Max.Y (%d)", frameRect.Max.Y, newBodyRect.Max.Y)
+	}
+
+	// Verify scrollbar rect was also updated
+	scrollRect := rt.ScrollRect()
+	if scrollRect.Min.X != newBodyRect.Min.X {
+		t.Errorf("Scroll rect.Min.X (%d) should match newBodyRect.Min.X (%d)", scrollRect.Min.X, newBodyRect.Min.X)
+	}
+	if scrollRect.Min.Y != newBodyRect.Min.Y {
+		t.Errorf("Scroll rect.Min.Y (%d) should match newBodyRect.Min.Y (%d)", scrollRect.Min.Y, newBodyRect.Min.Y)
+	}
+	if scrollRect.Max.Y != newBodyRect.Max.Y {
+		t.Errorf("Scroll rect.Max.Y (%d) should match newBodyRect.Max.Y (%d)", scrollRect.Max.Y, newBodyRect.Max.Y)
+	}
+
+	// Verify content is still accessible after resize
+	if rt.Content() == nil {
+		t.Error("Content should not be nil after resize")
+	}
+	if rt.Content().Len() == 0 {
+		t.Error("Content should not be empty after resize")
+	}
+
+	// Verify the rich text frame has the correct content length
+	// (this ensures layout was recomputed for the new width)
+	if rt.Frame() == nil {
+		t.Fatal("Frame should not be nil after resize")
+	}
+
+	// Test another resize - making window larger
+	largerBodyRect := image.Rect(0, 20, 1000, 800)
+	w.body.all = largerBodyRect
+	w.richBody.Render(w.body.all)
+
+	// Verify the update (via All() accessor)
+	afterLargerResize := rt.All()
+	if !afterLargerResize.Eq(largerBodyRect) {
+		t.Errorf("After larger resize, lastRect should match: got %v, want %v", afterLargerResize, largerBodyRect)
+	}
+
+	// Verify frame expanded
+	frameRectLarger := rt.Frame().Rect()
+	if frameRectLarger.Max.X <= frameRect.Max.X {
+		t.Errorf("Larger frame rect.Max.X (%d) should be greater than smaller (%d)", frameRectLarger.Max.X, frameRect.Max.X)
+	}
+}
+
+// TestWindowDrawPreviewModeAfterResize tests that Window.Draw() correctly uses
+// body.all as the rectangle when in preview mode, ensuring that after a resize
+// the preview content is rendered into the correct (updated) area.
+func TestWindowDrawPreviewModeAfterResize(t *testing.T) {
+	// Create initial rectangle and display
+	initialRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(initialRect)
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+
+	// Setup body with mock frame and initial rectangle
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/draw.md", []rune("# Hello\n\nWorld")),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = initialRect
+
+	// Create and initialize RichText for preview
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+
+	// Initial render into the body area
+	rt.Render(w.body.all)
+
+	// Set content
+	content := rich.Plain("Hello World")
+	rt.SetContent(content)
+
+	// Assign richBody and enable preview mode
+	w.richBody = rt
+	w.SetPreviewMode(true)
+
+	// Verify initial lastRect matches body.all
+	if !rt.All().Eq(w.body.all) {
+		t.Errorf("Initial lastRect should match body.all: got %v, want %v", rt.All(), w.body.all)
+	}
+
+	// Now simulate a resize: body.all changes but richBody's cached rectangle is stale
+	newBodyRect := image.Rect(0, 20, 600, 400)
+	w.body.all = newBodyRect
+
+	// Call Draw() - this should use body.all (the current geometry) not the cached value
+	w.Draw()
+
+	// Verify that after Draw(), the richBody's lastRect has been updated to body.all
+	// This proves that Draw() used Render(body.all) instead of Redraw()
+	if !rt.All().Eq(newBodyRect) {
+		t.Errorf("After Draw(), lastRect should match updated body.all: got %v, want %v", rt.All(), newBodyRect)
+	}
+
+	// Verify frame rectangle was also updated to match the new area
+	frameRect := rt.Frame().Rect()
+	if frameRect.Max.X > newBodyRect.Max.X {
+		t.Errorf("Frame rect.Max.X (%d) should not exceed newBodyRect.Max.X (%d)", frameRect.Max.X, newBodyRect.Max.X)
+	}
+	if frameRect.Max.Y != newBodyRect.Max.Y {
+		t.Errorf("Frame rect.Max.Y (%d) should match newBodyRect.Max.Y (%d)", frameRect.Max.Y, newBodyRect.Max.Y)
+	}
+
+	// Verify scrollbar rectangle was also updated
+	scrollRect := rt.ScrollRect()
+	if scrollRect.Min.X != newBodyRect.Min.X {
+		t.Errorf("Scroll rect.Min.X (%d) should match newBodyRect.Min.X (%d)", scrollRect.Min.X, newBodyRect.Min.X)
+	}
+	if scrollRect.Max.Y != newBodyRect.Max.Y {
+		t.Errorf("Scroll rect.Max.Y (%d) should match newBodyRect.Max.Y (%d)", scrollRect.Max.Y, newBodyRect.Max.Y)
+	}
+
+	// Test that subsequent Draw() calls also maintain correct geometry
+	evenSmallerRect := image.Rect(0, 20, 400, 300)
+	w.body.all = evenSmallerRect
+	w.Draw()
+
+	if !rt.All().Eq(evenSmallerRect) {
+		t.Errorf("After second Draw(), lastRect should match: got %v, want %v", rt.All(), evenSmallerRect)
 	}
 }

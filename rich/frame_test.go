@@ -319,9 +319,10 @@ func TestDrawTextWithColor(t *testing.T) {
 
 	// Verify text was drawn with a custom color, not the default text color
 	// When a style has Fg set, it should NOT use "default-text-color"
+	// Note: "blue text" is now split into separate words during layout
 	foundWithCustomColor := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "blue text"`) {
+		if strings.Contains(op, `string "blue"`) {
 			// Check that it's NOT using the default text color
 			if !strings.Contains(op, "default-text-color") {
 				foundWithCustomColor = true
@@ -331,7 +332,7 @@ func TestDrawTextWithColor(t *testing.T) {
 	}
 
 	if !foundWithCustomColor {
-		t.Errorf("Redraw() should render 'blue text' with custom color, not default-text-color\ngot ops: %v", ops)
+		t.Errorf("Redraw() should render 'blue' with custom color, not default-text-color\ngot ops: %v", ops)
 	}
 }
 
@@ -369,8 +370,9 @@ func TestDrawTextWithMultipleColors(t *testing.T) {
 	blueOp := ""
 	redOp := ""
 
+	// Note: "blue " is now split into "blue" and " " during layout
 	for _, op := range ops {
-		if strings.Contains(op, `string "blue "`) {
+		if strings.Contains(op, `string "blue"`) && !strings.Contains(op, `string "blue "`) {
 			blueOp = op
 			if !strings.Contains(op, "default-text-color") {
 				blueNotDefault = true
@@ -385,7 +387,7 @@ func TestDrawTextWithMultipleColors(t *testing.T) {
 	}
 
 	if !blueNotDefault {
-		t.Errorf("Redraw() should render 'blue ' with custom color, not default-text-color\ngot op: %s\nall ops: %v", blueOp, ops)
+		t.Errorf("Redraw() should render 'blue' with custom color, not default-text-color\ngot op: %s\nall ops: %v", blueOp, ops)
 	}
 	if !redNotDefault {
 		t.Errorf("Redraw() should render 'red' with custom color, not default-text-color\ngot op: %s\nall ops: %v", redOp, ops)
@@ -458,17 +460,17 @@ func TestFontVariantsBoldText(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify bold text was rendered
+	// Verify bold text was rendered (now split into words)
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "bold text"`) {
+		if strings.Contains(op, `string "bold"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'bold text'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'bold'\ngot ops: %v", ops)
 	}
 
 	// Verify the bold font was used by checking that fontForStyle returns boldFont
@@ -513,14 +515,14 @@ func TestFontVariantsItalicText(t *testing.T) {
 	// Verify italic text was rendered
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "italic text"`) {
+		if strings.Contains(op, `string "italic"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'italic text'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'italic'\ngot ops: %v", ops)
 	}
 
 	// Verify the italic font was used
@@ -566,17 +568,17 @@ func TestFontVariantsBoldItalicText(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify bold+italic text was rendered
+	// Verify bold+italic text was rendered (now split into words)
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "bold italic"`) {
+		if strings.Contains(op, `string "bold"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'bold italic'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'bold'\ngot ops: %v", ops)
 	}
 
 	// Verify the bold+italic font was used
@@ -662,11 +664,12 @@ func TestFontVariantsMixedContent(t *testing.T) {
 	foundNormal := false
 	foundBold := false
 	foundItalic := false
+	// Note: text is now split into words, so "normal " becomes "normal" and " "
 	for _, op := range ops {
-		if strings.Contains(op, `string "normal "`) {
+		if strings.Contains(op, `string "normal"`) {
 			foundNormal = true
 		}
-		if strings.Contains(op, `string "bold "`) {
+		if strings.Contains(op, `string "bold"`) && !strings.Contains(op, `string "bold "`) {
 			foundBold = true
 		}
 		if strings.Contains(op, `string "italic"`) {
@@ -675,10 +678,10 @@ func TestFontVariantsMixedContent(t *testing.T) {
 	}
 
 	if !foundNormal {
-		t.Errorf("Redraw() did not render 'normal '\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'normal'\ngot ops: %v", ops)
 	}
 	if !foundBold {
-		t.Errorf("Redraw() did not render 'bold '\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'bold'\ngot ops: %v", ops)
 	}
 	if !foundItalic {
 		t.Errorf("Redraw() did not render 'italic'\ngot ops: %v", ops)
@@ -744,16 +747,17 @@ func TestFontScaleH1Text(t *testing.T) {
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
 	// Verify H1 text was rendered
+	// Note: "Big Heading" is now split into words
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "Big Heading"`) {
+		if strings.Contains(op, `string "Big"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'Big Heading'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'Big'\ngot ops: %v", ops)
 	}
 
 	// Verify the H1 scaled font is returned for StyleH1
@@ -804,17 +808,17 @@ func TestFontScaleH2Text(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify H2 text was rendered
+	// Verify H2 text was rendered (now split into words)
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "Medium Heading"`) {
+		if strings.Contains(op, `string "Medium"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'Medium Heading'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'Medium'\ngot ops: %v", ops)
 	}
 
 	// Verify the H2 scaled font is returned for StyleH2
@@ -861,17 +865,17 @@ func TestFontScaleH3Text(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify H3 text was rendered
+	// Verify H3 text was rendered (now split into words)
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "Small Heading"`) {
+		if strings.Contains(op, `string "Small"`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'Small Heading'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'Small'\ngot ops: %v", ops)
 	}
 
 	// Verify the H3 scaled font is returned for StyleH3
@@ -967,7 +971,8 @@ func TestFontScaleMixedContent(t *testing.T) {
 		if strings.Contains(op, `string "Subtitle"`) {
 			foundSubtitle = true
 		}
-		if strings.Contains(op, `string "Body text"`) {
+		// Note: "Body text" is now split into words
+		if strings.Contains(op, `string "Body"`) && !strings.Contains(op, `string "Body "`) {
 			foundBody = true
 		}
 	}
@@ -979,7 +984,7 @@ func TestFontScaleMixedContent(t *testing.T) {
 		t.Errorf("Redraw() did not render 'Subtitle'\ngot ops: %v", ops)
 	}
 	if !foundBody {
-		t.Errorf("Redraw() did not render 'Body text'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'Body'\ngot ops: %v", ops)
 	}
 
 	// Verify correct fonts are selected for each style
@@ -1028,17 +1033,17 @@ func TestFontScaleWithBoldCombination(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify text was rendered
+	// Verify text was rendered (now split into words)
 	found := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "Bold Heading"`) {
+		if strings.Contains(op, `string "Bold"`) && !strings.Contains(op, `string "Bold "`) {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Errorf("Redraw() did not render 'Bold Heading'\ngot ops: %v", ops)
+		t.Errorf("Redraw() did not render 'Bold'\ngot ops: %v", ops)
 	}
 
 	// For StyleH1 (Bold:true, Scale:2.0), the scaled font should take precedence
@@ -1715,8 +1720,8 @@ func TestDrawBoxBackgroundMultiple(t *testing.T) {
 		t.Errorf("Expected 2 box background fills, got %d\ngot ops: %v", fillCount, ops)
 	}
 
-	// Verify all text was rendered
-	texts := []string{"normal ", "code1", " more ", "code2"}
+	// Verify all text was rendered (words are now split)
+	texts := []string{"normal", "code1", "more", "code2"}
 	for _, text := range texts {
 		found := false
 		for _, op := range ops {
@@ -2062,5 +2067,125 @@ func TestHorizontalRuleFullWidth(t *testing.T) {
 
 	if !foundFullWidthLine {
 		t.Errorf("Horizontal rule line should span full frame width (500px)\ngot ops: %v", ops)
+	}
+}
+
+// TestFrameSetRect verifies that SetRect() updates the frame's rectangle.
+func TestFrameSetRect(t *testing.T) {
+	// Create a frame with an initial rectangle
+	initialRect := image.Rect(10, 20, 200, 300)
+	display := edwoodtest.NewDisplay(initialRect)
+
+	f := NewFrame()
+	f.Init(initialRect, WithDisplay(display))
+
+	// Verify initial rect
+	if got := f.Rect(); got != initialRect {
+		t.Errorf("Initial Rect() = %v, want %v", got, initialRect)
+	}
+
+	// Set a new rectangle
+	newRect := image.Rect(0, 0, 400, 500)
+	f.SetRect(newRect)
+
+	// Verify rect was updated
+	if got := f.Rect(); got != newRect {
+		t.Errorf("After SetRect(), Rect() = %v, want %v", got, newRect)
+	}
+}
+
+// TestFrameSetRectNoChange verifies that SetRect() with same rectangle is a no-op.
+func TestFrameSetRectNoChange(t *testing.T) {
+	rect := image.Rect(10, 20, 200, 300)
+	display := edwoodtest.NewDisplay(rect)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display))
+
+	// Set the same rectangle
+	f.SetRect(rect)
+
+	// Verify rect is unchanged
+	if got := f.Rect(); got != rect {
+		t.Errorf("Rect() = %v, want %v", got, rect)
+	}
+}
+
+// TestFrameSetRectRelayout verifies that layout uses the new width after SetRect().
+// When the rectangle width changes, text wrapping should adapt accordingly.
+func TestFrameSetRectRelayout(t *testing.T) {
+	// Start with a narrow frame where "hello world" will wrap
+	narrowRect := image.Rect(0, 0, 60, 200) // Only ~6 chars wide with mock font
+	display := edwoodtest.NewDisplay(narrowRect)
+	font := edwoodtest.NewFont(10, 14) // 10px per character
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(narrowRect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	// Set content that won't fit on one line at narrow width
+	f.SetContent(Plain("hello world"))
+
+	// Count visible lines at narrow width
+	narrowLines := f.TotalLines()
+	if narrowLines < 2 {
+		t.Logf("Expected multiple lines at narrow width, got %d", narrowLines)
+	}
+
+	// Now widen the frame so everything fits on one line
+	wideRect := image.Rect(0, 0, 200, 200) // Wide enough for "hello world"
+	f.SetRect(wideRect)
+
+	// After SetRect, TotalLines() should use the new width
+	wideLines := f.TotalLines()
+
+	// At 200px wide with 10px per char, "hello world" (11 chars = 110px) should fit
+	if wideLines != 1 {
+		t.Errorf("After SetRect to wider frame, TotalLines() = %d, want 1 (text should fit on one line)", wideLines)
+	}
+
+	// Verify Rect() returns the new rectangle
+	if got := f.Rect(); got != wideRect {
+		t.Errorf("Rect() = %v, want %v", got, wideRect)
+	}
+}
+
+// TestFrameSetRectRedraw verifies that Redraw() uses the new rectangle after SetRect().
+func TestFrameSetRectRedraw(t *testing.T) {
+	initialRect := image.Rect(0, 0, 100, 100)
+	display := edwoodtest.NewDisplay(initialRect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(initialRect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetContent(Plain("test"))
+
+	// Change to a new rectangle
+	newRect := image.Rect(50, 50, 300, 400)
+	f.SetRect(newRect)
+
+	// Clear draw ops and redraw
+	display.(edwoodtest.GettableDrawOps).Clear()
+	f.Redraw()
+
+	// Verify the background fill uses the new rectangle
+	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
+
+	expectedFill := fmt.Sprintf("fill %s", newRect)
+	foundNewRect := false
+	for _, op := range ops {
+		if strings.HasPrefix(op, expectedFill) {
+			foundNewRect = true
+			break
+		}
+	}
+
+	if !foundNewRect {
+		t.Errorf("Redraw() should fill new rectangle %v\ngot ops: %v", newRect, ops)
 	}
 }

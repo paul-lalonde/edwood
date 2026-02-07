@@ -23,6 +23,7 @@ type Frame interface {
 
 	// Geometry
 	Rect() image.Rectangle
+	SetRect(r image.Rectangle)   // Update the frame's rectangle
 	Ptofchar(p int) image.Point  // Character position → screen point
 	Charofpt(pt image.Point) int // Screen point → character position
 
@@ -36,6 +37,8 @@ type Frame interface {
 	GetOrigin() int
 	MaxLines() int
 	VisibleLines() int
+	TotalLines() int       // Total number of layout lines in the content
+	LineStartRunes() []int // Rune offset at the start of each visual line
 
 	// Rendering
 	Redraw()
@@ -97,6 +100,14 @@ func (f *frameImpl) Rect() image.Rectangle {
 	return f.rect
 }
 
+// SetRect updates the frame's rectangle.
+// This is used when the frame needs to be resized without full re-initialization.
+// Subsequent calls to layout-dependent methods (TotalLines, Redraw, etc.)
+// will use the new rectangle dimensions.
+func (f *frameImpl) SetRect(r image.Rectangle) {
+	f.rect = r
+}
+
 // Ptofchar maps a character position to a screen point.
 // The position p is a rune offset into the content.
 // Returns the screen point where that character would be drawn.
@@ -116,7 +127,7 @@ func (f *frameImpl) Ptofchar(p int) image.Point {
 	maxtab := 8 * f.font.StringWidth("0")
 
 	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle)
+	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 	if len(lines) == 0 {
 		return f.rect.Min
 	}
@@ -173,7 +184,7 @@ func (f *frameImpl) Ptofchar(p int) image.Point {
 				// After a newline, position is at start of next line
 				return image.Point{
 					X: f.rect.Min.X,
-					Y: f.rect.Min.Y + lastLine.Y + f.font.Height(),
+					Y: f.rect.Min.Y + lastLine.Y + lastLine.Height,
 				}
 			}
 			endX = pb.X + pb.Box.Wid
@@ -202,7 +213,7 @@ func (f *frameImpl) Charofpt(pt image.Point) int {
 	maxtab := 8 * f.font.StringWidth("0")
 
 	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle)
+	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 	if len(lines) == 0 {
 		return 0
 	}
@@ -413,6 +424,73 @@ func (f *frameImpl) VisibleLines() int {
 	return len(lines)
 }
 
+// TotalLines returns the total number of layout lines in the content.
+// This includes all lines after word wrapping, not just source newlines.
+func (f *frameImpl) TotalLines() int {
+	if f.font == nil || f.content == nil {
+		return 0
+	}
+
+	// Convert content to boxes
+	boxes := contentToBoxes(f.content)
+	if len(boxes) == 0 {
+		return 0
+	}
+
+	// Calculate frame width for layout
+	frameWidth := f.rect.Dx()
+
+	// Default tab width (8 characters worth)
+	maxtab := 8 * f.font.StringWidth("0")
+
+	// Layout all boxes
+	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	return len(lines)
+}
+
+// LineStartRunes returns the rune offset at the start of each visual line.
+// This maps visual line indices to rune positions for scrolling.
+func (f *frameImpl) LineStartRunes() []int {
+	if f.font == nil || f.content == nil {
+		return []int{0}
+	}
+
+	// Convert content to boxes
+	boxes := contentToBoxes(f.content)
+	if len(boxes) == 0 {
+		return []int{0}
+	}
+
+	// Calculate frame width for layout
+	frameWidth := f.rect.Dx()
+
+	// Default tab width (8 characters worth)
+	maxtab := 8 * f.font.StringWidth("0")
+
+	// Layout all boxes
+	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	if len(lines) == 0 {
+		return []int{0}
+	}
+
+	// Walk through lines and calculate rune offset at start of each line
+	lineStarts := make([]int, len(lines))
+	runeCount := 0
+	for i, line := range lines {
+		lineStarts[i] = runeCount
+		// Count runes in this line
+		for _, pb := range line.Boxes {
+			if pb.Box.IsNewline() || pb.Box.IsTab() {
+				runeCount++
+			} else {
+				runeCount += pb.Box.Nrune
+			}
+		}
+	}
+
+	return lineStarts
+}
+
 // Redraw redraws the frame.
 func (f *frameImpl) Redraw() {
 	if f.display == nil || f.background == nil {
@@ -621,11 +699,11 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 
 	// If origin is 0, just return the normal layout
 	if f.origin == 0 {
-		return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle), 0
+		return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle), 0
 	}
 
 	// Layout all boxes first
-	allLines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle)
+	allLines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 	if len(allLines) == 0 {
 		return nil, 0
 	}
@@ -666,10 +744,11 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	visibleLines := make([]Line, 0, len(allLines)-startLineIdx)
 	for i := startLineIdx; i < len(allLines); i++ {
 		line := allLines[i]
-		// Adjust Y coordinate to start from 0
+		// Adjust Y coordinate to start from 0, preserving Height
 		adjustedLine := Line{
-			Y:     line.Y - originY,
-			Boxes: line.Boxes,
+			Y:      line.Y - originY,
+			Height: line.Height,
+			Boxes:  line.Boxes,
 		}
 		visibleLines = append(visibleLines, adjustedLine)
 	}
@@ -692,7 +771,7 @@ func (f *frameImpl) drawSelection(screen edwooddraw.Image) {
 	maxtab := 8 * f.font.StringWidth("0")
 
 	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle)
+	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 	if len(lines) == 0 {
 		return
 	}

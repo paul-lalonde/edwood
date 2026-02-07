@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"9fans.net/go/plumb"
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
@@ -325,11 +326,19 @@ func (w *Window) Resize(r image.Rectangle, safe, keepextra bool) int {
 			r1.Min.Y = y
 			r1.Max.Y = y
 		}
-		y = w.body.Resize(r1, keepextra, false /* noredraw */)
+		// Always resize body Text to maintain canonical rectangle
+		// Pass noredraw=true if in preview mode (we'll render ourselves)
+		y = w.body.Resize(r1, keepextra, w.previewMode /* noredraw */)
 		w.r = r
 		w.r.Max.Y = y
-		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
 		w.body.all.Min.Y = oy
+
+		// Render the appropriate view
+		if w.previewMode && w.richBody != nil {
+			w.richBody.Render(w.body.all)
+		} else {
+			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+		}
 	}
 	w.maxlines = util.Min(w.body.fr.GetFrameFillStatus().Nlines, util.Max(w.maxlines, w.body.fr.GetFrameFillStatus().Maxlines))
 	// TODO(rjk): this value doesn't make sense when we've collapsed
@@ -620,7 +629,7 @@ func (w *Window) RichBody() *RichText {
 // otherwise, it uses the normal body rendering.
 func (w *Window) Draw() {
 	if w.previewMode && w.richBody != nil {
-		w.richBody.Redraw()
+		w.richBody.Render(w.body.all)
 	} else {
 		// Normal body rendering is handled by the existing Text.Redraw
 		// mechanism which is called through Text.Resize and other paths.
@@ -710,6 +719,41 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse) bool {
 		return true
 	}
 
+	// Handle button 3 (B3/right-click) in frame area for Look action
+	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
+		// Get character position at click point
+		charPos := rt.Frame().Charofpt(m.Point)
+
+		// Debug output: show position and link map status
+		warning(nil, "Preview B3 click: charPos=%d, linkMap=%v\n", charPos, w.previewLinkMap != nil)
+
+		// Check if this position is within a link
+		url := w.PreviewLookLinkURL(charPos)
+		warning(nil, "Preview B3 click: url=%q\n", url)
+
+		if url != "" {
+			// Plumb the URL using the same mechanism as look3
+			if plumbsendfid != nil {
+				pm := &plumb.Message{
+					Src:  "acme",
+					Dst:  "",
+					Dir:  w.body.AbsDirName(""),
+					Type: "text",
+					Data: []byte(url),
+				}
+				if err := pm.Send(plumbsendfid); err != nil {
+					warning(nil, "Preview B3: plumb failed: %v\n", err)
+				}
+			} else {
+				warning(nil, "Preview B3: plumber not running\n")
+			}
+			return true
+		}
+
+		// Not a link - fall through to normal Look behavior
+		return false
+	}
+
 	return false
 }
 
@@ -776,8 +820,8 @@ func (w *Window) UpdatePreview() {
 	}
 	w.richBody.SetOrigin(currentOrigin)
 
-	// Redraw the preview
-	w.richBody.Redraw()
+	// Render the preview using body.all as the canonical geometry
+	w.richBody.Render(w.body.all)
 	if w.display != nil {
 		w.display.Flush()
 	}

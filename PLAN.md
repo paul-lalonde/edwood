@@ -593,6 +593,14 @@ See `docs/codeblock-design.md` for full design.
 | Tests pass | [x] | go test ./markdown/... passes |
 | Code committed | [x] | Commit 7add578 |
 
+### 13.4a Parse Indented Code Blocks
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | Existing fenced block tests + manual verification |
+| Code written | [x] | Detect lines starting with 4 spaces or 1 tab, merge consecutive lines into code block with `Block: true` |
+| Tests pass | [x] | go test ./markdown/... passes |
+| Code committed | [x] | Commit 7a474f5 (markdown preview enhancements) |
+
 ### 13.5 Fenced Code Block Source Mapping
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -600,6 +608,14 @@ See `docs/codeblock-design.md` for full design.
 | Code written | [x] | SourceMap correctly maps rendered code to source (excluding fence lines) |
 | Tests pass | [x] | go test ./markdown/... passes |
 | Code committed | [x] | Commit c2fa25d |
+
+### 13.5a Indented Code Block Source Mapping
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | Manual verification with README.md |
+| Code written | [x] | ParseWithSourceMap tracks indented block source positions |
+| Tests pass | [x] | go test ./markdown/... passes |
+| Code committed | [x] | Commit 7a474f5 (markdown preview enhancements) |
 
 ### 13.6 Block-Level Background Rendering
 | Stage | Status | Notes |
@@ -644,25 +660,126 @@ See `docs/codeblock-design.md` for full design.
 ### 13.11 Horizontal Rule Source Mapping
 | Stage | Status | Notes |
 |-------|--------|-------|
-| Tests exist | [ ] | TestHorizontalRuleSourceMap |
-| Code written | [ ] | SourceMap maps HRuleRune position to full source line |
-| Tests pass | [ ] | go test ./markdown/... passes |
-| Code committed | [ ] | |
+| Tests exist | [x] | TestHorizontalRuleSourceMap |
+| Code written | [x] | SourceMap maps HRuleRune position to full source line |
+| Tests pass | [x] | go test ./markdown/... passes |
+| Code committed | [x] | Commit 3d1a49d |
 
 ### 13.12 Horizontal Rule Visual Verification
 | Stage | Status | Notes |
 |-------|--------|-------|
-| Tests exist | [ ] | N/A - manual |
-| Code written | [ ] | `---`, `***`, `___` render as gray horizontal lines |
-| Tests pass | [ ] | Manual verification |
+| Tests exist | [x] | N/A - manual |
+| Code written | [x] | `---`, `***`, `___` render as gray horizontal lines |
+| Tests pass | [x] | Manual verification with test_codeblocks.md |
+| Code committed | [x] | Phase 13 complete - code blocks and horizontal rules |
+
+## Phase 14: Preview Resize Fix (Single Rectangle Owner)
+
+This phase fixes the bug where resizing a window in preview mode doesn't update the rich text preview. The solution makes `body Text` the single owner of geometry, with `RichText` becoming a renderer that draws into whatever rectangle it's given.
+
+See `docs/single-rect-owner.md` for full design and implementation plan.
+See `docs/preview-resize-design.md` for problem analysis and option comparison.
+
+### Design Summary
+
+- **Single source of truth**: `body.all` is the canonical rectangle
+- **Stateless rendering**: `RichText.Render(rect)` draws into passed rectangle
+- **No resize branching**: `Window.Resize()` always updates `body.all`
+- **Cached hit-testing**: `RichText` caches last rectangle for mouse handling
+
+### 14.1 Add SetRect() to rich.Frame
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestFrameSetRect, TestFrameSetRectNoChange, TestFrameSetRectRelayout, TestFrameSetRectRedraw |
+| Code written | [x] | Add `SetRect(r image.Rectangle)` to Frame interface and frameImpl |
+| Tests pass | [x] | go test ./rich/... passes |
+| Code committed | [x] | Commit b8928a3 |
+
+### 14.2 Add Rect() Accessor to rich.Frame
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | Existing tests use Rect() |
+| Code written | [x] | `Rect() image.Rectangle` already present in Frame interface (frame.go:25) and implemented (frame.go:98-101) |
+| Tests pass | [x] | go test ./rich/... passes |
+| Code committed | [x] | Already present in codebase (pre-existing) |
+
+### 14.3 RichText Render() Method
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestRichTextRender, TestRichTextRenderUpdatesLastRect |
+| Code written | [x] | `Render(r image.Rectangle)` implemented in richtext.go:184-218 |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit da8115a |
+
+### 14.4 RichText Remove Stored Rectangles
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestRichTextRenderDifferentRects |
+| Code written | [x] | Renamed `all` to `lastRect`, `scrollRect` to `lastScrollRect` for hit-testing cache |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit e05cb3d |
+
+### 14.5 Update Scrollbar Methods
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | Existing scrollbar tests updated |
+| Code written | [x] | `scrDrawAt(scrollRect)`, `scrThumbRectAt(scrollRect)`, `scrollClickAt(...)` |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit 9515443 |
+
+### 14.6 Update RichText Init Signature
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | Update test initialization patterns |
+| Code written | [x] | `Init(display, font, opts...)` without rectangle parameter |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit d6c173f |
+
+### 14.7 Update Window.Resize()
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestWindowResizePreviewMode |
+| Code written | [x] | Always resize body, call `richBody.Render(body.all)` when in preview |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit 84e3866 |
+
+### 14.8 Update Window Draw Methods
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestWindowDrawPreviewModeAfterResize |
+| Code written | [x] | All preview draws use `richBody.Render(body.all)` |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Commit e696bcd |
+
+### 14.9 Update Preview Command
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [x] | TestPreviewCommandToggle, TestPreviewCommandEnter, TestPreviewCommandExit all use Init/Render pattern |
+| Code written | [x] | previewcmd() in exec.go uses NewRichText(), Init(display, font, opts...), then Render(bodyRect) |
+| Tests pass | [x] | go test ./... passes |
+| Code committed | [x] | Already committed in d6c173f (part of 14.6) |
+
+### 14.10 Update Mouse Handling
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [ ] | TestPreviewMouseAfterResize |
+| Code written | [ ] | Use cached `lastScrollRect` for hit-testing |
+| Tests pass | [ ] | go test ./... passes |
 | Code committed | [ ] | |
+
+### 14.11 Visual Verification
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Tests exist | [ ] | N/A - manual |
+| Code written | [ ] | Resize preview window by various methods |
+| Tests pass | [ ] | Scrollbar, selection, scrolling all work after resize |
+| Code committed | [ ] | Phase 14 complete |
 
 ---
 
 ## Current Task
 
-**Phase 12**: Markdown Links - render links in blue and open URLs on Look click.
-**Phase 13**: Code Blocks and Horizontal Rules - (design complete, ready for implementation)
+**Phase 14**: Preview Resize Fix - implement single rectangle owner pattern
 
 ## Test Summary
 
@@ -699,6 +816,8 @@ go test ./rich/
 |------|---------|
 | docs/richtext-design.md | Design document and architecture |
 | docs/codeblock-design.md | Code block shading design (Phase 13) |
+| docs/preview-resize-design.md | Preview resize bug analysis and options |
+| docs/single-rect-owner.md | Single rectangle owner implementation plan (Phase 14) |
 | PLAN.md | This file - implementation tracking |
 | rich/style.go | Style type definition |
 | rich/span.go | Span and Content types |

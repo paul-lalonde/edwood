@@ -13,9 +13,12 @@ import (
 // RichText is a component that combines a rich.Frame with a scrollbar.
 // It manages the layout of the scrollbar area and the text frame area.
 type RichText struct {
-	all        image.Rectangle // Full area including scrollbar
-	scrollRect image.Rectangle // Scrollbar area
-	display    draw.Display
+	// Cached rectangles from last Render() call, used for hit-testing.
+	// The canonical rectangle is body.all - these are derived at render time.
+	lastRect       image.Rectangle // Full area including scrollbar (cached)
+	lastScrollRect image.Rectangle // Scrollbar area (cached)
+
+	display draw.Display
 	frame      rich.Frame
 	content    rich.Content
 
@@ -42,9 +45,10 @@ func NewRichText() *RichText {
 	return &RichText{}
 }
 
-// Init initializes the RichText component with the given rectangle, display, font, and options.
-func (rt *RichText) Init(r image.Rectangle, display draw.Display, font draw.Font, opts ...RichTextOption) {
-	rt.all = r
+// Init initializes the RichText component with the given display, font, and options.
+// The rectangle is not provided at init time - use Render(rect) to draw into a specific area.
+// This allows the rectangle to be provided dynamically (e.g., from body.all).
+func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextOption) {
 	rt.display = display
 
 	// Apply options
@@ -52,26 +56,7 @@ func (rt *RichText) Init(r image.Rectangle, display draw.Display, font draw.Font
 		opt(rt)
 	}
 
-	// Calculate scrollbar rectangle (left side) using same scaling as Text
-	scrollWid := display.ScaleSize(Scrollwid)
-	scrollGap := display.ScaleSize(Scrollgap)
-
-	rt.scrollRect = image.Rect(
-		r.Min.X,
-		r.Min.Y,
-		r.Min.X+scrollWid,
-		r.Max.Y,
-	)
-
-	// Calculate frame rectangle (right of scrollbar with gap)
-	frameRect := image.Rect(
-		r.Min.X+scrollWid+scrollGap,
-		r.Min.Y,
-		r.Max.X,
-		r.Max.Y,
-	)
-
-	// Create and initialize the frame
+	// Create the frame (but don't init with a rectangle yet)
 	rt.frame = rich.NewFrame()
 
 	// Build frame options
@@ -101,12 +86,13 @@ func (rt *RichText) Init(r image.Rectangle, display draw.Display, font draw.Font
 		frameOpts = append(frameOpts, rich.WithScaledFont(scale, f))
 	}
 
-	rt.frame.Init(frameRect, frameOpts...)
+	// Initialize frame with empty rectangle - will be set on first Render() call
+	rt.frame.Init(image.Rectangle{}, frameOpts...)
 }
 
 // All returns the full rectangle area of the RichText component.
 func (rt *RichText) All() image.Rectangle {
-	return rt.all
+	return rt.lastRect
 }
 
 // Frame returns the underlying rich.Frame.
@@ -121,7 +107,7 @@ func (rt *RichText) Display() draw.Display {
 
 // ScrollRect returns the scrollbar rectangle.
 func (rt *RichText) ScrollRect() image.Rectangle {
-	return rt.scrollRect
+	return rt.lastScrollRect
 }
 
 // SetContent sets the content to display.
@@ -167,7 +153,7 @@ func (rt *RichText) SetOrigin(org int) {
 	}
 }
 
-// Redraw redraws the RichText component.
+// Redraw redraws the RichText component using the last rendered rectangle.
 func (rt *RichText) Redraw() {
 	// Draw scrollbar first (behind frame)
 	rt.scrDraw()
@@ -178,8 +164,52 @@ func (rt *RichText) Redraw() {
 	}
 }
 
-// scrDraw renders the scrollbar background and thumb.
+// Render draws the rich text component into the given rectangle.
+// This computes scrollbar and frame areas from r at render time,
+// allowing the rectangle to be provided dynamically (e.g., from body.all).
+func (rt *RichText) Render(r image.Rectangle) {
+	rt.lastRect = r
+
+	// Compute scrollbar rectangle (left side)
+	scrollWid := rt.display.ScaleSize(Scrollwid)
+	scrollGap := rt.display.ScaleSize(Scrollgap)
+
+	rt.lastScrollRect = image.Rect(
+		r.Min.X,
+		r.Min.Y,
+		r.Min.X+scrollWid,
+		r.Max.Y,
+	)
+
+	// Compute frame rectangle (right of scrollbar with gap)
+	frameRect := image.Rect(
+		r.Min.X+scrollWid+scrollGap,
+		r.Min.Y,
+		r.Max.X,
+		r.Max.Y,
+	)
+
+	// Update frame geometry if changed
+	if rt.frame != nil && rt.frame.Rect() != frameRect {
+		rt.frame.SetRect(frameRect)
+	}
+
+	// Draw scrollbar
+	rt.scrDraw()
+
+	// Draw frame content
+	if rt.frame != nil {
+		rt.frame.Redraw()
+	}
+}
+
+// scrDraw renders the scrollbar background and thumb using cached rectangles.
 func (rt *RichText) scrDraw() {
+	rt.scrDrawAt(rt.lastScrollRect)
+}
+
+// scrDrawAt renders the scrollbar at the given rectangle.
+func (rt *RichText) scrDrawAt(scrollRect image.Rectangle) {
 	if rt.display == nil {
 		return
 	}
@@ -188,17 +218,17 @@ func (rt *RichText) scrDraw() {
 
 	// Draw scrollbar background
 	if rt.scrollBg != nil {
-		screen.Draw(rt.scrollRect, rt.scrollBg, rt.scrollBg, image.ZP)
+		screen.Draw(scrollRect, rt.scrollBg, rt.scrollBg, image.ZP)
 	}
 
 	// Draw scrollbar thumb
 	if rt.scrollThumb != nil {
-		thumbRect := rt.scrThumbRect()
+		thumbRect := rt.scrThumbRectAt(scrollRect)
 		screen.Draw(thumbRect, rt.scrollThumb, rt.scrollThumb, image.ZP)
 	}
 }
 
-// ScrollClick handles a click on the scrollbar.
+// ScrollClick handles a click on the scrollbar using cached rectangles.
 // It takes the button number (1, 2, or 3) and the click point,
 // calculates the new origin based on the button behavior, and returns it.
 // Button 1 (left): scroll up (backward in content)
@@ -206,6 +236,11 @@ func (rt *RichText) scrDraw() {
 // Button 3 (right): scroll down (forward in content)
 // The origin is also updated in the RichText component.
 func (rt *RichText) ScrollClick(button int, pt image.Point) int {
+	return rt.scrollClickAt(button, pt, rt.lastScrollRect)
+}
+
+// scrollClickAt handles a click on the scrollbar using a given scroll rectangle.
+func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.Rectangle) int {
 	// If no content or frame, return 0
 	if rt.content == nil || rt.frame == nil {
 		return 0
@@ -216,24 +251,9 @@ func (rt *RichText) ScrollClick(button int, pt image.Point) int {
 		return 0
 	}
 
-	// Count lines in content and build a map of line start positions
-	lineCount := 1
-	lineStarts := []int{0}
-	for i, span := range rt.content {
-		runeOffset := 0
-		if i > 0 {
-			for j := 0; j < i; j++ {
-				runeOffset += len([]rune(rt.content[j].Text))
-			}
-		}
-		for j, r := range span.Text {
-			if r == '\n' {
-				lineCount++
-				lineStarts = append(lineStarts, runeOffset+j+1)
-			}
-		}
-	}
-
+	// Get visual line information from the frame
+	lineCount := rt.frame.TotalLines()
+	lineStarts := rt.frame.LineStartRunes()
 	maxLines := rt.frame.MaxLines()
 
 	// If all content fits, no scrolling needed
@@ -242,12 +262,12 @@ func (rt *RichText) ScrollClick(button int, pt image.Point) int {
 	}
 
 	// Calculate click position as a proportion of the scrollbar height
-	scrollHeight := rt.scrollRect.Dy()
+	scrollHeight := scrollRect.Dy()
 	if scrollHeight <= 0 {
 		return rt.Origin()
 	}
 
-	clickY := pt.Y - rt.scrollRect.Min.Y
+	clickY := pt.Y - scrollRect.Min.Y
 	if clickY < 0 {
 		clickY = 0
 	}
@@ -342,49 +362,37 @@ func (rt *RichText) ScrollClick(button int, pt image.Point) int {
 	return newOrigin
 }
 
-// scrThumbRect returns the rectangle for the scrollbar thumb.
+// scrThumbRect returns the rectangle for the scrollbar thumb using cached rectangles.
+func (rt *RichText) scrThumbRect() image.Rectangle {
+	return rt.scrThumbRectAt(rt.lastScrollRect)
+}
+
+// scrThumbRectAt computes thumb position for a given scrollbar rectangle.
 // The thumb position and size reflect the current scroll position and
 // the proportion of visible content to total content.
-func (rt *RichText) scrThumbRect() image.Rectangle {
+func (rt *RichText) scrThumbRectAt(scrollRect image.Rectangle) image.Rectangle {
 	// If no content or frame, fill the whole scrollbar
 	if rt.content == nil || rt.frame == nil {
-		return rt.scrollRect
+		return scrollRect
 	}
 
 	totalRunes := rt.content.Len()
 	if totalRunes == 0 {
 		// No content - thumb fills the whole scrollbar
-		return rt.scrollRect
+		return scrollRect
 	}
 
-	// Get scroll metrics from the frame
+	// Get scroll metrics from the frame using visual line counts
 	origin := rt.frame.GetOrigin()
 	maxLines := rt.frame.MaxLines()
+	lineCount := rt.frame.TotalLines()
+	lineStarts := rt.frame.LineStartRunes()
 
-	scrollHeight := rt.scrollRect.Dy()
-
-	// Count lines in content and build a map of line start positions
-	lineCount := 1 // At least one line
-	lineStarts := []int{0}
-	for i, span := range rt.content {
-		runeOffset := 0
-		if i > 0 {
-			// Sum up runes from previous spans
-			for j := 0; j < i; j++ {
-				runeOffset += len([]rune(rt.content[j].Text))
-			}
-		}
-		for j, r := range span.Text {
-			if r == '\n' {
-				lineCount++
-				lineStarts = append(lineStarts, runeOffset+j+1)
-			}
-		}
-	}
+	scrollHeight := scrollRect.Dy()
 
 	// If all content fits, fill the scrollbar
 	if lineCount <= maxLines {
-		return rt.scrollRect
+		return scrollRect
 	}
 
 	// Calculate thumb height based on visible vs total lines
@@ -441,12 +449,12 @@ func (rt *RichText) scrThumbRect() image.Rectangle {
 	availableSpace := scrollHeight - thumbHeight
 
 	// Thumb top position
-	thumbTop := rt.scrollRect.Min.Y + int(float64(availableSpace)*posProportion)
+	thumbTop := scrollRect.Min.Y + int(float64(availableSpace)*posProportion)
 
 	return image.Rect(
-		rt.scrollRect.Min.X,
+		scrollRect.Min.X,
 		thumbTop,
-		rt.scrollRect.Max.X,
+		scrollRect.Max.X,
 		thumbTop+thumbHeight,
 	)
 }
@@ -531,24 +539,9 @@ func (rt *RichText) ScrollWheel(up bool) int {
 		return 0
 	}
 
-	// Count lines in content and build a map of line start positions
-	lineCount := 1
-	lineStarts := []int{0}
-	for i, span := range rt.content {
-		runeOffset := 0
-		if i > 0 {
-			for j := 0; j < i; j++ {
-				runeOffset += len([]rune(rt.content[j].Text))
-			}
-		}
-		for j, r := range span.Text {
-			if r == '\n' {
-				lineCount++
-				lineStarts = append(lineStarts, runeOffset+j+1)
-			}
-		}
-	}
-
+	// Get visual line information from the frame
+	lineCount := rt.frame.TotalLines()
+	lineStarts := rt.frame.LineStartRunes()
 	maxLines := rt.frame.MaxLines()
 
 	// If all content fits, no scrolling needed
