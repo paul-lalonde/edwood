@@ -3,6 +3,7 @@ package markdown
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rjkroege/edwood/rich"
 )
@@ -1674,6 +1675,7 @@ func parseSeparatorCell(cell string) (rich.Alignment, bool) {
 }
 
 // calculateColumnWidths calculates the maximum width for each column.
+// Width is measured in runes (not bytes) for correct handling of multi-byte UTF-8 characters.
 func calculateColumnWidths(rows [][]string) []int {
 	if len(rows) == 0 {
 		return nil
@@ -1686,7 +1688,7 @@ func calculateColumnWidths(rows [][]string) []int {
 	for _, row := range rows {
 		for i, cell := range row {
 			if i < numCols {
-				w := len(cell)
+				w := utf8.RuneCountInString(cell)
 				if w > widths[i] {
 					widths[i] = w
 				}
@@ -1695,6 +1697,72 @@ func calculateColumnWidths(rows [][]string) []int {
 	}
 
 	return widths
+}
+
+// padCell pads a cell's content to the given width according to the alignment.
+// AlignLeft: content + trailing spaces
+// AlignRight: leading spaces + content
+// AlignCenter: balanced padding (extra space on right if odd)
+// Width is measured in runes (not bytes) for correct handling of multi-byte UTF-8 characters.
+func padCell(content string, width int, align rich.Alignment) string {
+	padding := width - utf8.RuneCountInString(content)
+	if padding <= 0 {
+		return content
+	}
+	switch align {
+	case rich.AlignRight:
+		return strings.Repeat(" ", padding) + content
+	case rich.AlignCenter:
+		left := padding / 2
+		right := padding - left
+		return strings.Repeat(" ", left) + content + strings.Repeat(" ", right)
+	default: // AlignLeft
+		return content + strings.Repeat(" ", padding)
+	}
+}
+
+// rebuildTableRow rebuilds a table row line from cells, column widths, and alignments.
+func rebuildTableRow(cells []string, widths []int, aligns []rich.Alignment) string {
+	var b strings.Builder
+	b.WriteByte('|')
+	for j, cell := range cells {
+		w := 0
+		if j < len(widths) {
+			w = widths[j]
+		}
+		a := rich.AlignLeft
+		if j < len(aligns) {
+			a = aligns[j]
+		}
+		b.WriteString(" " + padCell(cell, w, a) + " |")
+	}
+	return b.String()
+}
+
+// rebuildSeparatorRow rebuilds the separator line with dashes padded to column widths.
+func rebuildSeparatorRow(widths []int, aligns []rich.Alignment) string {
+	var b strings.Builder
+	b.WriteByte('|')
+	for j, w := range widths {
+		a := rich.AlignLeft
+		if j < len(aligns) {
+			a = aligns[j]
+		}
+		b.WriteByte(' ')
+		switch a {
+		case rich.AlignCenter:
+			b.WriteByte(':')
+			b.WriteString(strings.Repeat("-", w-2))
+			b.WriteByte(':')
+		case rich.AlignRight:
+			b.WriteString(strings.Repeat("-", w-1))
+			b.WriteByte(':')
+		default: // AlignLeft (with or without leading colon)
+			b.WriteString(strings.Repeat("-", w))
+		}
+		b.WriteString(" |")
+	}
+	return b.String()
 }
 
 // parseTableBlock parses a table starting at the given line index.
@@ -1739,47 +1807,127 @@ func parseTableBlock(lines []string, startIdx int) ([]rich.Span, int) {
 		return nil, 0
 	}
 
-	// Build spans for each table row
-	var spans []rich.Span
+	// Parse alignment from separator row (line index 1)
+	_, aligns := parseTableSeparator(tableLines[1])
 
+	// Parse all rows into cells (skip separator at index 1)
+	var allCells [][]string
 	for i, line := range tableLines {
-		// Normalize line ending
-		lineText := strings.TrimSuffix(line, "\n")
-
-		// Determine if this is header row, separator row, or data row
-		isHeader := i == 0
-		isSeparator := i == 1 && isTableSeparatorRow(line)
-
-		// Add newline unless it's the last line
-		if i < len(tableLines)-1 {
-			lineText += "\n"
+		if i == 1 {
+			// Separator row — skip for column width calculation
+			allCells = append(allCells, nil)
+			continue
 		}
-
-		style := rich.Style{
-			Table:       true,
-			TableHeader: isHeader,
-			Code:        true, // Tables use code/monospace font
-			Block:       true, // Tables are block-level elements
-			Bg:          rich.InlineCodeBg,
-			Scale:       1.0,
-		}
-
-		// Headers are also bold
-		if isHeader {
-			style.Bold = true
-		}
-
-		// Separator rows are styled same as data rows (not header, not bold)
-		if isSeparator {
-			style.TableHeader = false
-			style.Bold = false
-		}
-
-		spans = append(spans, rich.Span{
-			Text:  lineText,
-			Style: style,
-		})
+		_, cells := isTableRow(line)
+		allCells = append(allCells, cells)
 	}
 
+	// Collect non-nil rows for width calculation
+	var dataCells [][]string
+	for _, cells := range allCells {
+		if cells != nil {
+			dataCells = append(dataCells, cells)
+		}
+	}
+
+	// Calculate column widths
+	widths := calculateColumnWidths(dataCells)
+
+	// Ensure minimum width of 3 for separator dashes
+	for i, w := range widths {
+		if w < 3 {
+			widths[i] = 3
+		}
+	}
+
+	// Build box-drawing grid lines
+	topBorder := buildGridLine(widths, '┌', '┬', '┐', '─')
+	headerSep := buildGridLine(widths, '├', '┼', '┤', '─')
+	bottomBorder := buildGridLine(widths, '└', '┴', '┘', '─')
+
+	// Style for border/separator lines (not header, not bold)
+	borderStyle := rich.Style{
+		Table: true,
+		Code:  true,
+		Block: true,
+		Bg:    rich.InlineCodeBg,
+		Scale: 1.0,
+	}
+
+	// Build spans: top border, then rows with box-drawing delimiters, then bottom border
+	var spans []rich.Span
+
+	// Top border
+	spans = append(spans, rich.Span{
+		Text:  topBorder + "\n",
+		Style: borderStyle,
+	})
+
+	for i := range tableLines {
+		isHeader := i == 0
+		isSeparator := i == 1
+
+		if isSeparator {
+			// Replace ASCII separator with box-drawing header separator
+			spans = append(spans, rich.Span{
+				Text:  headerSep + "\n",
+				Style: borderStyle,
+			})
+		} else {
+			cells := allCells[i]
+			lineText := replaceDelimiters(rebuildTableRow(cells, widths, aligns))
+
+			// Add newline (all rows get newline since bottom border follows)
+			lineText += "\n"
+
+			style := rich.Style{
+				Table:       true,
+				TableHeader: isHeader,
+				Code:        true,
+				Block:       true,
+				Bg:          rich.InlineCodeBg,
+				Scale:       1.0,
+			}
+			if isHeader {
+				style.Bold = true
+			}
+
+			spans = append(spans, rich.Span{
+				Text:  lineText,
+				Style: style,
+			})
+		}
+	}
+
+	// Bottom border with trailing newline to properly end the table block
+	spans = append(spans, rich.Span{
+		Text:  bottomBorder + "\n",
+		Style: borderStyle,
+	})
+
 	return spans, consumed
+}
+
+// buildGridLine builds a box-drawing horizontal line from column widths.
+// left/mid/right are corner/tee characters; fill is the horizontal rule char.
+// Each column segment is fill×(width+2) to account for the padding spaces around cell content.
+func buildGridLine(widths []int, left, mid, right, fill rune) string {
+	var b strings.Builder
+	b.WriteRune(left)
+	for i, w := range widths {
+		for j := 0; j < w+2; j++ { // +2 for padding spaces
+			b.WriteRune(fill)
+		}
+		if i < len(widths)-1 {
+			b.WriteRune(mid)
+		}
+	}
+	b.WriteRune(right)
+	return b.String()
+}
+
+// replaceDelimiters replaces ASCII pipe '|' delimiters with box-drawing '│' (U+2502)
+// in a table row string built by rebuildTableRow.
+func replaceDelimiters(row string) string {
+	return strings.ReplaceAll(row, "|", "│")
 }

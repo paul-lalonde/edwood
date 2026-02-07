@@ -24,9 +24,10 @@ type SourceMapEntry struct {
 }
 
 // ToSource maps a range in rendered content (renderedStart, renderedEnd) to
-// the corresponding range in the source markdown.
+// the corresponding range in the source markdown as RUNE positions.
+// This is used by syncSourceSelection to set body.q0/q1 which expect rune positions.
 // When the selection spans formatted elements, it expands to include the full
-// source markup (e.g., selecting "bold" in "**bold**" returns 0-8).
+// source markup (e.g., selecting "bold" in "**bold**" returns the rune range of "**bold**").
 func (sm *SourceMap) ToSource(renderedStart, renderedEnd int) (srcStart, srcEnd int) {
 	if len(sm.entries) == 0 {
 		return renderedStart, renderedEnd
@@ -47,13 +48,13 @@ func (sm *SourceMap) ToSource(renderedStart, renderedEnd int) (srcStart, srcEnd 
 		srcStart = renderedStart
 	} else {
 		// If the selection starts at the beginning of a formatted element,
-		// include the opening marker
+		// include the opening marker. Use SourceRuneStart for rune positions.
 		if renderedStart == startEntry.RenderedStart {
-			srcStart = startEntry.SourceStart
+			srcStart = startEntry.SourceRuneStart
 		} else {
-			// Calculate offset within this entry
+			// Calculate offset within this entry (runes, not bytes)
 			offset := renderedStart - startEntry.RenderedStart
-			srcStart = startEntry.SourceStart + offset
+			srcStart = startEntry.SourceRuneStart + offset
 		}
 	}
 
@@ -76,13 +77,13 @@ func (sm *SourceMap) ToSource(renderedStart, renderedEnd int) (srcStart, srcEnd 
 		srcEnd = renderedEnd
 	} else {
 		// If the selection ends at the end of a formatted element,
-		// include the closing marker
+		// include the closing marker. Use SourceRuneEnd for rune positions.
 		if renderedEnd == endEntry.RenderedEnd {
-			srcEnd = endEntry.SourceEnd
+			srcEnd = endEntry.SourceRuneEnd
 		} else {
-			// Calculate offset within this entry, accounting for any prefix
+			// Calculate offset within this entry, accounting for any prefix (runes, not bytes)
 			offset := renderedEnd - endEntry.RenderedStart
-			srcEnd = endEntry.SourceStart + endEntry.PrefixLen + offset
+			srcEnd = endEntry.SourceRuneStart + endEntry.PrefixLen + offset
 		}
 	}
 
@@ -1373,61 +1374,139 @@ func parseTableBlockWithSourceMap(lines []string, startIdx int, sourceOffset, re
 		return nil, nil, 0
 	}
 
-	// Build spans and source map entries for each table row
+	// Parse alignment from separator row (line index 1)
+	_, aligns := parseTableSeparator(tableLines[1])
+
+	// Parse all rows into cells (skip separator at index 1)
+	var allCells [][]string
+	for i, line := range tableLines {
+		if i == 1 {
+			allCells = append(allCells, nil)
+			continue
+		}
+		_, cells := isTableRow(line)
+		allCells = append(allCells, cells)
+	}
+
+	// Collect non-nil rows for width calculation
+	var dataCells [][]string
+	for _, cells := range allCells {
+		if cells != nil {
+			dataCells = append(dataCells, cells)
+		}
+	}
+
+	// Calculate column widths
+	widths := calculateColumnWidths(dataCells)
+
+	// Ensure minimum width of 3 for separator dashes
+	for i, w := range widths {
+		if w < 3 {
+			widths[i] = 3
+		}
+	}
+
+	// Build box-drawing grid lines
+	topBorder := buildGridLine(widths, '┌', '┬', '┐', '─')
+	headerSep := buildGridLine(widths, '├', '┼', '┤', '─')
+	bottomBorder := buildGridLine(widths, '└', '┴', '┘', '─')
+
+	borderStyle := rich.Style{
+		Table: true,
+		Code:  true,
+		Block: true,
+		Bg:    rich.InlineCodeBg,
+		Scale: 1.0,
+	}
+
 	var spans []rich.Span
 	var entries []SourceMapEntry
 	srcPos := sourceOffset
 	rendPos := renderedOffset
 
+	// Top border (synthetic — no source mapping, zero-length source range)
+	topText := topBorder + "\n"
+	topLen := len([]rune(topText))
+	spans = append(spans, rich.Span{
+		Text:  topText,
+		Style: borderStyle,
+	})
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: rendPos,
+		RenderedEnd:   rendPos + topLen,
+		SourceStart:   srcPos,
+		SourceEnd:     srcPos, // zero-length: synthetic line
+	})
+	rendPos += topLen
+
 	for i, line := range tableLines {
-		// Normalize line ending
-		lineText := strings.TrimSuffix(line, "\n")
-
-		// Determine if this is header row, separator row, or data row
 		isHeader := i == 0
-		isSeparator := i == 1 && isTableSeparatorRow(line)
+		isSeparator := i == 1
 
-		// Add newline unless it's the last line
-		if i < len(tableLines)-1 {
-			lineText += "\n"
-		}
-
-		style := rich.Style{
-			Table:       true,
-			TableHeader: isHeader,
-			Code:        true, // Tables use code/monospace font
-			Block:       true, // Tables are block-level elements
-			Bg:          rich.InlineCodeBg,
-			Scale:       1.0,
-		}
-
-		// Headers are also bold
-		if isHeader {
-			style.Bold = true
-		}
-
-		// Separator rows are styled same as data rows (not header, not bold)
 		if isSeparator {
-			style.TableHeader = false
-			style.Bold = false
+			// Replace ASCII separator with box-drawing header separator
+			sepText := headerSep + "\n"
+			sepLen := len([]rune(sepText))
+			spans = append(spans, rich.Span{
+				Text:  sepText,
+				Style: borderStyle,
+			})
+			// Separator maps to the source separator line
+			entries = append(entries, SourceMapEntry{
+				RenderedStart: rendPos,
+				RenderedEnd:   rendPos + sepLen,
+				SourceStart:   srcPos,
+				SourceEnd:     srcPos + len(line),
+			})
+			rendPos += sepLen
+			srcPos += len(line)
+		} else {
+			cells := allCells[i]
+			lineText := replaceDelimiters(rebuildTableRow(cells, widths, aligns))
+			lineText += "\n" // all rows get newline since bottom border follows
+
+			style := rich.Style{
+				Table:       true,
+				TableHeader: isHeader,
+				Code:        true,
+				Block:       true,
+				Bg:          rich.InlineCodeBg,
+				Scale:       1.0,
+			}
+			if isHeader {
+				style.Bold = true
+			}
+
+			spans = append(spans, rich.Span{
+				Text:  lineText,
+				Style: style,
+			})
+
+			renderedLen := len([]rune(lineText))
+			entries = append(entries, SourceMapEntry{
+				RenderedStart: rendPos,
+				RenderedEnd:   rendPos + renderedLen,
+				SourceStart:   srcPos,
+				SourceEnd:     srcPos + len(line),
+			})
+			rendPos += renderedLen
+			srcPos += len(line)
 		}
-
-		spans = append(spans, rich.Span{
-			Text:  lineText,
-			Style: style,
-		})
-
-		// Create source map entry for this line
-		renderedLen := len([]rune(lineText))
-		entries = append(entries, SourceMapEntry{
-			RenderedStart: rendPos,
-			RenderedEnd:   rendPos + renderedLen,
-			SourceStart:   srcPos,
-			SourceEnd:     srcPos + len(line),
-		})
-		rendPos += renderedLen
-		srcPos += len(line)
 	}
+
+	// Bottom border with trailing newline (synthetic — no source mapping, zero-length source range)
+	bottomLen := len([]rune(bottomBorder)) + 1 // +1 for trailing newline
+	spans = append(spans, rich.Span{
+		Text:  bottomBorder + "\n",
+		Style: borderStyle,
+	})
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: rendPos,
+		RenderedEnd:   rendPos + bottomLen,
+		SourceStart:   srcPos,
+		SourceEnd:     srcPos, // zero-length: synthetic line
+	})
+	rendPos += bottomLen
 
 	return spans, entries, consumed
 }

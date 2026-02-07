@@ -143,6 +143,10 @@ type frameImpl struct {
 	// Cached adjusted block regions from the last layout pass.
 	// Used for hit-testing horizontal scrollbar clicks.
 	hscrollRegions []AdjustedBlockRegion
+
+	// Horizontal scrollbar colors (passed from RichText to match vertical scrollbar)
+	hscrollBg    edwooddraw.Image
+	hscrollThumb edwooddraw.Image
 }
 
 // NewFrame creates a new Frame.
@@ -1086,16 +1090,27 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 func (f *frameImpl) drawBlockBackgroundTo(target edwooddraw.Image, line Line, offset image.Point, frameWidth, frameHeight int) {
 	// Find the background color and left indent from a block-styled box on this line
 	var bgColor color.Color
-	leftIndent := 0
+	leftIndent := -1 // -1 means "not found yet"
 	for _, pb := range line.Boxes {
 		if pb.Box.Style.Block && pb.Box.Style.Bg != nil {
 			bgColor = pb.Box.Style.Bg
-			leftIndent = pb.X // Use the box's X position as the left edge
+			// Only use this box's X if it's not a newline. Newline boxes on
+			// blank lines are positioned at X=0, but the background should
+			// still respect the code block indent.
+			if !pb.Box.IsNewline() {
+				leftIndent = pb.X
+			}
 			break
 		}
 	}
 	if bgColor == nil {
 		return
+	}
+
+	// If we didn't find a valid indent (blank line with only a newline box),
+	// compute the expected code block indent from font metrics.
+	if leftIndent < 0 {
+		leftIndent = f.computeCodeBlockIndent()
 	}
 
 	bgImg := f.allocColorImage(bgColor)
@@ -1119,6 +1134,19 @@ func (f *frameImpl) drawBlockBackgroundTo(target edwooddraw.Image, line Line, of
 	}
 
 	target.Draw(bgRect, bgImg, nil, image.ZP)
+}
+
+// computeCodeBlockIndent returns the expected left indent for code blocks,
+// computed from font metrics (CodeBlockIndentChars * M-width of code font).
+func (f *frameImpl) computeCodeBlockIndent() int {
+	font := f.font
+	if f.codeFont != nil {
+		font = f.codeFont
+	}
+	if font == nil {
+		return CodeBlockIndent // Fallback to default constant
+	}
+	return CodeBlockIndentChars * font.BytesWidth([]byte("M"))
 }
 
 // drawBoxBackgroundTo draws the background color for a positioned box.
@@ -1859,7 +1887,7 @@ func (f *frameImpl) HScrollWheel(delta int, regionIndex int) {
 var HScrollBgColor = color.RGBA{R: 153, G: 153, B: 76, A: 255} // dark yellow-green, similar to acme scrollbar
 
 // HScrollThumbColor is the thumb color of horizontal scrollbars.
-var HScrollThumbColor = color.RGBA{R: 153, G: 153, B: 0, A: 255} // darker yellow, similar to acme scrollbar thumb
+var HScrollThumbColor = color.RGBA{R: 255, G: 255, B: 170, A: 255} // pale yellow (Paleyellow), matching acme scrollbar thumb
 
 // drawHScrollbarsTo draws horizontal scrollbars for overflowing block regions.
 // For each block region where MaxContentWidth > frameWidth, it draws a scrollbar
@@ -1889,9 +1917,13 @@ func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Poin
 		}
 
 		// Draw scrollbar background at ScrollbarY
-		bgImg := f.allocColorImage(HScrollBgColor)
+		// Use configured colors if available, otherwise fall back to defaults
+		bgImg := f.hscrollBg
 		if bgImg == nil {
-			continue
+			bgImg = f.allocColorImage(HScrollBgColor)
+			if bgImg == nil {
+				continue
+			}
 		}
 		bgRect := image.Rect(
 			offset.X+scrollbarLeft,
@@ -1899,7 +1931,7 @@ func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Poin
 			offset.X+frameWidth,
 			offset.Y+ar.ScrollbarY+scrollbarHeight,
 		)
-		target.Draw(bgRect, bgImg, nil, image.ZP)
+		target.Draw(bgRect, bgImg, bgImg, image.ZP)
 
 		// Compute thumb dimensions within the scrollbar width
 		thumbWidth := (scrollbarWidth * scrollbarWidth) / maxContentWidth
@@ -1925,9 +1957,13 @@ func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Poin
 		}
 
 		// Draw thumb
-		thumbImg := f.allocColorImage(HScrollThumbColor)
+		// Use configured colors if available, otherwise fall back to defaults
+		thumbImg := f.hscrollThumb
 		if thumbImg == nil {
-			continue
+			thumbImg = f.allocColorImage(HScrollThumbColor)
+			if thumbImg == nil {
+				continue
+			}
 		}
 		thumbRect := image.Rect(
 			offset.X+scrollbarLeft+thumbLeft,
@@ -1935,7 +1971,7 @@ func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Poin
 			offset.X+scrollbarLeft+thumbLeft+thumbWidth,
 			offset.Y+ar.ScrollbarY+scrollbarHeight,
 		)
-		target.Draw(thumbRect, thumbImg, nil, image.ZP)
+		target.Draw(thumbRect, thumbImg, thumbImg, image.ZP)
 	}
 }
 
