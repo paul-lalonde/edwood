@@ -59,6 +59,27 @@ type Frame interface {
 	// Font metrics
 	DefaultFontHeight() int // Height of the default font
 
+	// Horizontal scrollbar hit testing
+	HScrollBarAt(pt image.Point) (regionIndex int, ok bool)
+
+	// HScrollBarRect returns the screen-coordinate rectangle of the
+	// horizontal scrollbar for the given block region. Returns the zero
+	// rectangle if the region has no scrollbar.
+	HScrollBarRect(regionIndex int) image.Rectangle
+
+	// Horizontal scrollbar click handling (acme three-button semantics)
+	HScrollClick(button int, pt image.Point, regionIndex int)
+
+	// PointInBlockRegion checks if a screen point falls within any
+	// horizontally-scrollable block region (the content area, not just
+	// the scrollbar). Returns the region index and true if hit.
+	PointInBlockRegion(pt image.Point) (regionIndex int, ok bool)
+
+	// HScrollWheel adjusts the horizontal scroll offset for the given
+	// block region by delta pixels (positive = scroll right, negative = left).
+	// The resulting offset is clamped to [0, maxScrollable].
+	HScrollWheel(delta int, regionIndex int)
+
 	// Status
 	Full() bool // True if frame is at capacity
 }
@@ -104,6 +125,19 @@ type frameImpl struct {
 	tickImage  edwooddraw.Image // pre-rendered tick mask (transparent + opaque pattern)
 	tickScale  int              // display.ScaleSize(1)
 	tickHeight int              // height of current tickImage (re-init when changed)
+
+	// Horizontal scroll state per non-wrapping block element.
+	// Index is the ordinal of the block region (0th code block, 1st, etc.).
+	// Value is the pixel offset from the left edge.
+	hscrollOrigins []int
+
+	// Number of non-wrapping blocks seen on the last layout pass.
+	// Used to detect when blocks are added or removed.
+	hscrollBlockCount int
+
+	// Cached adjusted block regions from the last layout pass.
+	// Used for hit-testing horizontal scrollbar clicks.
+	hscrollRegions []AdjustedBlockRegion
 }
 
 // NewFrame creates a new Frame.
@@ -738,9 +772,60 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	frameHeight := f.rect.Dy()
 	frameWidth := f.rect.Dx()
 
+	// Compute block regions and scrollbar metadata. Lines already have
+	// correct Y values (including scrollbar height) from layoutFromOrigin,
+	// so we use the read-only computeScrollbarMetadata rather than
+	// adjustLayoutForScrollbars which would double-adjust Y.
+	regions := findBlockRegions(lines)
+	scrollbarHeight := 12 // Scrollwid
+	adjustedRegions := computeScrollbarMetadata(lines, regions, frameWidth, scrollbarHeight)
+
+	// Cache the adjusted regions for hit-testing (HScrollBarAt).
+	f.hscrollRegions = adjustedRegions
+
+	// Build per-line region lookup: lineRegion[i] is the index into adjustedRegions,
+	// or -1 if the line is not in a block region.
+	lineRegion := make([]int, len(lines))
+	for i := range lineRegion {
+		lineRegion[i] = -1
+	}
+	for ri, ar := range adjustedRegions {
+		for li := ar.StartLine; li < ar.EndLine; li++ {
+			if li < len(lineRegion) {
+				lineRegion[li] = ri
+			}
+		}
+	}
+
+	// hOffsetForLine returns the horizontal scroll offset for a given line index.
+	// Lines not in a block region return 0.
+	hOffsetForLine := func(lineIdx int) int {
+		if lineIdx < 0 || lineIdx >= len(lineRegion) {
+			return 0
+		}
+		ri := lineRegion[lineIdx]
+		if ri < 0 {
+			return 0
+		}
+		return f.GetHScrollOrigin(ri)
+	}
+
+	// leftIndentForLine returns the LeftIndent for a line in a scrollable block
+	// region, or 0 if the line is not in one.
+	leftIndentForLine := func(lineIdx int) int {
+		if lineIdx < 0 || lineIdx >= len(lineRegion) {
+			return 0
+		}
+		ri := lineRegion[lineIdx]
+		if ri < 0 {
+			return 0
+		}
+		return adjustedRegions[ri].LeftIndent
+	}
 
 	// Phase 1: Draw block-level backgrounds (full line width for fenced code blocks)
-	// This must happen first so text appears on top
+	// This must happen first so text appears on top.
+	// Block backgrounds remain full-width and unshifted by horizontal scroll.
 	for _, line := range lines {
 		// Skip lines that start at or below the frame bottom
 		if line.Y >= frameHeight {
@@ -756,12 +841,14 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	}
 
 	// Phase 2: Draw box backgrounds (for inline code, etc.)
-	// This must happen before text rendering so backgrounds appear behind text
-	for _, line := range lines {
+	// This must happen before text rendering so backgrounds appear behind text.
+	// Box backgrounds within a scrollable block region are shifted by -hOffset.
+	for lineIdx, line := range lines {
 		// Skip lines that start at or below the frame bottom
 		if line.Y >= frameHeight {
 			break
 		}
+		hOff := hOffsetForLine(lineIdx)
 		for _, pb := range line.Boxes {
 			// Skip newlines and tabs - they don't have backgrounds
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
@@ -774,7 +861,9 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 			// Draw background if style has Bg color set, but NOT for block-level styles
 			// (those are handled in Phase 1 with full-width backgrounds)
 			if pb.Box.Style.Bg != nil && !pb.Box.Style.Block {
-				f.drawBoxBackgroundTo(target, pb, line, offset, frameWidth, frameHeight)
+				shiftedPB := pb
+				shiftedPB.X -= hOff
+				f.drawBoxBackgroundTo(target, shiftedPB, line, offset, frameWidth, frameHeight)
 			}
 		}
 	}
@@ -796,11 +885,13 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	// Phase 4: Render text on top of backgrounds
 	// Note: Text is now clipped by the scratch image bounds, so we can render
 	// partial lines without worrying about overflow into adjacent windows.
-	for _, line := range lines {
+	// Text within a scrollable block region is shifted by -hOffset.
+	for lineIdx, line := range lines {
 		// Skip lines that start at or below the frame bottom
 		if line.Y >= frameHeight {
 			break
 		}
+		hOff := hOffsetForLine(lineIdx)
 		for _, pb := range line.Boxes {
 			// Skip newlines and tabs - they don't render visible text
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
@@ -818,9 +909,9 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 				continue
 			}
 
-			// Calculate position in target image
+			// Calculate position in target image, applying horizontal scroll offset
 			pt := image.Point{
-				X: offset.X + pb.X,
+				X: offset.X + pb.X - hOff,
 				Y: offset.Y + line.Y,
 			}
 
@@ -843,39 +934,71 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	}
 
 	// Phase 5: Render images
-	for _, line := range lines {
+	// Images within a scrollable block region are shifted by -hOffset.
+	for lineIdx, line := range lines {
 		// Skip lines that start at or below the frame bottom
 		if line.Y >= frameHeight {
 			break
 		}
+		hOff := hOffsetForLine(lineIdx)
 		for _, pb := range line.Boxes {
 			// Check if this is an image box
 			if !pb.Box.Style.Image {
 				continue
 			}
 
-			// Calculate position in target image
+			// Calculate position in target image, applying horizontal scroll offset
 			pt := image.Point{
-				X: offset.X + pb.X,
+				X: offset.X + pb.X - hOff,
 				Y: offset.Y + line.Y,
 			}
 
 			// Check for error placeholder case
 			if pb.Box.ImageData != nil && pb.Box.ImageData.Err != nil {
-				f.drawImageErrorPlaceholder(target, pt, pb.Box.ImageData.Path, pb.Box.Style.ImageAlt)
+				f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
 				continue
 			}
 
 			// Check if we have valid image data to render
 			if !pb.Box.IsImage() {
-				f.drawImageErrorPlaceholder(target, pt, pb.Box.Style.ImageURL, pb.Box.Style.ImageAlt)
+				f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
 				continue
 			}
 
-			// Render the actual image
-			f.drawImageTo(target, pb, line, offset, frameWidth, frameHeight)
+			// Render the actual image (with shifted X for scrollable blocks)
+			shiftedPB := pb
+			shiftedPB.X -= hOff
+			f.drawImageTo(target, shiftedPB, line, offset, frameWidth, frameHeight)
 		}
 	}
+
+	// Phase 5b: Repaint gutter for scrollable block regions.
+	// When horizontally scrolled, text may render to the left of the block's
+	// LeftIndent. Repaint the gutter column [0, LeftIndent) with the frame
+	// background to clip any overflow.
+	for lineIdx, line := range lines {
+		if line.Y >= frameHeight {
+			break
+		}
+		indent := leftIndentForLine(lineIdx)
+		if indent <= 0 || hOffsetForLine(lineIdx) <= 0 {
+			continue
+		}
+		gutterRect := image.Rect(
+			offset.X,
+			offset.Y+line.Y,
+			offset.X+indent,
+			offset.Y+line.Y+line.Height,
+		)
+		clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+		gutterRect = gutterRect.Intersect(clipRect)
+		if !gutterRect.Empty() {
+			target.Draw(gutterRect, f.background, f.background, image.ZP)
+		}
+	}
+
+	// Phase 6: Draw horizontal scrollbars for overflowing block regions
+	f.drawHScrollbarsTo(target, offset, lines, adjustedRegions, frameWidth)
 }
 
 // drawBlockBackgroundTo draws a full-width background for a line.
@@ -999,7 +1122,13 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 
 	// If origin is 0, just return the normal layout (using cache if available)
 	if f.origin == 0 {
-		return f.layoutBoxes(boxes, frameWidth, maxtab), 0
+		lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+		regions := findBlockRegions(lines)
+		f.syncHScrollState(len(regions))
+		// Apply scrollbar height adjustments so all callers get correct Y.
+		scrollbarHeight := 12 // Scrollwid
+		adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+		return lines, 0
 	}
 
 	// Layout all boxes first (using cache if available)
@@ -1008,7 +1137,16 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		return nil, 0
 	}
 
-	// Find which line contains the origin position
+	// Sync horizontal scroll state and apply scrollbar height adjustments
+	// to ALL lines BEFORE computing originY. This ensures originY accounts
+	// for scrollbar heights of blocks above the viewport.
+	regions := findBlockRegions(allLines)
+	f.syncHScrollState(len(regions))
+	scrollbarHeight := 12 // Scrollwid
+	adjustLayoutForScrollbars(allLines, regions, frameWidth, scrollbarHeight)
+
+	// Find which line contains the origin position.
+	// Line Y values now include scrollbar heights.
 	runeCount := 0
 	startLineIdx := 0
 	originY := 0
@@ -1040,15 +1178,16 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		originY = line.Y
 	}
 
-	// Extract lines from the origin line onwards and adjust Y coordinates
+	// Extract lines from the origin line onwards and adjust Y coordinates.
+	// Y values already include scrollbar heights from the adjustment above.
 	visibleLines := make([]Line, 0, len(allLines)-startLineIdx)
 	for i := startLineIdx; i < len(allLines); i++ {
 		line := allLines[i]
-		// Adjust Y coordinate to start from 0, preserving Height
 		adjustedLine := Line{
-			Y:      line.Y - originY,
-			Height: line.Height,
-			Boxes:  line.Boxes,
+			Y:            line.Y - originY,
+			Height:       line.Height,
+			ContentWidth: line.ContentWidth,
+			Boxes:        line.Boxes,
 		}
 		visibleLines = append(visibleLines, adjustedLine)
 	}
@@ -1428,6 +1567,298 @@ func (f *frameImpl) drawTickTo(target edwooddraw.Image, offset image.Point) {
 	}
 }
 
+// syncHScrollState updates the horizontal scroll origins slice after layout.
+// If the block region count changed, the slice is reset to zero values.
+// If the count is unchanged, existing scroll positions are preserved.
+func (f *frameImpl) syncHScrollState(regionCount int) {
+	if regionCount != f.hscrollBlockCount {
+		f.hscrollOrigins = make([]int, regionCount)
+		f.hscrollBlockCount = regionCount
+	}
+}
+
+// SetHScrollOrigin sets the horizontal scroll offset for a block region by index.
+// Out-of-range indices are ignored.
+func (f *frameImpl) SetHScrollOrigin(regionIndex, pixelOffset int) {
+	if regionIndex < 0 || regionIndex >= len(f.hscrollOrigins) {
+		return
+	}
+	f.hscrollOrigins[regionIndex] = pixelOffset
+}
+
+// GetHScrollOrigin returns the horizontal scroll offset for a block region by index.
+// Out-of-range indices return 0.
+func (f *frameImpl) GetHScrollOrigin(regionIndex int) int {
+	if regionIndex < 0 || regionIndex >= len(f.hscrollOrigins) {
+		return 0
+	}
+	return f.hscrollOrigins[regionIndex]
+}
+
+// HScrollBarAt checks if the given screen point falls within any horizontal
+// scrollbar rectangle. Returns the region index and true if hit, or (0, false)
+// if the point is not on a scrollbar.
+func (f *frameImpl) HScrollBarAt(pt image.Point) (regionIndex int, ok bool) {
+	scrollbarHeight := 12 // Scrollwid
+	frameWidth := f.rect.Dx()
+
+	// Convert screen point to frame-relative coordinates
+	relX := pt.X - f.rect.Min.X
+	relY := pt.Y - f.rect.Min.Y
+
+	for i, ar := range f.hscrollRegions {
+		if !ar.HasScrollbar {
+			continue
+		}
+		// Scrollbar rectangle: [LeftIndent, frameWidth) x [ScrollbarY, ScrollbarY+scrollbarHeight)
+		if relX >= ar.LeftIndent && relX < frameWidth &&
+			relY >= ar.ScrollbarY && relY < ar.ScrollbarY+scrollbarHeight {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// HScrollBarRect returns the screen-coordinate rectangle of the horizontal
+// scrollbar for the given block region. Returns the zero rectangle if the
+// region index is out of range or the region has no scrollbar.
+func (f *frameImpl) HScrollBarRect(regionIndex int) image.Rectangle {
+	scrollbarHeight := 12 // Scrollwid
+	if regionIndex < 0 || regionIndex >= len(f.hscrollRegions) {
+		return image.Rectangle{}
+	}
+	ar := f.hscrollRegions[regionIndex]
+	if !ar.HasScrollbar {
+		return image.Rectangle{}
+	}
+	return image.Rect(
+		f.rect.Min.X+ar.LeftIndent,
+		f.rect.Min.Y+ar.ScrollbarY,
+		f.rect.Max.X,
+		f.rect.Min.Y+ar.ScrollbarY+scrollbarHeight,
+	)
+}
+
+// HScrollClick handles a mouse click on a horizontal scrollbar with acme
+// three-button semantics. button is 1, 2, or 3. pt is the screen-coordinate
+// click point. regionIndex identifies which block region's scrollbar was clicked.
+// B1 scrolls left (amount proportional to click X within scrollbar).
+// B2 jumps to an absolute horizontal position.
+// B3 scrolls right (amount proportional to click X within scrollbar).
+// The resulting offset is clamped to [0, maxScrollable].
+func (f *frameImpl) HScrollClick(button int, pt image.Point, regionIndex int) {
+	if regionIndex < 0 || regionIndex >= len(f.hscrollRegions) {
+		return
+	}
+	ar := f.hscrollRegions[regionIndex]
+	if !ar.HasScrollbar {
+		return
+	}
+
+	frameWidth := f.rect.Dx()
+	maxScrollable := ar.MaxContentWidth - frameWidth
+	if maxScrollable <= 0 {
+		return
+	}
+
+	// Compute click X proportion within the scrollbar (0.0 = left edge, 1.0 = right edge).
+	// The scrollbar starts at ar.LeftIndent, not at X=0.
+	scrollbarWidth := frameWidth - ar.LeftIndent
+	if scrollbarWidth <= 0 {
+		return
+	}
+	relX := pt.X - f.rect.Min.X - ar.LeftIndent
+	if relX < 0 {
+		relX = 0
+	}
+	if relX > scrollbarWidth {
+		relX = scrollbarWidth
+	}
+	clickProportion := float64(relX) / float64(scrollbarWidth)
+
+	currentOffset := f.GetHScrollOrigin(regionIndex)
+	var newOffset int
+
+	switch button {
+	case 1:
+		// B1: scroll left by frameWidth scaled by (1 - clickProportion).
+		// Clicking near the left edge scrolls more, near the right edge less.
+		pixelsToMove := int(float64(frameWidth) * (1.0 - clickProportion))
+		if pixelsToMove < 1 {
+			pixelsToMove = 1
+		}
+		newOffset = currentOffset - pixelsToMove
+
+	case 2:
+		// B2: jump to absolute position proportional to click X.
+		newOffset = int(float64(maxScrollable) * clickProportion)
+
+	case 3:
+		// B3: scroll right by frameWidth scaled by clickProportion.
+		// Clicking near the right edge scrolls more, near the left edge less.
+		pixelsToMove := int(float64(frameWidth) * clickProportion)
+		if pixelsToMove < 1 {
+			pixelsToMove = 1
+		}
+		newOffset = currentOffset + pixelsToMove
+
+	default:
+		return
+	}
+
+	// Clamp to [0, maxScrollable]
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > maxScrollable {
+		newOffset = maxScrollable
+	}
+
+	f.SetHScrollOrigin(regionIndex, newOffset)
+}
+
+// PointInBlockRegion checks if the given screen point falls within any
+// horizontally-scrollable block region (the content area, including the
+// scrollbar area). Returns the region index and true if hit, or (0, false)
+// if the point is not within any scrollable block region.
+func (f *frameImpl) PointInBlockRegion(pt image.Point) (regionIndex int, ok bool) {
+	frameWidth := f.rect.Dx()
+
+	// Convert screen point to frame-relative coordinates.
+	relX := pt.X - f.rect.Min.X
+	relY := pt.Y - f.rect.Min.Y
+
+	for i, ar := range f.hscrollRegions {
+		if !ar.HasScrollbar {
+			continue
+		}
+		// Block region spans [LeftIndent, frameWidth) x [RegionTopY, ScrollbarY + scrollbarHeight).
+		// The scrollbar is at the bottom; include it in the region.
+		// The gutter to the left of LeftIndent is excluded so vertical swipes pass through.
+		scrollbarHeight := 12 // Scrollwid
+		if relX >= ar.LeftIndent && relX < frameWidth &&
+			relY >= ar.RegionTopY && relY < ar.ScrollbarY+scrollbarHeight {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// HScrollWheel adjusts the horizontal scroll offset for the given block region
+// by delta pixels. Positive delta scrolls right, negative scrolls left.
+// The resulting offset is clamped to [0, maxScrollable].
+func (f *frameImpl) HScrollWheel(delta int, regionIndex int) {
+	if regionIndex < 0 || regionIndex >= len(f.hscrollRegions) {
+		return
+	}
+	ar := f.hscrollRegions[regionIndex]
+	if !ar.HasScrollbar {
+		return
+	}
+
+	frameWidth := f.rect.Dx()
+	maxScrollable := ar.MaxContentWidth - frameWidth
+	if maxScrollable <= 0 {
+		return
+	}
+
+	newOffset := f.GetHScrollOrigin(regionIndex) + delta
+
+	// Clamp to [0, maxScrollable].
+	if newOffset < 0 {
+		newOffset = 0
+	}
+	if newOffset > maxScrollable {
+		newOffset = maxScrollable
+	}
+
+	f.SetHScrollOrigin(regionIndex, newOffset)
+}
+
+// HScrollBgColor is the background color of horizontal scrollbars.
+var HScrollBgColor = color.RGBA{R: 153, G: 153, B: 76, A: 255} // dark yellow-green, similar to acme scrollbar
+
+// HScrollThumbColor is the thumb color of horizontal scrollbars.
+var HScrollThumbColor = color.RGBA{R: 153, G: 153, B: 0, A: 255} // darker yellow, similar to acme scrollbar thumb
+
+// drawHScrollbarsTo draws horizontal scrollbars for overflowing block regions.
+// For each block region where MaxContentWidth > frameWidth, it draws a scrollbar
+// background and thumb at the bottom of the block region. The scrollbar height
+// is scrollbarHeight (Scrollwid = 12) pixels. Thumb width is proportional to
+// the visible fraction of content, with a minimum of 10 pixels.
+// Thumb position is proportional to hscrollOrigin for that region.
+func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Point, lines []Line, adjustedRegions []AdjustedBlockRegion, frameWidth int) {
+	scrollbarHeight := 12 // Scrollwid
+
+	for i, ar := range adjustedRegions {
+		if !ar.HasScrollbar {
+			continue
+		}
+
+		maxContentWidth := ar.MaxContentWidth
+		if maxContentWidth <= frameWidth {
+			continue
+		}
+
+		// Scrollbar starts at the block's left indent, leaving a gutter
+		// on the left for vertical scroll gestures.
+		scrollbarLeft := ar.LeftIndent
+		scrollbarWidth := frameWidth - scrollbarLeft
+		if scrollbarWidth <= 0 {
+			continue
+		}
+
+		// Draw scrollbar background at ScrollbarY
+		bgImg := f.allocColorImage(HScrollBgColor)
+		if bgImg == nil {
+			continue
+		}
+		bgRect := image.Rect(
+			offset.X+scrollbarLeft,
+			offset.Y+ar.ScrollbarY,
+			offset.X+frameWidth,
+			offset.Y+ar.ScrollbarY+scrollbarHeight,
+		)
+		target.Draw(bgRect, bgImg, bgImg, image.ZP)
+
+		// Compute thumb dimensions within the scrollbar width
+		thumbWidth := (scrollbarWidth * scrollbarWidth) / maxContentWidth
+		if thumbWidth < 10 {
+			thumbWidth = 10
+		}
+		if thumbWidth > scrollbarWidth {
+			thumbWidth = scrollbarWidth
+		}
+
+		// Compute thumb position within the scrollbar
+		maxScrollable := maxContentWidth - frameWidth
+		hOffset := f.GetHScrollOrigin(i)
+		thumbLeft := 0
+		if maxScrollable > 0 && hOffset > 0 {
+			thumbLeft = (hOffset * (scrollbarWidth - thumbWidth)) / maxScrollable
+		}
+		if thumbLeft < 0 {
+			thumbLeft = 0
+		}
+		if thumbLeft+thumbWidth > scrollbarWidth {
+			thumbLeft = scrollbarWidth - thumbWidth
+		}
+
+		// Draw thumb
+		thumbImg := f.allocColorImage(HScrollThumbColor)
+		if thumbImg == nil {
+			continue
+		}
+		thumbRect := image.Rect(
+			offset.X+scrollbarLeft+thumbLeft,
+			offset.Y+ar.ScrollbarY,
+			offset.X+scrollbarLeft+thumbLeft+thumbWidth,
+			offset.Y+ar.ScrollbarY+scrollbarHeight,
+		)
+		target.Draw(thumbRect, thumbImg, thumbImg, image.ZP)
+	}
+}
+
 // Full returns true if the frame is at capacity.
 // A frame is full when more content is visible than can fit in the frame.
 func (f *frameImpl) Full() bool {
@@ -1541,7 +1972,7 @@ func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line 
 	plan9Data, err := ConvertToPlan9(goImg)
 	if err != nil {
 		pt := image.Point{X: dstX, Y: dstY}
-		f.drawImageErrorPlaceholder(target, pt, cached.Path, pb.Box.Style.ImageAlt)
+		f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
 		return
 	}
 
@@ -1550,7 +1981,7 @@ func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line 
 	srcImg, err := f.display.AllocImage(srcRect, edwooddraw.RGBA32, false, 0)
 	if err != nil {
 		pt := image.Point{X: dstX, Y: dstY}
-		f.drawImageErrorPlaceholder(target, pt, cached.Path, pb.Box.Style.ImageAlt)
+		f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
 		return
 	}
 	defer srcImg.Free()
@@ -1559,7 +1990,7 @@ func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line 
 	_, err = srcImg.Load(srcRect, plan9Data)
 	if err != nil {
 		pt := image.Point{X: dstX, Y: dstY}
-		f.drawImageErrorPlaceholder(target, pt, cached.Path, pb.Box.Style.ImageAlt)
+		f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
 		return
 	}
 
@@ -1576,17 +2007,14 @@ func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line 
 }
 
 // drawImageErrorPlaceholder renders an error placeholder for failed image loads.
-// It displays "[Image: alt]" in blue (like a link) so it can be clicked to open the image path.
-func (f *frameImpl) drawImageErrorPlaceholder(target edwooddraw.Image, pt image.Point, path string, alt string) {
+// It displays the box's text (e.g. "[Image: alt]" or "[Image: alt <unsupported format>]")
+// in blue (like a link) so it can be clicked to open the image path.
+func (f *frameImpl) drawImageErrorPlaceholder(target edwooddraw.Image, pt image.Point, boxText string) {
 	if f.font == nil || f.textColor == nil {
 		return
 	}
 
-	// Create placeholder text with alt text
-	placeholder := "[Image: " + alt + "]"
-	if alt == "" {
-		placeholder = "[Image]"
-	}
+	placeholder := boxText
 
 	// Use blue (like links) so users know it's clickable
 	blueColor := f.allocColorImage(LinkBlue)

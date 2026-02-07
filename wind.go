@@ -847,19 +847,15 @@ func (w *Window) IsPreviewMode() bool {
 }
 
 // SetPreviewMode enables or disables preview mode.
-// When disabling preview mode, clears the image cache and triggers a full redraw of the body.
+// When disabling preview mode, triggers a full redraw of the body.
+// The image cache is kept alive so re-entering preview is fast.
 func (w *Window) SetPreviewMode(enabled bool) {
 	wasPreview := w.previewMode
 	w.previewMode = enabled
 
-	// When exiting preview mode, clean up resources and refresh the body
+	// When exiting preview mode, refresh the body.
+	// Keep the image cache alive so re-entering preview is fast.
 	if wasPreview && !enabled {
-		// Clean up image cache to free memory
-		if w.imageCache != nil {
-			w.imageCache.Clear()
-			w.imageCache = nil
-		}
-
 		// Force a full redraw of the body by resizing it
 		if w.display != nil {
 			w.body.Resize(w.body.all, true, false)
@@ -913,17 +909,22 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 	rt := w.richBody
 
-	// Handle scroll wheel (buttons 4 and 5)
-	if m.Buttons&8 != 0 { // Button 4 - scroll up
-		rt.ScrollWheel(true)
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
+	// Handle scroll wheel (buttons 4 and 5).
+	// When the cursor is over a horizontally-scrollable block region,
+	// redirect vertical scroll to horizontal scrolling.
+	if m.Buttons&8 != 0 || m.Buttons&16 != 0 {
+		if regionIndex, ok := rt.Frame().PointInBlockRegion(m.Point); ok {
+			// Horizontal scroll: button 4 = left, button 5 = right.
+			delta := 40 // pixels per scroll tick
+			if m.Buttons&8 != 0 {
+				delta = -delta
+			}
+			rt.Frame().HScrollWheel(delta, regionIndex)
+		} else {
+			// Normal vertical scroll.
+			up := m.Buttons&8 != 0
+			rt.ScrollWheel(up)
 		}
-		return true
-	}
-	if m.Buttons&16 != 0 { // Button 5 - scroll down
-		rt.ScrollWheel(false)
 		w.Draw()
 		if w.display != nil {
 			w.display.Flush()
@@ -931,31 +932,37 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		return true
 	}
 
-	// Handle scrollbar clicks (buttons 1, 2, 3 in scrollbar area)
+	// Handle scrollbar clicks (buttons 1, 2, 3 in scrollbar area).
+	// Uses latching: once pressed, the scroll tracks the mouse until release.
 	scrRect := rt.ScrollRect()
 	if m.Point.In(scrRect) {
-		if m.Buttons&1 != 0 { // Button 1
-			rt.ScrollClick(1, m.Point)
-			w.Draw()
-			if w.display != nil {
-				w.display.Flush()
-			}
+		button := 0
+		if m.Buttons&1 != 0 {
+			button = 1
+		} else if m.Buttons&2 != 0 {
+			button = 2
+		} else if m.Buttons&4 != 0 {
+			button = 3
+		}
+		if button != 0 && mc != nil {
+			w.previewVScrollLatch(rt, mc, button, scrRect)
 			return true
 		}
-		if m.Buttons&2 != 0 { // Button 2
-			rt.ScrollClick(2, m.Point)
-			w.Draw()
-			if w.display != nil {
-				w.display.Flush()
-			}
-			return true
+	}
+
+	// Handle horizontal scrollbar clicks (buttons 1, 2, 3 on h-scrollbar).
+	// Uses latching: same pattern as vertical.
+	if regionIndex, ok := rt.Frame().HScrollBarAt(m.Point); ok {
+		button := 0
+		if m.Buttons&1 != 0 {
+			button = 1
+		} else if m.Buttons&2 != 0 {
+			button = 2
+		} else if m.Buttons&4 != 0 {
+			button = 3
 		}
-		if m.Buttons&4 != 0 { // Button 3
-			rt.ScrollClick(3, m.Point)
-			w.Draw()
-			if w.display != nil {
-				w.display.Flush()
-			}
+		if button != 0 && mc != nil {
+			w.previewHScrollLatch(rt, mc, button, regionIndex)
 			return true
 		}
 	}
@@ -1168,6 +1175,157 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	}
 
 	return false
+}
+
+// previewScrSleep waits for dt milliseconds or until a mouse event arrives,
+// whichever comes first. This matches ScrSleep in scrl.go but reads from the
+// passed-in Mousectl rather than global.mousectl.
+func previewScrSleep(mc *draw.Mousectl, dt int) {
+	timer := time.NewTimer(time.Duration(dt) * time.Millisecond)
+	select {
+	case <-timer.C:
+	case mc.Mouse = <-mc.C:
+		timer.Stop()
+	}
+}
+
+// previewVScrollLatch implements acme-style latching for the vertical
+// scrollbar in preview mode. Once a button is pressed in the scrollbar, the
+// scroll action tracks the mouse until the button is released. The cursor is
+// physically warped back into the scrollbar on each iteration, matching the
+// acme pattern in scrl.go.
+func (w *Window) previewVScrollLatch(rt *RichText, mc *draw.Mousectl, button int, scrRect image.Rectangle) {
+	buttonBit := 1 << uint(button-1)
+	centerX := (scrRect.Min.X + scrRect.Max.X) / 2
+
+	// Initial scroll action.
+	rt.ScrollClick(button, mc.Mouse.Point)
+	w.Draw()
+	if w.display != nil {
+		w.display.Flush()
+	}
+
+	first := true
+	for {
+		if button == 2 {
+			// B2: read per-event for live thumb drag.
+			mc.Mouse = <-mc.C
+		} else {
+			// B1/B3: debounce for auto-repeat.
+			if first {
+				if w.display != nil {
+					w.display.Flush()
+				}
+				time.Sleep(200 * time.Millisecond)
+				mc.Mouse = <-mc.C
+				first = false
+			} else {
+				previewScrSleep(mc, 80)
+			}
+		}
+
+		if mc.Mouse.Buttons&buttonBit == 0 {
+			break
+		}
+
+		// Clamp Y and lock X to center of scrollbar.
+		my := mc.Mouse.Point.Y
+		if my < scrRect.Min.Y {
+			my = scrRect.Min.Y
+		}
+		if my >= scrRect.Max.Y {
+			my = scrRect.Max.Y
+		}
+		warpPt := image.Pt(centerX, my)
+
+		// Warp cursor back into scrollbar if it has moved away.
+		if !mc.Mouse.Point.Eq(warpPt) {
+			if w.display != nil {
+				w.display.MoveTo(warpPt)
+			}
+			mc.Mouse = <-mc.C // absorb synthetic move event
+		}
+
+		rt.ScrollClick(button, warpPt)
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+	}
+
+	// Drain remaining mouse events until all buttons released.
+	for mc.Mouse.Buttons != 0 {
+		mc.Mouse = <-mc.C
+	}
+}
+
+// previewHScrollLatch implements acme-style latching for horizontal
+// scrollbars in preview mode. Same pattern as previewVScrollLatch but for the
+// horizontal axis. The cursor is warped to stay within the scrollbar band.
+func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int, regionIndex int) {
+	buttonBit := 1 << uint(button-1)
+	frameRect := rt.Frame().Rect()
+
+	// Get the scrollbar rectangle for cursor warping.
+	barRect := rt.Frame().HScrollBarRect(regionIndex)
+	centerY := (barRect.Min.Y + barRect.Max.Y) / 2
+
+	// Initial scroll action.
+	rt.Frame().HScrollClick(button, mc.Mouse.Point, regionIndex)
+	w.Draw()
+	if w.display != nil {
+		w.display.Flush()
+	}
+
+	first := true
+	for {
+		if button == 2 {
+			mc.Mouse = <-mc.C
+		} else {
+			if first {
+				if w.display != nil {
+					w.display.Flush()
+				}
+				time.Sleep(200 * time.Millisecond)
+				mc.Mouse = <-mc.C
+				first = false
+			} else {
+				previewScrSleep(mc, 80)
+			}
+		}
+
+		if mc.Mouse.Buttons&buttonBit == 0 {
+			break
+		}
+
+		// Clamp X to scrollbar bounds and lock Y to center of scrollbar band.
+		mx := mc.Mouse.Point.X
+		if mx < barRect.Min.X {
+			mx = barRect.Min.X
+		}
+		if mx >= frameRect.Max.X {
+			mx = frameRect.Max.X
+		}
+		warpPt := image.Pt(mx, centerY)
+
+		// Warp cursor back into scrollbar if it has moved away.
+		if !mc.Mouse.Point.Eq(warpPt) {
+			if w.display != nil {
+				w.display.MoveTo(warpPt)
+			}
+			mc.Mouse = <-mc.C // absorb synthetic move event
+		}
+
+		rt.Frame().HScrollClick(button, warpPt, regionIndex)
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+	}
+
+	for mc.Mouse.Buttons != 0 {
+		mc.Mouse = <-mc.C
+	}
 }
 
 // scrollPreviewToMatch scrolls the preview so that the match at rendStart

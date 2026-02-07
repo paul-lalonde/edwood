@@ -1,7 +1,9 @@
 package rich
 
 import (
+	"bytes"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/rjkroege/edwood/draw"
@@ -135,9 +137,10 @@ func tabBoxWidth(box *Box, xPos, minX, maxtab int) int {
 // Line represents a line of positioned boxes in the layout.
 // This is the output of the layout algorithm.
 type Line struct {
-	Boxes  []PositionedBox // Boxes on this line
-	Y      int             // Y position of the line (top)
-	Height int             // Height of this line (max font height of boxes)
+	Boxes        []PositionedBox // Boxes on this line
+	Y            int             // Y position of the line (top)
+	Height       int             // Height of this line (max font height of boxes)
+	ContentWidth int             // Actual pixel width of content (may exceed frameWidth for non-wrapping blocks; 0 for normal text)
 }
 
 // PositionedBox is a Box with its computed screen position.
@@ -164,10 +167,11 @@ const CodeBlockIndentChars = 4
 // The actual indentation may vary based on the code font at runtime.
 const CodeBlockIndent = 40
 
-// imageBoxDimensions calculates the width and height for an image box,
-// scaling down if the image is wider than maxWidth.
-// If box.Style.ImageWidth > 0, uses that as the target width (clamped to maxWidth),
+// imageBoxDimensions calculates the width and height for an image box.
+// If box.Style.ImageWidth > 0, uses that as the target width,
 // computing height proportionally from the original image dimensions.
+// The image is NOT clamped to maxWidth; overflowing images get a horizontal
+// scrollbar via block region detection.
 // Returns (0, 0) if the box is not an image with ImageData.
 func imageBoxDimensions(box *Box, maxWidth int) (width, height int) {
 	if !box.IsImage() {
@@ -182,17 +186,189 @@ func imageBoxDimensions(box *Box, maxWidth int) (width, height int) {
 		targetWidth = box.Style.ImageWidth
 	}
 
-	// Clamp to frame width
-	if targetWidth > maxWidth {
-		targetWidth = maxWidth
-	}
-
 	// Scale height proportionally
 	if targetWidth == imgWidth {
 		return imgWidth, imgHeight
 	}
 	scale := float64(targetWidth) / float64(imgWidth)
 	return targetWidth, int(float64(imgHeight) * scale)
+}
+
+// BlockKind identifies the type of a non-wrapping block element.
+type BlockKind int
+
+const (
+	BlockCode  BlockKind = iota // Fenced code block (Block && Code)
+	BlockTable                  // Table block (Table)
+	BlockImage                  // Image wider than frame
+)
+
+// BlockRegion represents a contiguous run of lines sharing the same block kind.
+// A horizontal scrollbar is needed when MaxContentWidth > frameWidth.
+type BlockRegion struct {
+	StartLine       int       // Index into []Line (inclusive)
+	EndLine         int       // Index into []Line (exclusive)
+	MaxContentWidth int       // Widest line in this region
+	Kind            BlockKind // Type of block element
+}
+
+// AdjustedBlockRegion extends BlockRegion with scrollbar display information
+// computed during the two-pass layout adjustment.
+type AdjustedBlockRegion struct {
+	BlockRegion
+	HasScrollbar bool // True if this region overflows and needs a horizontal scrollbar
+	ScrollbarY   int  // Y position of the scrollbar (bottom of the block region, after adjustment)
+	RegionTopY   int  // Y position of the top of the block region (first line's Y)
+	LeftIndent   int  // X pixel offset where block content starts (scrollbar left edge)
+}
+
+// blockLeftIndent returns the X position of the first block-styled box on the
+// given line, which is the left indent of the block content area.
+func blockLeftIndent(line *Line) int {
+	for _, pb := range line.Boxes {
+		if pb.Box.Style.Block || pb.Box.Style.Table || pb.Box.IsImage() {
+			return pb.X
+		}
+	}
+	return 0
+}
+
+// adjustLayoutForScrollbars performs pass 2 of the two-pass layout.
+// For each block region where MaxContentWidth > frameWidth, it inserts
+// scrollbarHeight pixels of additional Y space after the last line of that
+// region. All subsequent line Y positions are shifted down by the accumulated
+// scrollbar heights. Returns AdjustedBlockRegion slices with scrollbar metadata.
+func adjustLayoutForScrollbars(lines []Line, regions []BlockRegion, frameWidth, scrollbarHeight int) []AdjustedBlockRegion {
+	adjusted := make([]AdjustedBlockRegion, len(regions))
+
+	// Determine which regions overflow and need scrollbars.
+	for i, r := range regions {
+		adjusted[i] = AdjustedBlockRegion{BlockRegion: r}
+		if r.MaxContentWidth > frameWidth {
+			adjusted[i].HasScrollbar = true
+		}
+	}
+
+	// Walk lines forward, maintaining a cumulative Y shift. When we reach
+	// the EndLine of an overflowing region, record the scrollbar Y position
+	// and increase the cumulative shift.
+	yShift := 0
+	regionIdx := 0
+
+	for i := range lines {
+		lines[i].Y += yShift
+
+		// Process any regions that end at or before this line index.
+		// A region ending at EndLine means lines [StartLine, EndLine) belong
+		// to it, so the scrollbar is inserted right after line EndLine-1.
+		// We check when i == EndLine-1 (the last line of the region).
+		for regionIdx < len(adjusted) && i == regions[regionIdx].EndLine-1 {
+			if adjusted[regionIdx].HasScrollbar {
+				// Scrollbar Y is at the bottom of this last line of the region
+				adjusted[regionIdx].ScrollbarY = lines[i].Y + lines[i].Height
+				yShift += scrollbarHeight
+			}
+			regionIdx++
+		}
+	}
+
+	// Record the top Y and left indent of each region from the adjusted line positions.
+	for i := range adjusted {
+		if adjusted[i].StartLine < len(lines) {
+			adjusted[i].RegionTopY = lines[adjusted[i].StartLine].Y
+			adjusted[i].LeftIndent = blockLeftIndent(&lines[adjusted[i].StartLine])
+		}
+	}
+
+	return adjusted
+}
+
+// computeScrollbarMetadata returns AdjustedBlockRegion metadata for lines
+// whose Y values already include scrollbar height adjustments (i.e. lines
+// that have already been through adjustLayoutForScrollbars). Unlike
+// adjustLayoutForScrollbars, this does NOT modify line Y values.
+func computeScrollbarMetadata(lines []Line, regions []BlockRegion, frameWidth, scrollbarHeight int) []AdjustedBlockRegion {
+	adjusted := make([]AdjustedBlockRegion, len(regions))
+	for i, r := range regions {
+		adjusted[i] = AdjustedBlockRegion{BlockRegion: r}
+		if r.MaxContentWidth > frameWidth {
+			adjusted[i].HasScrollbar = true
+		}
+		// ScrollbarY is the bottom of the last line of the region.
+		if r.EndLine > 0 && r.EndLine <= len(lines) {
+			lastLine := lines[r.EndLine-1]
+			adjusted[i].ScrollbarY = lastLine.Y + lastLine.Height
+		}
+		// RegionTopY and LeftIndent from the first line.
+		if r.StartLine < len(lines) {
+			adjusted[i].RegionTopY = lines[r.StartLine].Y
+			adjusted[i].LeftIndent = blockLeftIndent(&lines[r.StartLine])
+		}
+	}
+	return adjusted
+}
+
+// findBlockRegions scans layout lines for contiguous runs where all boxes
+// share the same block kind (Block && Code, Table, or Image). Each region
+// records the start/end line indices, the maximum content width, and the kind.
+func findBlockRegions(lines []Line) []BlockRegion {
+	var regions []BlockRegion
+
+	i := 0
+	for i < len(lines) {
+		kind, ok := lineBlockKind(&lines[i])
+		if !ok {
+			i++
+			continue
+		}
+
+		// Start a new region
+		region := BlockRegion{
+			StartLine:       i,
+			MaxContentWidth: lines[i].ContentWidth,
+			Kind:            kind,
+		}
+
+		// Extend region while consecutive lines have the same block kind
+		i++
+		for i < len(lines) {
+			nextKind, nextOk := lineBlockKind(&lines[i])
+			if !nextOk || nextKind != kind {
+				break
+			}
+			if lines[i].ContentWidth > region.MaxContentWidth {
+				region.MaxContentWidth = lines[i].ContentWidth
+			}
+			i++
+		}
+
+		region.EndLine = i
+		regions = append(regions, region)
+	}
+
+	return regions
+}
+
+// lineBlockKind determines the block kind of a line based on its boxes.
+// Returns the kind and true if the line is a block element, or false if it's
+// normal text. A line is considered a block element if any of its non-newline
+// boxes have a block style.
+func lineBlockKind(line *Line) (BlockKind, bool) {
+	for _, pb := range line.Boxes {
+		if pb.Box.IsNewline() {
+			continue
+		}
+		if pb.Box.Style.Block && pb.Box.Style.Code {
+			return BlockCode, true
+		}
+		if pb.Box.Style.Table {
+			return BlockTable, true
+		}
+		if pb.Box.IsImage() {
+			return BlockImage, true
+		}
+	}
+	return 0, false
 }
 
 // layout positions boxes into lines, handling wrapping when boxes exceed frameWidth.
@@ -284,10 +460,10 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		}
 
 		// If we have a pending paragraph break and this is the first content,
-		// add space before this paragraph based on the content's font height
+		// add space before this paragraph based on the font height (not image height)
 		if pendingParaBreak && !box.IsTab() {
-			// Add half the height of the upcoming text before this paragraph
-			currentLine.Y += boxHeight / 2
+			fontHeight := getFontHeight(box.Style)
+			currentLine.Y += fontHeight / 2
 			pendingParaBreak = false
 		}
 
@@ -315,6 +491,14 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			width, _ = imageBoxDimensions(box, frameWidth)
 		} else {
 			width = boxWidth(box, getFontForStyle(box.Style))
+		}
+
+		// For block-level code or images, don't wrap - allow horizontal overflow
+		if (box.Style.Block && box.Style.Code) || box.IsImage() {
+			box.Wid = width
+			currentLine.Boxes = append(currentLine.Boxes, PositionedBox{Box: *box, X: xPos})
+			xPos += width
+			continue
 		}
 
 		// Effective frame width accounts for indentation
@@ -375,6 +559,27 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	// Check if the last box was a newline - if so, add the empty line
 	if len(boxes) > 0 && boxes[len(boxes)-1].IsNewline() && len(currentLine.Boxes) == 0 {
 		lines = append(lines, currentLine)
+	}
+
+	// Compute ContentWidth for non-wrapping lines.
+	// For lines containing Block && Code boxes or images, ContentWidth is the
+	// rightmost box extent (X + Wid). For normal text lines, ContentWidth stays 0.
+	for i := range lines {
+		line := &lines[i]
+		isNonWrap := false
+		maxExtent := 0
+		for _, pb := range line.Boxes {
+			if (pb.Box.Style.Block && pb.Box.Style.Code) || pb.Box.IsImage() {
+				isNonWrap = true
+			}
+			extent := pb.X + pb.Box.Wid
+			if extent > maxExtent {
+				maxExtent = extent
+			}
+		}
+		if isNonWrap {
+			line.ContentWidth = maxExtent
+		}
 	}
 
 	return lines
@@ -535,6 +740,16 @@ func layoutWithCacheAndBasePath(boxes []Box, font draw.Font, frameWidth, maxtab 
 			cached, _ := cache.Load(imgPath)
 			if cached != nil {
 				box.ImageData = cached
+				// If the image failed with an unsupported format, append
+				// a suffix to the placeholder text so the content rune count
+				// matches what would be rendered (needed for hit-testing).
+				if cached.Err != nil && strings.Contains(cached.Err.Error(), "unknown format") {
+					suffix := []byte(" <unsupported format>")
+					if !bytes.HasSuffix(box.Text, suffix) {
+						box.Text = append(box.Text, suffix...)
+						box.Nrune = utf8.RuneCount(box.Text)
+					}
+				}
 			}
 		}
 	}

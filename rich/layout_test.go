@@ -664,28 +664,29 @@ func TestLayoutCodeBlockIndent(t *testing.T) {
 		}
 	})
 
-	t.Run("code block wrapping maintains indentation", func(t *testing.T) {
-		// A long code block line that wraps
+	t.Run("code block does not wrap (horizontal scroll instead)", func(t *testing.T) {
+		// A long code block line should NOT wrap; it extends beyond frame width
+		// and will be horizontally scrollable.
 		content := Content{
-			{Text: "this is a very long line of code that will wrap", Style: Style{Block: true, Code: true, Scale: 1.0}},
+			{Text: "this is a very long line of code that will not wrap", Style: Style{Block: true, Code: true, Scale: 1.0}},
 		}
 		boxes := contentToBoxes(content)
-		// Frame width that forces wrapping: 200 pixels = 20 chars
-		// After 40px indent, only 160px = 16 chars fit per line
+		// Frame width that would force wrapping for normal text: 200 pixels = 20 chars
 		lines := layout(boxes, font, 200, maxtab, nil, nil)
 
-		if len(lines) < 2 {
-			t.Fatalf("expected multiple lines for wrapped code, got %d", len(lines))
+		// Block code should produce a single line (no wrapping)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line for non-wrapping block code, got %d", len(lines))
 		}
 
-		// All lines should start at the calculated indent
-		for i, line := range lines {
-			if len(line.Boxes) == 0 {
-				continue
-			}
-			if line.Boxes[0].X != expectedIndent {
-				t.Errorf("line %d: code block X = %d, want %d (4 * M-width)", i, line.Boxes[0].X, expectedIndent)
-			}
+		// The line should start at the code block indent
+		if lines[0].Boxes[0].X != expectedIndent {
+			t.Errorf("code block X = %d, want %d (4 * M-width)", lines[0].Boxes[0].X, expectedIndent)
+		}
+
+		// ContentWidth should exceed frameWidth
+		if lines[0].ContentWidth <= 200 {
+			t.Errorf("ContentWidth = %d, should exceed frameWidth 200", lines[0].ContentWidth)
 		}
 	})
 
@@ -971,8 +972,8 @@ func TestLayoutImageWidth(t *testing.T) {
 	})
 }
 
-// TestLayoutImageScale tests that images wider than frame are scaled down.
-// Large images should be scaled to fit within the frame width.
+// TestLayoutImageScale tests that images wider than frame are NOT scaled down.
+// Wide images overflow and get horizontal scrollbars instead.
 func TestLayoutImageScale(t *testing.T) {
 	font := edwoodtest.NewFont(10, 14)
 	frameWidth := 300 // Narrow frame
@@ -985,7 +986,7 @@ func TestLayoutImageScale(t *testing.T) {
 		Path:   "wide.png",
 	}
 
-	t.Run("wide image scaled to fit frame", func(t *testing.T) {
+	t.Run("wide image overflows frame for horizontal scroll", func(t *testing.T) {
 		boxes := []Box{
 			{
 				Text:      nil,
@@ -1005,14 +1006,15 @@ func TestLayoutImageScale(t *testing.T) {
 			t.Fatalf("expected 1 box, got %d", len(lines[0].Boxes))
 		}
 
-		// The image should be scaled to fit within frameWidth (300)
+		// The image should keep its natural width (600), overflowing the frame.
+		// A horizontal scrollbar will be added by block region detection.
 		gotWidth := lines[0].Boxes[0].Box.Wid
-		if gotWidth > frameWidth {
-			t.Errorf("image box width = %d, should be <= frame width %d", gotWidth, frameWidth)
+		if gotWidth != 600 {
+			t.Errorf("image box width = %d, want 600 (native width, not clamped)", gotWidth)
 		}
-		// After scaling 600 -> 300, the width should be exactly frameWidth
-		if gotWidth != frameWidth {
-			t.Errorf("image box width = %d, want %d (scaled to fit)", gotWidth, frameWidth)
+		// ContentWidth should be set for horizontal scrollbar detection
+		if lines[0].ContentWidth != 600 {
+			t.Errorf("ContentWidth = %d, want 600", lines[0].ContentWidth)
 		}
 	})
 
@@ -1815,9 +1817,9 @@ func TestImageBoxDimensionsExplicitWidth(t *testing.T) {
 	})
 }
 
-// TestImageBoxDimensionsClampToFrame tests that explicit ImageWidth is
-// clamped to the frame width when it exceeds it.
-func TestImageBoxDimensionsClampToFrame(t *testing.T) {
+// TestImageBoxDimensionsNoClamp tests that images are NOT clamped to frame
+// width. They overflow and get horizontal scrollbars instead.
+func TestImageBoxDimensionsNoClamp(t *testing.T) {
 	// Image is 400x200 (2:1 aspect ratio)
 	mockImage := &CachedImage{
 		Width:  400,
@@ -1825,37 +1827,191 @@ func TestImageBoxDimensionsClampToFrame(t *testing.T) {
 		Path:   "photo.png",
 	}
 
-	t.Run("explicit width clamped to frame", func(t *testing.T) {
+	t.Run("explicit width exceeding frame is not clamped", func(t *testing.T) {
 		box := Box{
 			Style:     Style{Image: true, ImageURL: "photo.png", ImageWidth: 500, Scale: 1.0},
 			ImageData: mockImage,
 		}
-		// Frame is only 300 wide, so 500 should be clamped to 300
+		// Frame is only 300 wide, but image should use explicit width 500
 		w, h := imageBoxDimensions(&box, 300)
-		if w != 300 {
-			t.Errorf("width = %d, want 300 (clamped to frame)", w)
+		if w != 500 {
+			t.Errorf("width = %d, want 500 (explicit width, not clamped)", w)
 		}
-		// Height should scale proportionally from original: 200 * (300/400) = 150
-		if h != 150 {
-			t.Errorf("height = %d, want 150", h)
+		// Height should scale proportionally from original: 200 * (500/400) = 250
+		if h != 250 {
+			t.Errorf("height = %d, want 250", h)
 		}
 	})
 
-	t.Run("natural size wider than frame still clamped", func(t *testing.T) {
-		// Even without explicit width, images wider than frame are clamped
+	t.Run("natural size wider than frame is not clamped", func(t *testing.T) {
 		box := Box{
 			Style:     Style{Image: true, ImageURL: "photo.png", ImageWidth: 0, Scale: 1.0},
 			ImageData: mockImage,
 		}
 		w, h := imageBoxDimensions(&box, 200)
-		if w != 200 {
-			t.Errorf("width = %d, want 200 (clamped to frame)", w)
+		if w != 400 {
+			t.Errorf("width = %d, want 400 (natural width, not clamped)", w)
 		}
-		// 200 * (200/400) = 100
-		if h != 100 {
-			t.Errorf("height = %d, want 100", h)
+		if h != 200 {
+			t.Errorf("height = %d, want 200 (natural height)", h)
 		}
 	})
+}
+
+// =============================================================================
+// Phase 25B: Block Region Identification Tests
+// =============================================================================
+
+// TestFindBlockRegionsSingleCodeBlock tests that a single code block is
+// identified as one BlockRegion with the correct start/end lines and max width.
+func TestFindBlockRegionsSingleCodeBlock(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 200
+	maxtab := 80
+
+	// Three lines of block code
+	content := Content{
+		{Text: "line1", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "a_longer_line_two", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "ln3", Style: Style{Block: true, Code: true, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+
+	if len(regions) != 1 {
+		t.Fatalf("expected 1 block region, got %d", len(regions))
+	}
+
+	r := regions[0]
+	if r.Kind != BlockCode {
+		t.Errorf("Kind = %d, want BlockCode (%d)", r.Kind, BlockCode)
+	}
+	if r.StartLine != 0 {
+		t.Errorf("StartLine = %d, want 0", r.StartLine)
+	}
+	if r.EndLine != len(lines) {
+		t.Errorf("EndLine = %d, want %d", r.EndLine, len(lines))
+	}
+
+	// MaxContentWidth should be from the longest line ("a_longer_line_two" = 17 chars * 10 = 170 + 40 indent = 210)
+	codeBlockIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M"))
+	expectedMax := codeBlockIndent + 17*10
+	if r.MaxContentWidth != expectedMax {
+		t.Errorf("MaxContentWidth = %d, want %d", r.MaxContentWidth, expectedMax)
+	}
+}
+
+// TestFindBlockRegionsMultipleBlocks tests that multiple separate blocks
+// (e.g., two code blocks separated by normal text) produce separate regions.
+func TestFindBlockRegionsMultipleBlocks(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	// Code block, then normal text, then another code block
+	content := Content{
+		{Text: "code1", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "code1b", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "normal text paragraph", Style: Style{Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "code2", Style: Style{Block: true, Code: true, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+
+	if len(regions) != 2 {
+		t.Fatalf("expected 2 block regions, got %d", len(regions))
+	}
+
+	// First region should be code block
+	if regions[0].Kind != BlockCode {
+		t.Errorf("region 0 Kind = %d, want BlockCode", regions[0].Kind)
+	}
+	if regions[0].StartLine != 0 {
+		t.Errorf("region 0 StartLine = %d, want 0", regions[0].StartLine)
+	}
+
+	// Second region should also be code block, starting after the normal text
+	if regions[1].Kind != BlockCode {
+		t.Errorf("region 1 Kind = %d, want BlockCode", regions[1].Kind)
+	}
+	// The second code block should start after the normal text lines
+	if regions[1].StartLine <= regions[0].EndLine {
+		t.Errorf("region 1 StartLine (%d) should be > region 0 EndLine (%d)",
+			regions[1].StartLine, regions[0].EndLine)
+	}
+}
+
+// TestFindBlockRegionsNoBlocks tests that normal text produces no block regions.
+func TestFindBlockRegionsNoBlocks(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	content := Content{
+		{Text: "Just some normal text", Style: Style{Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "Another paragraph", Style: Style{Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+
+	if len(regions) != 0 {
+		t.Errorf("expected 0 block regions for normal text, got %d", len(regions))
+	}
+}
+
+// TestFindBlockRegionsMixedContent tests block region identification with
+// mixed content: code blocks, tables, and normal text interleaved.
+func TestFindBlockRegionsMixedContent(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	// Code block, then normal text, then table
+	content := Content{
+		// Code block (2 lines)
+		{Text: "func main()", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "  return", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		// Normal text
+		{Text: "Some explanation", Style: Style{Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		// Table (1 line)
+		{Text: "| col1 | col2 |", Style: Style{Table: true, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+
+	if len(regions) != 2 {
+		t.Fatalf("expected 2 block regions (code + table), got %d", len(regions))
+	}
+
+	if regions[0].Kind != BlockCode {
+		t.Errorf("region 0 Kind = %d, want BlockCode", regions[0].Kind)
+	}
+	if regions[1].Kind != BlockTable {
+		t.Errorf("region 1 Kind = %d, want BlockTable", regions[1].Kind)
+	}
+
+	// Regions should not overlap
+	if regions[1].StartLine < regions[0].EndLine {
+		t.Errorf("regions overlap: region 0 EndLine=%d, region 1 StartLine=%d",
+			regions[0].EndLine, regions[1].StartLine)
+	}
 }
 
 // Helper: testLayoutFont implements draw.Font for testing
@@ -1890,4 +2046,393 @@ func saveTestPNG(path string, img *image.RGBA) error {
 	}
 	defer f.Close()
 	return png.Encode(f, img)
+}
+
+// =============================================================================
+// Phase 25A: ContentWidth and No-Wrap for Block Code
+// =============================================================================
+
+// TestLayoutBlockCodeNoWrap tests that block code content wider than frameWidth
+// produces a single line (no wrapping) with ContentWidth > frameWidth.
+func TestLayoutBlockCodeNoWrap(t *testing.T) {
+	// Mock font with fixed character width of 10 pixels, height 14
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 200
+	maxtab := 80
+
+	// Code block indent = 4 * 10 = 40 pixels
+	codeBlockIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M"))
+
+	// Create a long block code line: 30 chars * 10px = 300px of text content
+	// Plus 40px indent = 340px total, which exceeds frameWidth of 200.
+	longCode := "this_is_a_very_long_code_line!"
+	// 29 chars * 10 = 290 pixels of text, plus 40px indent = 330px total
+	content := Content{
+		{Text: longCode, Style: Style{Block: true, Code: true, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	// Should produce exactly 1 line (no wrapping for block code)
+	if len(lines) != 1 {
+		var lineContents []string
+		for i, line := range lines {
+			var c string
+			for _, pb := range line.Boxes {
+				c += boxToString(pb.Box)
+			}
+			lineContents = append(lineContents, fmt.Sprintf("line[%d]: %q (Y=%d)", i, c, line.Y))
+		}
+		t.Fatalf("block code should not wrap: got %d lines, want 1\n%s",
+			len(lines), strings.Join(lineContents, "\n"))
+	}
+
+	// ContentWidth should exceed frameWidth
+	expectedContentWidth := codeBlockIndent + len(longCode)*10
+	if lines[0].ContentWidth < frameWidth {
+		t.Errorf("ContentWidth = %d, want > %d (frameWidth); expected ~%d",
+			lines[0].ContentWidth, frameWidth, expectedContentWidth)
+	}
+}
+
+// TestLayoutNormalTextStillWraps verifies that normal prose text still wraps
+// after adding the no-wrap behavior for block code. This is a regression test.
+func TestLayoutNormalTextStillWraps(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 100 // Narrow frame to force wrapping
+	maxtab := 80
+
+	// 20 chars * 10px = 200px, well over the 100px frame width
+	content := Plain("this is some normal text that should wrap")
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	// Normal text should wrap to multiple lines
+	if len(lines) < 2 {
+		t.Errorf("normal text should wrap: got %d lines, want >= 2", len(lines))
+	}
+}
+
+// TestContentWidthComputed verifies that ContentWidth is correctly computed
+// on layout lines for both block code and normal text.
+func TestContentWidthComputed(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	maxtab := 80
+
+	t.Run("block code line has ContentWidth equal to rightmost box extent", func(t *testing.T) {
+		frameWidth := 500 // Wide enough that content fits
+		// "hello" = 5 chars * 10px = 50px text, plus 40px indent = 90px total
+		content := Content{
+			{Text: "hello", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		}
+		boxes := contentToBoxes(content)
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+
+		codeBlockIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M"))
+		expectedCW := codeBlockIndent + 50 // indent + text width
+		if lines[0].ContentWidth != expectedCW {
+			t.Errorf("ContentWidth = %d, want %d", lines[0].ContentWidth, expectedCW)
+		}
+	})
+
+	t.Run("normal text line has ContentWidth zero or capped at frameWidth", func(t *testing.T) {
+		frameWidth := 500
+		content := Plain("hello world")
+		boxes := contentToBoxes(content)
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+
+		// For non-block lines, ContentWidth should be 0 (per the design doc)
+		if lines[0].ContentWidth != 0 {
+			t.Errorf("normal text ContentWidth = %d, want 0", lines[0].ContentWidth)
+		}
+	})
+
+	t.Run("block code wider than frame has ContentWidth exceeding frame", func(t *testing.T) {
+		frameWidth := 100
+		// 20 chars * 10px = 200px + 40px indent = 240px
+		content := Content{
+			{Text: "a_long_code_line_xxxx", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		}
+		boxes := contentToBoxes(content)
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+		if len(lines) != 1 {
+			t.Fatalf("block code should not wrap: expected 1 line, got %d", len(lines))
+		}
+
+		if lines[0].ContentWidth <= frameWidth {
+			t.Errorf("block code ContentWidth = %d, should exceed frameWidth %d",
+				lines[0].ContentWidth, frameWidth)
+		}
+	})
+
+	t.Run("multi-line content has ContentWidth per line", func(t *testing.T) {
+		frameWidth := 500
+		// Two lines of block code with different widths
+		content := Content{
+			{Text: "short", Style: Style{Block: true, Code: true, Scale: 1.0}},
+			{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+			{Text: "a_longer_line", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		}
+		boxes := contentToBoxes(content)
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines, got %d", len(lines))
+		}
+
+		codeBlockIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M"))
+		expectedCW0 := codeBlockIndent + 50  // "short" = 5*10
+		expectedCW1 := codeBlockIndent + 130 // "a_longer_line" = 13*10
+
+		if lines[0].ContentWidth != expectedCW0 {
+			t.Errorf("line 0 ContentWidth = %d, want %d", lines[0].ContentWidth, expectedCW0)
+		}
+		if lines[1].ContentWidth != expectedCW1 {
+			t.Errorf("line 1 ContentWidth = %d, want %d", lines[1].ContentWidth, expectedCW1)
+		}
+	})
+}
+
+// =============================================================================
+// Phase 25D: Two-Pass Layout for Scrollbar Height
+// =============================================================================
+
+// TestTwoPassLayoutAddsScrollbarHeight tests that an overflowing block region
+// causes subsequent lines to be shifted down by scrollbarHeight pixels.
+// After pass 1 layout and block region identification, pass 2 should insert
+// Scrollwid pixels of additional Y space after the last line of each overflowing
+// block region.
+func TestTwoPassLayoutAddsScrollbarHeight(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 200
+	maxtab := 80
+	scrollbarHeight := 12 // Matches Scrollwid
+
+	// Code block with long content (overflows frameWidth), followed by normal text.
+	// Code block indent = 4 * 10 = 40px.
+	// "a_very_long_code_line_xxxxx" = 27 chars * 10px = 270px + 40px indent = 310px > 200px
+	content := Content{
+		{Text: "a_very_long_code_line_xxxxx", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "short", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "normal text after code block", Style: Style{Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+	if len(regions) != 1 {
+		t.Fatalf("expected 1 block region, got %d", len(regions))
+	}
+
+	// The block region should overflow (MaxContentWidth > frameWidth)
+	if regions[0].MaxContentWidth <= frameWidth {
+		t.Fatalf("block region MaxContentWidth = %d, should exceed frameWidth %d",
+			regions[0].MaxContentWidth, frameWidth)
+	}
+
+	// Record the Y position of the normal text line before adjustment
+	// The code block has 2 lines (indices 0 and 1), newline creates line at index 2,
+	// then normal text is on the line after the newline.
+	normalTextLineIdx := -1
+	for i, line := range lines {
+		for _, pb := range line.Boxes {
+			if string(pb.Box.Text) == "normal" {
+				normalTextLineIdx = i
+				break
+			}
+		}
+		if normalTextLineIdx >= 0 {
+			break
+		}
+	}
+	if normalTextLineIdx < 0 {
+		t.Fatal("could not find normal text line")
+	}
+	yBefore := lines[normalTextLineIdx].Y
+
+	// Apply the two-pass adjustment
+	adjustedRegions := adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	// After adjustment, the normal text line should be shifted down by scrollbarHeight
+	yAfter := lines[normalTextLineIdx].Y
+	if yAfter != yBefore+scrollbarHeight {
+		t.Errorf("normal text Y after adjustment = %d, want %d (shifted by scrollbarHeight %d from %d)",
+			yAfter, yBefore+scrollbarHeight, scrollbarHeight, yBefore)
+	}
+
+	// The adjusted regions should indicate which regions have scrollbars
+	if len(adjustedRegions) != 1 {
+		t.Fatalf("expected 1 adjusted region, got %d", len(adjustedRegions))
+	}
+	if !adjustedRegions[0].HasScrollbar {
+		t.Error("overflowing region should have HasScrollbar = true")
+	}
+	if adjustedRegions[0].ScrollbarY <= 0 {
+		t.Errorf("ScrollbarY = %d, should be > 0 for overflowing region", adjustedRegions[0].ScrollbarY)
+	}
+}
+
+// TestTwoPassLayoutNoShiftWhenFits tests that a block region that fits within
+// frameWidth does not add any extra height or shift subsequent lines.
+func TestTwoPassLayoutNoShiftWhenFits(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500 // Wide enough to fit everything
+	maxtab := 80
+	scrollbarHeight := 12
+
+	// Code block that fits within frameWidth, followed by normal text.
+	// "short" = 5 chars * 10px = 50px + 40px indent = 90px < 500px
+	content := Content{
+		{Text: "short", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "normal text", Style: Style{Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+	if len(regions) != 1 {
+		t.Fatalf("expected 1 block region, got %d", len(regions))
+	}
+
+	// The block region should NOT overflow
+	if regions[0].MaxContentWidth > frameWidth {
+		t.Fatalf("block region MaxContentWidth = %d, should be <= frameWidth %d",
+			regions[0].MaxContentWidth, frameWidth)
+	}
+
+	// Record the Y position of the normal text line before adjustment
+	normalTextLineIdx := len(lines) - 1
+	yBefore := lines[normalTextLineIdx].Y
+
+	// Apply the two-pass adjustment
+	adjustedRegions := adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	// Y position should be unchanged (no scrollbar needed)
+	yAfter := lines[normalTextLineIdx].Y
+	if yAfter != yBefore {
+		t.Errorf("normal text Y after adjustment = %d, want %d (should be unchanged for non-overflowing block)",
+			yAfter, yBefore)
+	}
+
+	// The adjusted region should NOT have a scrollbar
+	if len(adjustedRegions) != 1 {
+		t.Fatalf("expected 1 adjusted region, got %d", len(adjustedRegions))
+	}
+	if adjustedRegions[0].HasScrollbar {
+		t.Error("non-overflowing region should not have HasScrollbar = true")
+	}
+}
+
+// TestMultipleOverflowingBlocks tests that multiple overflowing block regions
+// produce cumulative Y shifts. Each overflowing block adds scrollbarHeight
+// to subsequent line positions.
+func TestMultipleOverflowingBlocks(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 200
+	maxtab := 80
+	scrollbarHeight := 12
+
+	// Two overflowing code blocks separated by normal text, then trailing normal text.
+	// Code block indent = 40px.
+	// "overflowing_code_block_one!" = 27 chars * 10px = 270px + 40px = 310px > 200px
+	// "overflowing_code_block_two!" = 27 chars * 10px = 270px + 40px = 310px > 200px
+	content := Content{
+		{Text: "overflowing_code_block_one!", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "middle text", Style: Style{Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "overflowing_code_block_two!", Style: Style{Block: true, Code: true, Scale: 1.0}},
+		{Text: "\n", Style: Style{Scale: 1.0}},
+		{Text: "trailing text", Style: Style{Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	regions := findBlockRegions(lines)
+	if len(regions) != 2 {
+		t.Fatalf("expected 2 block regions, got %d", len(regions))
+	}
+
+	// Both regions should overflow
+	for i, r := range regions {
+		if r.MaxContentWidth <= frameWidth {
+			t.Fatalf("region %d MaxContentWidth = %d, should exceed frameWidth %d",
+				i, r.MaxContentWidth, frameWidth)
+		}
+	}
+
+	// Find the trailing text line
+	trailingTextLineIdx := -1
+	for i, line := range lines {
+		for _, pb := range line.Boxes {
+			if string(pb.Box.Text) == "trailing" {
+				trailingTextLineIdx = i
+				break
+			}
+		}
+		if trailingTextLineIdx >= 0 {
+			break
+		}
+	}
+	if trailingTextLineIdx < 0 {
+		t.Fatal("could not find trailing text line")
+	}
+	yBefore := lines[trailingTextLineIdx].Y
+
+	// Also find middle text line
+	middleTextLineIdx := -1
+	for i, line := range lines {
+		for _, pb := range line.Boxes {
+			if string(pb.Box.Text) == "middle" {
+				middleTextLineIdx = i
+				break
+			}
+		}
+		if middleTextLineIdx >= 0 {
+			break
+		}
+	}
+	if middleTextLineIdx < 0 {
+		t.Fatal("could not find middle text line")
+	}
+	middleYBefore := lines[middleTextLineIdx].Y
+
+	// Apply the two-pass adjustment
+	adjustedRegions := adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	// Middle text is after the first overflowing block: shifted by 1 * scrollbarHeight
+	middleYAfter := lines[middleTextLineIdx].Y
+	if middleYAfter != middleYBefore+scrollbarHeight {
+		t.Errorf("middle text Y after adjustment = %d, want %d (shifted by 1 * scrollbarHeight from %d)",
+			middleYAfter, middleYBefore+scrollbarHeight, middleYBefore)
+	}
+
+	// Trailing text is after both overflowing blocks: shifted by 2 * scrollbarHeight
+	yAfter := lines[trailingTextLineIdx].Y
+	if yAfter != yBefore+2*scrollbarHeight {
+		t.Errorf("trailing text Y after adjustment = %d, want %d (shifted by 2 * scrollbarHeight from %d)",
+			yAfter, yBefore+2*scrollbarHeight, yBefore)
+	}
+
+	// Both adjusted regions should have scrollbars
+	if len(adjustedRegions) != 2 {
+		t.Fatalf("expected 2 adjusted regions, got %d", len(adjustedRegions))
+	}
+	for i, r := range adjustedRegions {
+		if !r.HasScrollbar {
+			t.Errorf("adjusted region %d should have HasScrollbar = true", i)
+		}
+	}
 }
