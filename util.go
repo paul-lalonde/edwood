@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"image"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,27 +11,20 @@ import (
 	"github.com/rjkroege/edwood/util"
 )
 
-var (
-	prevmouse image.Point
-	mousew    *Window
-)
-
+// clearmouse removes any saved mouse state.
 func clearmouse() {
-	mousew = nil
+	global.mousestate.Clear()
 }
 
+// savemouse stores the current mouse position and associated window.
 func savemouse(w *Window) {
-	prevmouse = global.mouse.Point
-	mousew = w
+	global.mousestate.Save(w, global.mouse.Point)
 }
 
+// restoremouse moves the mouse cursor to the saved position if the given window
+// matches the saved window. Returns true if the cursor was moved.
 func restoremouse(w *Window) bool {
-	defer func() { mousew = nil }()
-	if mousew != nil && mousew == w {
-		w.display.MoveTo(prevmouse)
-		return true
-	}
-	return false
+	return global.mousestate.Restore(w)
 }
 
 func bytetorune(s []byte) []rune {
@@ -63,11 +55,11 @@ func errorwin1Name(dir string) string {
 }
 
 // errorwin1 is an internal helper function.
+// Caller must hold global.row.lk.
 func errorwin1(dir string, incl []string) *Window {
 	r := errorwin1Name(dir)
 	w := lookfile(r)
 	if w == nil {
-		// TODO(rjk): This should be inside the row lock.
 		if len(global.row.col) == 0 {
 			if global.row.Add(nil, -1) == nil {
 				util.AcmeError("can't create column to make error window", nil)
@@ -85,20 +77,36 @@ func errorwin1(dir string, incl []string) *Window {
 	return w
 }
 
-// make new window, if necessary; return with it locked
-func errorwin(md *MntDir, owner int) *Window {
-	var w *Window
+// errorwin creates or finds an error window and returns it locked.
+// If srcWin is non-nil, extracts directory and includes from it
+// (srcWin must be locked; it will be unlocked before returning).
+// If srcWin is nil, uses md for directory and includes.
+func errorwin(md *MntDir, owner int, srcWin *Window) *Window {
+	var (
+		dir  string
+		incl []string
+		w    *Window
+	)
+
+	if srcWin != nil {
+		// Extract info from source window and unlock it
+		dir = srcWin.body.DirName("")
+		incl = append(incl, srcWin.incl...)
+		owner = srcWin.owner
+		srcWin.Unlock()
+	} else if md != nil {
+		dir = md.dir
+		incl = md.incl
+	}
 
 	for {
-		if md == nil {
-			w = errorwin1("", nil)
-		} else {
-			w = errorwin1(md.dir, md.incl)
-		}
-
-		// TODO(rjk): This locking behaviour seems suspect?
-		// There is an implicit assumption of a race condition here?
+		// Hold row lock during errorwin1 and window locking to ensure
+		// consistent access to global.row.col. Lock ordering: row -> window.
+		global.row.lk.Lock()
+		w = errorwin1(dir, incl)
 		w.Lock(owner)
+		global.row.lk.Unlock()
+
 		if w.col != nil {
 			break
 		}
@@ -108,38 +116,23 @@ func errorwin(md *MntDir, owner int) *Window {
 	return w
 }
 
-// Incoming window should be locked.
-// It will be unlocked and returned window
-// will be locked in its place.
+// errorwinforwin creates an error window for the given window's directory.
+// The incoming window must be locked; it will be unlocked and the returned
+// error window will be locked in its place.
+// Deprecated: Use errorwin(nil, 0, w) instead.
 func errorwinforwin(w *Window) *Window {
-	var (
-		owner int
-		incl  []string
-		t     *Text
-	)
-
-	t = &w.body
-	dir := t.DirName("")
-	incl = append(incl, w.incl...)
-	owner = w.owner
-	w.Unlock()
-	for {
-		w = errorwin1(dir, incl)
-		w.Lock(owner)
-		if w.col != nil {
-			break
-		}
-		// window deleted too fast
-		w.Unlock()
-	}
-	return w
+	return errorwin(nil, 0, w)
 }
 
 // Heuristic city.
-// TODO(rjk): There are multiple places in this file where we access a
-// global row without any locking discipline. I presume that that this
-// can lead to crashes and incorrect behaviour.
+// makenewwindow creates a new window, choosing an appropriate location
+// based on the current state of the editor.
 func makenewwindow(t *Text) *Window {
+	// Hold row lock throughout to protect access to global.row.col,
+	// global.activecol, global.seltext, and column window lists.
+	global.row.lk.Lock()
+	defer global.row.lk.Unlock()
+
 	var (
 		c               *Column
 		w, bigw, emptyw *Window
@@ -206,14 +199,22 @@ var warnings = []*Warning{}
 var warningsMu sync.Mutex
 
 func flushwarnings() {
-	// TODO(rjk): why don't we lock warningsMu?
+	// Lock warningsMu to safely swap out the warnings list.
+	// We make a local copy and clear the global list while holding the lock,
+	// then process the copy without holding warningsMu to avoid lock ordering
+	// issues (we need to acquire row and window locks during processing).
+	warningsMu.Lock()
+	localWarnings := warnings
+	warnings = warnings[:0]
+	warningsMu.Unlock()
+
 	var (
 		w     *Window
 		t     *Text
 		owner int
 	)
-	for _, warn := range warnings {
-		w = errorwin(warn.md, 'E')
+	for _, warn := range localWarnings {
+		w = errorwin(warn.md, 'E', nil)
 		t = &w.body
 		owner = w.owner
 		if owner == 0 {
@@ -237,7 +238,6 @@ func flushwarnings() {
 			mnt.DecRef(warn.md) // IncRef in addwarningtext
 		}
 	}
-	warnings = warnings[0:0]
 }
 
 func warning(md *MntDir, s string, args ...interface{}) {

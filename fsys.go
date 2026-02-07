@@ -25,8 +25,6 @@ type fileServer struct {
 	messagesize int
 }
 
-const DEBUG = false
-
 type fsfunc func(*Xfid, *Fid) *Xfid
 
 func (fs *fileServer) initfcall() {
@@ -135,9 +133,6 @@ func (fs *fileServer) fsysproc() {
 			}
 			util.AcmeError("fsysproc", err)
 		}
-		if DEBUG {
-			fmt.Fprintf(os.Stderr, "<-- %v\n", fc)
-		}
 		if x == nil {
 			global.cxfidalloc <- nil
 			x = <-global.cxfidalloc
@@ -169,6 +164,7 @@ func (fs *fileServer) fsysproc() {
 // Add creates a new MntDir and returns a new reference to it.
 func (mnt *Mnt) Add(dir string, incl []string) *MntDir {
 	mnt.lk.Lock()
+	defer mnt.lk.Unlock()
 	mnt.id++
 	m := &MntDir{
 		id:   mnt.id,
@@ -180,15 +176,14 @@ func (mnt *Mnt) Add(dir string, incl []string) *MntDir {
 		mnt.md = make(map[uint64]*MntDir)
 	}
 	mnt.md[m.id] = m
-	mnt.lk.Unlock()
 	return m
 }
 
 // IncRef increments reference to given MntDir.
 func (mnt *Mnt) IncRef(m *MntDir) {
 	mnt.lk.Lock()
+	defer mnt.lk.Unlock()
 	m.ref++
-	mnt.lk.Unlock()
 }
 
 // DecRef decrements reference to given MntDir.
@@ -243,9 +238,6 @@ func (fs *fileServer) respond(x *Xfid, t *plan9.Fcall, err error) *Xfid {
 	t.Tag = x.fcall.Tag
 	if err := plan9.WriteFcall(fs.conn, t); err != nil {
 		util.AcmeError("write error in respond", err)
-	}
-	if DEBUG {
-		fmt.Fprintf(os.Stderr, "--> %v\n", t)
 	}
 	return x
 }
@@ -428,15 +420,19 @@ func (f *Fid) Walk1(wname string) (found bool, err error) {
 			id64, _ := strconv.ParseInt(wname, 10, 32)
 			id = int(id64)
 		}
+		// Look up window under row lock, then increment ref under window lock.
+		// This follows the lock ordering: row lock -> window lock.
 		global.row.lk.Lock()
-		f.w = global.row.LookupWin(id)
-		if f.w == nil {
+		w := global.row.LookupWin(id)
+		if w == nil {
 			global.row.lk.Unlock()
 			return false, nil
 		}
-		f.w.ref.Inc() // we'll drop reference at end if there's an error
+		w.lk.Lock()
 		global.row.lk.Unlock()
-
+		w.ref.Inc() // we'll drop reference at end if there's an error
+		w.lk.Unlock()
+		f.w = w
 		f.dir = dirtabw[0] // '.'
 		f.qid.Type = plan9.QTDIR
 		f.qid.Vers = 0
@@ -477,13 +473,19 @@ func (f *Fid) Walk1(wname string) (found bool, err error) {
 	return false, nil // file not found
 }
 
+// denyAccess responds to an Xfid with a permission denied error.
+func (fs *fileServer) denyAccess(x *Xfid) *Xfid {
+	var t plan9.Fcall
+	return fs.respond(x, &t, ErrPermission)
+}
+
 func (fs *fileServer) open(x *Xfid, f *Fid) *Xfid {
 	var m plan9.Perm
 	// can't truncate anything, so just disregard
 	x.fcall.Mode &= ^uint8(plan9.OTRUNC | plan9.OCEXEC)
 	// can't execute or remove anything
 	if x.fcall.Mode == plan9.OEXEC || (x.fcall.Mode&plan9.ORCLOSE) != 0 {
-		goto Deny
+		return fs.denyAccess(x)
 	}
 	switch x.fcall.Mode {
 	case plan9.OREAD:
@@ -493,17 +495,13 @@ func (fs *fileServer) open(x *Xfid, f *Fid) *Xfid {
 	case plan9.ORDWR:
 		m = 0600
 	default:
-		goto Deny
+		return fs.denyAccess(x)
 	}
 	if ((f.dir.perm &^ (plan9.DMDIR | plan9.DMAPPEND)) & m) != m {
-		goto Deny
+		return fs.denyAccess(x)
 	}
 	x.c <- xfidopen
 	return nil
-
-Deny:
-	var t plan9.Fcall
-	return fs.respond(x, &t, ErrPermission)
 }
 
 func (fs *fileServer) create(x *Xfid, f *Fid) *Xfid {
@@ -511,7 +509,6 @@ func (fs *fileServer) create(x *Xfid, f *Fid) *Xfid {
 	return fs.respond(x, &t, ErrPermission)
 }
 
-// TODO(flux): I'm pretty sure handling of int64 sized files is broken by type casts to int.
 func (fs *fileServer) read(x *Xfid, f *Fid) *Xfid {
 	if f.qid.Type&plan9.QTDIR != 0 {
 		if FILE(f.qid) == Qacme { // empty dir

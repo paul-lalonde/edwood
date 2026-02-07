@@ -74,14 +74,6 @@ func (c *Column) Init(r image.Rectangle, dis draw.Display) *Column {
 	return c
 }
 
-// TODO(rjk): Remove the dead code.
-/*
-func (c *Column) AddFile(f *File) *Window {
-	w := NewWindow(f)
-	c.Add(w, nil, 0)
-}
-*/
-
 // findWindowContainingY finds the window containing vertical offset y
 // and returns the Window and its index.
 // TODO(rjk): It's almost certain that we repeat this code somewhere else.
@@ -94,6 +86,17 @@ func (c *Column) findWindowContainingY(y int) (i int, v *Window) {
 		}
 	}
 	return len(c.w), v
+}
+
+// findWindowIndex returns the index of window w in the column,
+// or -1 if the window is not found.
+func (c *Column) findWindowIndex(w *Window) int {
+	for i, win := range c.w {
+		if win == w {
+			return i
+		}
+	}
+	return -1
 }
 
 // Add adds a window to the Column.
@@ -346,8 +349,6 @@ func (c *Column) Sort() {
 
 // Grow Window w with a mode determined by mouse button but.
 func (c *Column) Grow(w *Window, but int) {
-	//var nl, ny *int
-
 	var windex int
 
 	for windex = 0; windex < len(c.w); windex++ {
@@ -406,9 +407,7 @@ func (c *Column) Grow(w *Window, but int) {
 		for i := range nl {
 			nl[i] = 0
 		}
-		goto Pack
-	}
-	{ // Scope for nnl & dln
+	} else {
 		nnl := util.Min(onl+util.Max(util.Min(5, w.taglines-1+w.maxlines), onl/2), tot) // TODO(flux) more bad taglines use
 		if nnl < w.taglines-1+w.maxlines {
 			nnl = (w.taglines - 1 + w.maxlines + nnl) / 2
@@ -437,7 +436,12 @@ func (c *Column) Grow(w *Window, but int) {
 			}
 		}
 	}
-Pack:
+	c.packColumn(w, windex, cr, nl)
+}
+
+// packColumn resizes all windows in the column to accommodate the target window w at windex.
+// nl contains the target number of lines for each window.
+func (c *Column) packColumn(w *Window, windex int, cr image.Rectangle, nl []int) {
 	ny := make([]int, c.nw())
 	// pack everyone above
 	y1 := cr.Min.Y
@@ -512,11 +516,11 @@ Pack:
 
 func (c *Column) DragWin(w *Window, but int) {
 	var (
-		r      image.Rectangle
-		i, b   int
-		p, op  image.Point
-		v, win *Window
-		nc     *Column
+		r     image.Rectangle
+		b     int
+		p, op image.Point
+		v     *Window
+		nc    *Column
 	)
 	clearmouse()
 	c.display.SetCursor(&boxcursor)
@@ -533,15 +537,12 @@ func (c *Column) DragWin(w *Window, but int) {
 		return
 	}
 
-	// Make sure our window was in our column
-	for i, win = range c.w {
-		if win == w {
-			goto Found
-		}
+	// Find window w in our column
+	i := c.findWindowIndex(w)
+	if i < 0 {
+		util.AcmeError("can't find window", nil)
+		return
 	}
-	util.AcmeError("can't find window", nil)
-
-Found:
 	if w.tagexpand { // force recomputation of window tag size
 		w.taglines = 1
 	}
