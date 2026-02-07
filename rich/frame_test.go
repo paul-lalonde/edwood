@@ -229,19 +229,32 @@ func TestDrawTextAtCorrectPosition(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Text should be rendered at the frame origin (rect.Min)
-	// The mock records: "string \"test\" atpoint: (20,10)"
-	foundAtOrigin := false
-	expectedPos := fmt.Sprintf("atpoint: %v", rect.Min)
+	// Text should be rendered at origin (0,0) in scratch image coordinates.
+	// The scratch image is then blitted to the frame origin on screen.
+	// When using scratch-based clipping, text is drawn at local coords.
+	foundText := false
 	for _, op := range ops {
-		if strings.Contains(op, `string "test"`) && strings.Contains(op, expectedPos) {
-			foundAtOrigin = true
+		if strings.Contains(op, `string "test"`) {
+			foundText = true
 			break
 		}
 	}
 
-	if !foundAtOrigin {
-		t.Errorf("Redraw() did not render 'test' at frame origin %v\ngot ops: %v", rect.Min, ops)
+	if !foundText {
+		t.Errorf("Redraw() did not render 'test'\ngot ops: %v", ops)
+	}
+
+	// Verify the final blit to screen places content at frame origin
+	foundBlit := false
+	expectedRect := fmt.Sprintf("fill %v", rect)
+	for _, op := range ops {
+		if strings.Contains(op, expectedRect) {
+			foundBlit = true
+			break
+		}
+	}
+	if !foundBlit {
+		t.Errorf("Redraw() did not blit to frame rect %v\ngot ops: %v", rect, ops)
 	}
 }
 
@@ -264,27 +277,41 @@ func TestDrawTextSecondLinePosition(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// First line at Y=10, second line at Y=10+14=24
-	firstLineY := rect.Min.Y
-	secondLineY := rect.Min.Y + 14
-
+	// When using scratch-based clipping, text is drawn at local coordinates.
+	// First line at Y=0, second line at Y=14 (font height)
+	// The scratch image is then blitted to screen at frame origin.
 	foundFirstLine := false
 	foundSecondLine := false
 
 	for _, op := range ops {
-		if strings.Contains(op, `string "line1"`) && strings.Contains(op, fmt.Sprintf("(%d,%d)", rect.Min.X, firstLineY)) {
+		// Check for line1 at local Y=0
+		if strings.Contains(op, `string "line1"`) && strings.Contains(op, "(0,0)") {
 			foundFirstLine = true
 		}
-		if strings.Contains(op, `string "line2"`) && strings.Contains(op, fmt.Sprintf("(%d,%d)", rect.Min.X, secondLineY)) {
+		// Check for line2 at local Y=14 (one line height below)
+		if strings.Contains(op, `string "line2"`) && strings.Contains(op, "(0,14)") {
 			foundSecondLine = true
 		}
 	}
 
 	if !foundFirstLine {
-		t.Errorf("Redraw() did not render 'line1' at Y=%d\ngot ops: %v", firstLineY, ops)
+		t.Errorf("Redraw() did not render 'line1' at local Y=0\ngot ops: %v", ops)
 	}
 	if !foundSecondLine {
-		t.Errorf("Redraw() did not render 'line2' at Y=%d\ngot ops: %v", secondLineY, ops)
+		t.Errorf("Redraw() did not render 'line2' at local Y=14\ngot ops: %v", ops)
+	}
+
+	// Verify the final blit places content at correct screen position
+	foundBlit := false
+	expectedRect := fmt.Sprintf("fill %v", rect)
+	for _, op := range ops {
+		if strings.Contains(op, expectedRect) {
+			foundBlit = true
+			break
+		}
+	}
+	if !foundBlit {
+		t.Errorf("Redraw() did not blit to frame rect %v\ngot ops: %v", rect, ops)
 	}
 }
 
@@ -1811,9 +1838,9 @@ func TestCodeFontFallback(t *testing.T) {
 	}
 }
 
-// TestDrawBlockBackground tests that BlockRegions cause full-width background fills.
-// This is used for fenced code blocks where the background extends to the frame edge,
-// not just the width of the text.
+// TestDrawBlockBackground tests that BlockRegions cause indented background fills.
+// This is used for fenced code blocks where the background extends from the indent
+// to the frame edge, not from the left edge.
 func TestDrawBlockBackground(t *testing.T) {
 	rect := image.Rect(0, 0, 400, 300) // Frame is 400px wide
 	display := edwoodtest.NewDisplay(rect)
@@ -1826,7 +1853,7 @@ func TestDrawBlockBackground(t *testing.T) {
 	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
 
 	// Create content with block-level background (like fenced code)
-	// The Block flag indicates this should have full-width background
+	// The Block flag indicates this should have indented background
 	grayBg := color.RGBA{R: 240, G: 240, B: 240, A: 255}
 	codeBlockStyle := Style{Code: true, Bg: grayBg, Block: true, Scale: 1.0}
 	content := Content{
@@ -1839,32 +1866,33 @@ func TestDrawBlockBackground(t *testing.T) {
 
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// There should be a fill operation that spans the FULL width of the frame
-	// (400px), not just the text width (40px)
+	// Code blocks are indented by CodeBlockIndentChars * M-width = 4 * 10 = 40 pixels
+	// Background should start at x=40 and extend to frame width (400px)
 	foundBlockFill := false
 	frameBackgroundRect := "(0,0)-(400,300)"
+	expectedIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M")) // 40 pixels
 
 	for _, op := range ops {
 		// Look for fill operations that are NOT the frame background
-		// but ARE full-width (x from 0 to 400)
+		// but extend from indent to right edge
 		if strings.HasPrefix(op, "fill ") {
 			if strings.Contains(op, frameBackgroundRect) {
 				continue // Skip the frame background
 			}
-			// Check if this fill extends to the full frame width
-			// The fill should be from X=0 to X=400 (full width)
-			// Format: "fill (0,0)-(400,14)" for first line
-			if strings.Contains(op, "(0,0)-(400,") {
+			// Check if this fill starts at the indent and extends to full frame width
+			// Format: "fill (40,0)-(400,14)" for first line with 40px indent
+			expectedPrefix := fmt.Sprintf("(%d,", expectedIndent)
+			if strings.Contains(op, expectedPrefix) && strings.Contains(op, "-(400,") {
 				foundBlockFill = true
 			}
 		}
 	}
 
 	if !foundBlockFill {
-		t.Errorf("Redraw() did not render full-width block background for code block\nExpected fill from x=0 to x=400, got ops: %v", ops)
+		t.Errorf("Redraw() did not render indented block background for code block\nExpected fill from x=%d to x=400, got ops: %v", expectedIndent, ops)
 	}
 
-	// Also verify text was rendered
+	// Also verify text was rendered at the indented position
 	foundText := false
 	for _, op := range ops {
 		if strings.Contains(op, `string "code"`) {
@@ -1877,7 +1905,7 @@ func TestDrawBlockBackground(t *testing.T) {
 	}
 }
 
-// TestDrawBlockBackgroundMultiLine tests full-width backgrounds spanning multiple lines.
+// TestDrawBlockBackgroundMultiLine tests indented backgrounds spanning multiple lines.
 func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	rect := image.Rect(0, 0, 400, 300) // Frame is 400px wide
 	display := edwoodtest.NewDisplay(rect)
@@ -1903,25 +1931,29 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 	frameBackgroundRect := "(0,0)-(400,300)"
 
-	// Count full-width fill operations (excluding frame background)
-	// Each line should have its own full-width background fill
+	// Code blocks are indented by CodeBlockIndentChars * M-width = 4 * 10 = 40 pixels
+	expectedIndent := CodeBlockIndentChars * font.BytesWidth([]byte("M")) // 40 pixels
+
+	// Count indented fill operations (excluding frame background)
+	// Each line should have its own background fill starting at the indent
 	blockFillCount := 0
+	expectedPrefix := fmt.Sprintf("(%d,", expectedIndent)
 	for _, op := range ops {
 		if strings.HasPrefix(op, "fill ") {
 			if strings.Contains(op, frameBackgroundRect) {
 				continue // Skip the frame background
 			}
-			// Check if this fill is full-width (x from 0 to 400)
-			if strings.Contains(op, "-(400,") && strings.Contains(op, "(0,") {
+			// Check if this fill starts at indent and extends to right edge
+			if strings.Contains(op, "-(400,") && strings.Contains(op, expectedPrefix) {
 				blockFillCount++
 			}
 		}
 	}
 
-	// Should have 3 full-width fills for 3 lines of code
+	// Should have 3 indented fills for 3 lines of code
 	// (newlines create separate lines, each with their own fill)
 	if blockFillCount < 3 {
-		t.Errorf("Expected at least 3 full-width block background fills for 3-line code block, got %d\ngot ops: %v", blockFillCount, ops)
+		t.Errorf("Expected at least 3 indented block background fills for 3-line code block, got %d\ngot ops: %v", blockFillCount, ops)
 	}
 
 	// Verify all text lines were rendered
@@ -2187,5 +2219,46 @@ func TestFrameSetRectRedraw(t *testing.T) {
 
 	if !foundNewRect {
 		t.Errorf("Redraw() should fill new rectangle %v\ngot ops: %v", newRect, ops)
+	}
+}
+
+// TestDrawTextClipsToFrame verifies that drawText doesn't draw lines beyond
+// the frame's rectangle boundary. This is a regression test for the bug where
+// Markdeep preview would overwrite the window below when content exceeded the frame.
+func TestDrawTextClipsToFrame(t *testing.T) {
+	// Create a small frame that can only fit 2 lines (28 pixels at 14px per line)
+	rect := image.Rect(0, 0, 200, 28)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	// Set content with 5 lines - only 2 should fit in the frame
+	f.SetContent(Plain("line1\nline2\nline3\nline4\nline5"))
+
+	// Clear draw ops and redraw
+	display.(edwoodtest.GettableDrawOps).Clear()
+	f.Redraw()
+
+	// Check that no draw operations were made with Y coordinates at or below the frame bottom
+	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
+	frameBottom := rect.Max.Y
+
+	for _, op := range ops {
+		// Look for "bytes at" operations which indicate text rendering
+		// Format: "bytes at (X,Y) ..."
+		if strings.Contains(op, "bytes at") {
+			// Parse the Y coordinate from the operation
+			var x, y int
+			if n, err := fmt.Sscanf(op, "bytes at (%d,%d)", &x, &y); n == 2 && err == nil {
+				if y >= frameBottom {
+					t.Errorf("draw operation at Y=%d exceeds frame bottom %d: %s", y, frameBottom, op)
+				}
+			}
+		}
 	}
 }

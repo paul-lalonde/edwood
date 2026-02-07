@@ -78,3 +78,22 @@ func WithSelectionColor(c draw.Image) Option {
 		fi.selectionColor = c
 	}
 }
+
+// WithImageCache is an Option that sets the image cache for the frame.
+// When set, the frame will use this cache to load images during layout.
+// If nil, images will not be loaded and will display placeholders.
+func WithImageCache(cache *ImageCache) Option {
+	return func(fi *frameImpl) {
+		fi.imageCache = cache
+	}
+}
+
+// WithBasePath is an Option that sets the base path for resolving relative image paths.
+// This should be the path to the source file (e.g., markdown file) containing image references.
+// When combined with WithImageCache, relative image paths like "images/photo.png" will be
+// resolved relative to this base path's directory.
+func WithBasePath(path string) Option {
+	return func(fi *frameImpl) {
+		fi.basePath = path
+	}
+}

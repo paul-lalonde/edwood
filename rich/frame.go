@@ -67,6 +67,17 @@ type frameImpl struct {
 
 	// Scaled fonts for headings (key is scale factor: 2.0 for H1, 1.5 for H2, etc.)
 	scaledFonts map[float64]edwooddraw.Font
+
+	// Scratch image for clipped rendering - all drawing goes here first,
+	// then blitted to screen. This ensures text doesn't overflow frame bounds.
+	scratchImage edwooddraw.Image
+	scratchRect  image.Rectangle // size of current scratch image
+
+	// Image cache for loading images during layout
+	imageCache *ImageCache
+
+	// Base path for resolving relative image paths (e.g., the markdown file path)
+	basePath string
 }
 
 // NewFrame creates a new Frame.
@@ -126,8 +137,8 @@ func (f *frameImpl) Ptofchar(p int) image.Point {
 	frameWidth := f.rect.Dx()
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout boxes into lines (using cache if available)
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	if len(lines) == 0 {
 		return f.rect.Min
 	}
@@ -212,8 +223,8 @@ func (f *frameImpl) Charofpt(pt image.Point) int {
 	frameWidth := f.rect.Dx()
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout boxes into lines (using cache if available)
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	if len(lines) == 0 {
 		return 0
 	}
@@ -370,6 +381,11 @@ func (f *frameImpl) Select(mc *draw.Mousectl, m *draw.Mouse) (p0, p1 int) {
 		// Redraw to show updated selection during drag
 		f.Redraw()
 
+		// Flush the display to make selection visible immediately
+		if f.display != nil {
+			f.display.Flush()
+		}
+
 		// Check if button was released
 		if me.Buttons == 0 {
 			break
@@ -443,8 +459,8 @@ func (f *frameImpl) TotalLines() int {
 	// Default tab width (8 characters worth)
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// Layout all boxes
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout all boxes (using cache if available)
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	return len(lines)
 }
 
@@ -467,8 +483,8 @@ func (f *frameImpl) LineStartRunes() []int {
 	// Default tab width (8 characters worth)
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// Layout all boxes
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout all boxes (using cache if available)
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	if len(lines) == 0 {
 		return []int{0}
 	}
@@ -496,36 +512,106 @@ func (f *frameImpl) Redraw() {
 	if f.display == nil || f.background == nil {
 		return
 	}
-	// Fill the frame rectangle with the background color
+
 	screen := f.display.ScreenImage()
-	screen.Draw(f.rect, f.background, f.background, image.ZP)
+
+	// Ensure scratch image exists and is the right size.
+	// The scratch image is used to clip text rendering - we draw to it first,
+	// then blit to the screen. This prevents text from overflowing frame bounds.
+	scratch := f.ensureScratchImage()
+	if scratch == nil {
+		// Fallback: draw directly to screen (no clipping for text)
+		scratch = screen
+	}
+
+	// Calculate the destination rectangle for drawing.
+	// If using scratch image, we draw at origin (0,0) since scratch is frame-sized.
+	// If drawing directly to screen, we draw at f.rect.Min.
+	var drawRect image.Rectangle
+	var drawOffset image.Point // offset to add when calculating screen coordinates
+	if scratch != screen {
+		// Drawing to scratch: use local coordinates (0,0 origin)
+		drawRect = image.Rect(0, 0, f.rect.Dx(), f.rect.Dy())
+		drawOffset = image.ZP
+	} else {
+		// Drawing directly to screen: use frame coordinates
+		drawRect = f.rect
+		drawOffset = f.rect.Min
+	}
+
+	// Fill with background color
+	scratch.Draw(drawRect, f.background, f.background, image.ZP)
 
 	// Draw selection highlight (before text so text appears on top)
 	if f.content != nil && f.font != nil && f.selectionColor != nil && f.p0 != f.p1 {
-		f.drawSelection(screen)
+		f.drawSelectionTo(scratch, drawOffset)
 	}
 
 	// Draw text if we have content, font, and text color
 	if f.content != nil && f.font != nil && f.textColor != nil {
-		f.drawText(screen)
+		f.drawTextTo(scratch, drawOffset)
+	}
+
+	// If we used a scratch image, blit it to the screen
+	if scratch != screen {
+		screen.Draw(f.rect, scratch, nil, image.ZP)
 	}
 }
 
-// drawText renders the content boxes onto the screen.
-func (f *frameImpl) drawText(screen edwooddraw.Image) {
+// ensureScratchImage allocates or resizes the scratch image to match frame dimensions.
+// Returns nil if allocation fails.
+func (f *frameImpl) ensureScratchImage() edwooddraw.Image {
+	frameSize := image.Rect(0, 0, f.rect.Dx(), f.rect.Dy())
+
+	// Check if we already have a correctly-sized scratch image
+	if f.scratchImage != nil && f.scratchRect.Eq(frameSize) {
+		return f.scratchImage
+	}
+
+	// Free old scratch image if it exists
+	if f.scratchImage != nil {
+		f.scratchImage.Free()
+		f.scratchImage = nil
+	}
+
+	// Allocate new scratch image
+	pix := f.display.ScreenImage().Pix()
+	img, err := f.display.AllocImage(frameSize, pix, false, 0)
+	if err != nil {
+		return nil
+	}
+
+	f.scratchImage = img
+	f.scratchRect = frameSize
+	return f.scratchImage
+}
+
+// drawTextTo renders the content boxes onto the target image.
+// The offset parameter specifies where the frame's (0,0) maps to in the target.
+// When drawing to a scratch image, offset is (0,0). When drawing directly to
+// screen, offset is f.rect.Min.
+func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	// Get layout lines starting from origin
 	lines, _ := f.layoutFromOrigin()
 	if len(lines) == 0 {
 		return
 	}
 
+	// frameHeight is used to skip lines that start completely outside the frame
+	frameHeight := f.rect.Dy()
+	frameWidth := f.rect.Dx()
+
 	// Phase 1: Draw block-level backgrounds (full line width for fenced code blocks)
 	// This must happen first so text appears on top
 	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
 		// Check if any box on this line has Block=true with a background
 		for _, pb := range line.Boxes {
 			if pb.Box.Style.Block && pb.Box.Style.Bg != nil {
-				f.drawBlockBackground(screen, line)
+				f.drawBlockBackgroundTo(target, line, offset, frameWidth, frameHeight)
 				break // Only draw once per line
 			}
 		}
@@ -534,6 +620,10 @@ func (f *frameImpl) drawText(screen edwooddraw.Image) {
 	// Phase 2: Draw box backgrounds (for inline code, etc.)
 	// This must happen before text rendering so backgrounds appear behind text
 	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
 		for _, pb := range line.Boxes {
 			// Skip newlines and tabs - they don't have backgrounds
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
@@ -546,26 +636,40 @@ func (f *frameImpl) drawText(screen edwooddraw.Image) {
 			// Draw background if style has Bg color set, but NOT for block-level styles
 			// (those are handled in Phase 1 with full-width backgrounds)
 			if pb.Box.Style.Bg != nil && !pb.Box.Style.Block {
-				f.drawBoxBackground(screen, pb, line)
+				f.drawBoxBackgroundTo(target, pb, line, offset, frameWidth, frameHeight)
 			}
 		}
 	}
 
 	// Phase 3: Draw horizontal rules
 	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
 		for _, pb := range line.Boxes {
 			if pb.Box.Style.HRule {
-				f.drawHorizontalRule(screen, line)
+				f.drawHorizontalRuleTo(target, line, offset, frameWidth, frameHeight)
 				break // Only one rule per line
 			}
 		}
 	}
 
 	// Phase 4: Render text on top of backgrounds
+	// Note: Text is now clipped by the scratch image bounds, so we can render
+	// partial lines without worrying about overflow into adjacent windows.
 	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
 		for _, pb := range line.Boxes {
 			// Skip newlines and tabs - they don't render visible text
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
+				continue
+			}
+			// Skip images - they are handled in Phase 5
+			if pb.Box.IsImage() || (pb.Box.Style.Image && pb.Box.ImageData != nil && pb.Box.ImageData.Err != nil) {
 				continue
 			}
 			if len(pb.Box.Text) == 0 {
@@ -576,10 +680,10 @@ func (f *frameImpl) drawText(screen edwooddraw.Image) {
 				continue
 			}
 
-			// Calculate screen position
+			// Calculate position in target image
 			pt := image.Point{
-				X: f.rect.Min.X + pb.X,
-				Y: f.rect.Min.Y + line.Y,
+				X: offset.X + pb.X,
+				Y: offset.Y + line.Y,
 			}
 
 			// Determine text color: use box style Fg if set, otherwise default
@@ -596,19 +700,60 @@ func (f *frameImpl) drawText(screen edwooddraw.Image) {
 			boxFont := f.fontForStyle(pb.Box.Style)
 
 			// Render the text
-			screen.Bytes(pt, textColorImg, image.ZP, boxFont, pb.Box.Text)
+			target.Bytes(pt, textColorImg, image.ZP, boxFont, pb.Box.Text)
+		}
+	}
+
+	// Phase 5: Render images
+	// Images are rendered after text so they can overlay backgrounds properly.
+	// Images with load errors show a placeholder text instead.
+	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
+		for _, pb := range line.Boxes {
+			// Check if this is an image box
+			if !pb.Box.Style.Image {
+				continue
+			}
+
+			// Calculate position in target image
+			pt := image.Point{
+				X: offset.X + pb.X,
+				Y: offset.Y + line.Y,
+			}
+
+			// Check for error placeholder case
+			if pb.Box.ImageData != nil && pb.Box.ImageData.Err != nil {
+				// Show error placeholder as text
+				f.drawImageErrorPlaceholder(target, pt, pb.Box.ImageData.Path)
+				continue
+			}
+
+			// Check if we have valid image data to render
+			if !pb.Box.IsImage() {
+				// No ImageData, show placeholder for unloaded image
+				f.drawImageErrorPlaceholder(target, pt, pb.Box.Style.ImageURL)
+				continue
+			}
+
+			// Render the actual image
+			f.drawImageTo(target, pb, line, offset, frameWidth, frameHeight)
 		}
 	}
 }
 
-// drawBlockBackground draws a full-width background for a line.
+// drawBlockBackgroundTo draws a full-width background for a line.
 // This is used for fenced code blocks where the background extends to the frame edge.
-func (f *frameImpl) drawBlockBackground(screen edwooddraw.Image, line Line) {
-	// Find the background color from a block-styled box on this line
+func (f *frameImpl) drawBlockBackgroundTo(target edwooddraw.Image, line Line, offset image.Point, frameWidth, frameHeight int) {
+	// Find the background color and left indent from a block-styled box on this line
 	var bgColor color.Color
+	leftIndent := 0
 	for _, pb := range line.Boxes {
 		if pb.Box.Style.Block && pb.Box.Style.Bg != nil {
 			bgColor = pb.Box.Style.Bg
+			leftIndent = pb.X // Use the box's X position as the left edge
 			break
 		}
 	}
@@ -621,20 +766,27 @@ func (f *frameImpl) drawBlockBackground(screen edwooddraw.Image, line Line) {
 		return
 	}
 
-	// Full-width background: from frame left edge to frame right edge
+	// Background from indent to right edge (not full-width)
 	bgRect := image.Rect(
-		f.rect.Min.X,
-		f.rect.Min.Y+line.Y,
-		f.rect.Max.X,
-		f.rect.Min.Y+line.Y+line.Height,
+		offset.X+leftIndent,
+		offset.Y+line.Y,
+		offset.X+frameWidth,
+		offset.Y+line.Y+line.Height,
 	)
 
-	screen.Draw(bgRect, bgImg, bgImg, image.ZP)
+	// Clip to frame bounds (in target coordinates)
+	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+	bgRect = bgRect.Intersect(clipRect)
+	if bgRect.Empty() {
+		return
+	}
+
+	target.Draw(bgRect, bgImg, bgImg, image.ZP)
 }
 
-// drawBoxBackground draws the background color for a positioned box.
+// drawBoxBackgroundTo draws the background color for a positioned box.
 // This is used for inline code backgrounds and other text-width backgrounds.
-func (f *frameImpl) drawBoxBackground(screen edwooddraw.Image, pb PositionedBox, line Line) {
+func (f *frameImpl) drawBoxBackgroundTo(target edwooddraw.Image, pb PositionedBox, line Line, offset image.Point, frameWidth, frameHeight int) {
 	bgImg := f.allocColorImage(pb.Box.Style.Bg)
 	if bgImg == nil {
 		return
@@ -644,21 +796,28 @@ func (f *frameImpl) drawBoxBackground(screen edwooddraw.Image, pb PositionedBox,
 	// X: from box start to box start + box width
 	// Y: from line top to line top + line height
 	bgRect := image.Rect(
-		f.rect.Min.X+pb.X,
-		f.rect.Min.Y+line.Y,
-		f.rect.Min.X+pb.X+pb.Box.Wid,
-		f.rect.Min.Y+line.Y+line.Height,
+		offset.X+pb.X,
+		offset.Y+line.Y,
+		offset.X+pb.X+pb.Box.Wid,
+		offset.Y+line.Y+line.Height,
 	)
 
-	screen.Draw(bgRect, bgImg, bgImg, image.ZP)
+	// Clip to frame bounds (in target coordinates)
+	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+	bgRect = bgRect.Intersect(clipRect)
+	if bgRect.Empty() {
+		return
+	}
+
+	target.Draw(bgRect, bgImg, bgImg, image.ZP)
 }
 
 // HRuleColor is the gray color used for horizontal rule lines.
 var HRuleColor = color.RGBA{R: 180, G: 180, B: 180, A: 255}
 
-// drawHorizontalRule draws a horizontal rule line across the full frame width.
+// drawHorizontalRuleTo draws a horizontal rule line across the full frame width.
 // The line is drawn vertically centered within the line height.
-func (f *frameImpl) drawHorizontalRule(screen edwooddraw.Image, line Line) {
+func (f *frameImpl) drawHorizontalRuleTo(target edwooddraw.Image, line Line, offset image.Point, frameWidth, frameHeight int) {
 	// Use a gray color for the rule
 	ruleImg := f.allocColorImage(HRuleColor)
 	if ruleImg == nil {
@@ -668,16 +827,23 @@ func (f *frameImpl) drawHorizontalRule(screen edwooddraw.Image, line Line) {
 	// Draw a 1px line vertically centered in the line
 	// The line spans the full frame width
 	lineThickness := 1
-	centerY := f.rect.Min.Y + line.Y + line.Height/2
+	centerY := offset.Y + line.Y + line.Height/2
 
 	ruleRect := image.Rect(
-		f.rect.Min.X,
+		offset.X,
 		centerY,
-		f.rect.Max.X,
+		offset.X+frameWidth,
 		centerY+lineThickness,
 	)
 
-	screen.Draw(ruleRect, ruleImg, ruleImg, image.ZP)
+	// Clip to frame bounds (in target coordinates)
+	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+	ruleRect = ruleRect.Intersect(clipRect)
+	if ruleRect.Empty() {
+		return
+	}
+
+	target.Draw(ruleRect, ruleImg, ruleImg, image.ZP)
 }
 
 // layoutFromOrigin returns the layout lines starting from the origin position.
@@ -697,13 +863,13 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// Default tab width (8 characters worth)
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// If origin is 0, just return the normal layout
+	// If origin is 0, just return the normal layout (using cache if available)
 	if f.origin == 0 {
-		return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle), 0
+		return f.layoutBoxes(boxes, frameWidth, maxtab), 0
 	}
 
-	// Layout all boxes first
-	allLines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout all boxes first (using cache if available)
+	allLines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	if len(allLines) == 0 {
 		return nil, 0
 	}
@@ -756,10 +922,10 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	return visibleLines, f.origin
 }
 
-// drawSelection renders the selection highlight rectangles.
+// drawSelectionTo renders the selection highlight rectangles.
 // The selection spans from p0 to p1 (rune offsets).
 // For multi-line selections, multiple rectangles are drawn.
-func (f *frameImpl) drawSelection(screen edwooddraw.Image) {
+func (f *frameImpl) drawSelectionTo(target edwooddraw.Image, offset image.Point) {
 	// Convert content to boxes
 	boxes := contentToBoxes(f.content)
 	if len(boxes) == 0 {
@@ -768,10 +934,11 @@ func (f *frameImpl) drawSelection(screen edwooddraw.Image) {
 
 	// Calculate frame width and tab width for layout
 	frameWidth := f.rect.Dx()
+	frameHeight := f.rect.Dy()
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// Layout boxes into lines
-	lines := layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+	// Layout boxes into lines (using cache if available)
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 	if len(lines) == 0 {
 		return
 	}
@@ -784,6 +951,11 @@ func (f *frameImpl) drawSelection(screen edwooddraw.Image) {
 	// Walk through lines and boxes, tracking rune position
 	runePos := 0
 	for _, line := range lines {
+		// Skip lines that start at or below the frame bottom
+		if line.Y >= frameHeight {
+			break
+		}
+
 		lineStartRune := runePos
 		lineEndRune := lineStartRune
 
@@ -863,12 +1035,17 @@ func (f *frameImpl) drawSelection(screen edwooddraw.Image) {
 		// Draw the selection rectangle for this line
 		if selEndX > selStartX {
 			selRect := image.Rect(
-				f.rect.Min.X+selStartX,
-				f.rect.Min.Y+line.Y,
-				f.rect.Min.X+selEndX,
-				f.rect.Min.Y+line.Y+line.Height,
+				offset.X+selStartX,
+				offset.Y+line.Y,
+				offset.X+selEndX,
+				offset.Y+line.Y+line.Height,
 			)
-			screen.Draw(selRect, f.selectionColor, f.selectionColor, image.ZP)
+			// Clip to frame bounds (in target coordinates)
+			clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+			selRect = selRect.Intersect(clipRect)
+			if !selRect.Empty() {
+				target.Draw(selRect, f.selectionColor, f.selectionColor, image.ZP)
+			}
 		}
 
 		runePos = lineEndRune
@@ -953,4 +1130,133 @@ func (f *frameImpl) fontForStyle(style Style) edwooddraw.Font {
 		}
 	}
 	return f.font
+}
+
+// layoutBoxes runs the layout algorithm on the given boxes.
+// If an imageCache is set on the frame, it uses layoutWithCacheAndBasePath to load
+// images and populate their ImageData. Otherwise, it uses the regular layout.
+func (f *frameImpl) layoutBoxes(boxes []Box, frameWidth, maxtab int) []Line {
+	if f.imageCache != nil {
+		return layoutWithCacheAndBasePath(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle, f.imageCache, f.basePath)
+	}
+	return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
+}
+
+// drawImageTo renders an image box to the target at the appropriate position.
+// The image is clipped to the frame boundaries using Intersect.
+func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line Line, offset image.Point, frameWidth, frameHeight int) {
+	if f.display == nil {
+		return
+	}
+
+	cached := pb.Box.ImageData
+	if cached == nil || cached.Data == nil || cached.Original == nil {
+		return
+	}
+
+	// Calculate the scaled dimensions for the image
+	scaledWidth, scaledHeight := imageBoxDimensions(&pb.Box, frameWidth)
+	if scaledWidth == 0 || scaledHeight == 0 {
+		return
+	}
+
+	// Calculate the destination rectangle
+	dstX := offset.X + pb.X
+	dstY := offset.Y + line.Y
+
+	// Create destination rectangle for the image
+	dstRect := image.Rect(dstX, dstY, dstX+scaledWidth, dstY+scaledHeight)
+
+	// Clip to frame bounds
+	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+	clippedDst := dstRect.Intersect(clipRect)
+	if clippedDst.Empty() {
+		return
+	}
+
+	// Allocate an image to hold the pixel data
+	// Use RGBA32 format to match our ConvertToPlan9 output
+	srcRect := image.Rect(0, 0, cached.Width, cached.Height)
+	srcImg, err := f.display.AllocImage(srcRect, edwooddraw.RGBA32, false, 0)
+	if err != nil {
+		// Fall back to error placeholder
+		pt := image.Point{X: dstX, Y: dstY}
+		f.drawImageErrorPlaceholder(target, pt, cached.Path)
+		return
+	}
+	defer srcImg.Free()
+
+	// Load the pixel data into the source image
+	_, err = srcImg.Load(srcRect, cached.Data)
+	if err != nil {
+		// Fall back to error placeholder
+		pt := image.Point{X: dstX, Y: dstY}
+		f.drawImageErrorPlaceholder(target, pt, cached.Path)
+		return
+	}
+
+	// Calculate the source point for clipping
+	// If the destination was clipped, we need to adjust which part of the source we draw
+	srcPt := image.ZP
+	if dstRect.Min.X < clippedDst.Min.X {
+		// Left edge was clipped, adjust source X
+		srcPt.X = (clippedDst.Min.X - dstRect.Min.X) * cached.Width / scaledWidth
+	}
+	if dstRect.Min.Y < clippedDst.Min.Y {
+		// Top edge was clipped, adjust source Y
+		srcPt.Y = (clippedDst.Min.Y - dstRect.Min.Y) * cached.Height / scaledHeight
+	}
+
+	// Draw the image (using the display's draw operation for scaling)
+	// Note: Plan 9's draw doesn't do automatic scaling, so for scaled images
+	// we would need to either:
+	// 1. Pre-scale the image data before loading
+	// 2. Use a draw operation that supports scaling
+	// For now, we draw at the original size and clip
+	//
+	// When image is scaled down (scaledWidth < cached.Width), we draw the original
+	// and it will be clipped. For proper scaling, we'd need to scale the pixel data.
+	if scaledWidth == cached.Width && scaledHeight == cached.Height {
+		// No scaling needed, direct draw
+		target.Draw(clippedDst, srcImg, nil, srcPt)
+	} else {
+		// Image needs scaling - for now, draw at original size (clipped)
+		// A more sophisticated implementation would scale the pixel data first
+		// This produces correct results for images that fit; larger images are clipped
+		actualDst := image.Rect(dstX, dstY, dstX+cached.Width, dstY+cached.Height)
+		actualDst = actualDst.Intersect(clipRect)
+		if !actualDst.Empty() {
+			actualSrcPt := image.ZP
+			if dstX < actualDst.Min.X {
+				actualSrcPt.X = actualDst.Min.X - dstX
+			}
+			if dstY < actualDst.Min.Y {
+				actualSrcPt.Y = actualDst.Min.Y - dstY
+			}
+			target.Draw(actualDst, srcImg, nil, actualSrcPt)
+		}
+	}
+}
+
+// ImageErrorPlaceholderColor is the color used for image error placeholder text.
+var ImageErrorPlaceholderColor = color.RGBA{R: 200, G: 100, B: 100, A: 255}
+
+// drawImageErrorPlaceholder renders an error placeholder for failed image loads.
+// It displays "[Image: load failed]" at the specified position.
+func (f *frameImpl) drawImageErrorPlaceholder(target edwooddraw.Image, pt image.Point, path string) {
+	if f.font == nil || f.textColor == nil {
+		return
+	}
+
+	// Create error placeholder text
+	placeholder := "[Image: load failed]"
+
+	// Use a reddish color for error placeholders
+	errorColor := f.allocColorImage(ImageErrorPlaceholderColor)
+	if errorColor == nil {
+		errorColor = f.textColor // Fall back to default text color
+	}
+
+	// Render the placeholder text
+	target.Bytes(pt, errorColor, image.ZP, f.font, []byte(placeholder))
 }
