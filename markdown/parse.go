@@ -57,13 +57,231 @@ func Parse(text string) rich.Content {
 	// Track if we're in a paragraph (consecutive non-block lines)
 	inParagraph := false
 
+	// Track list context for nested blocks
+	type listCtx struct {
+		contentCol int  // column where content starts (for continuation detection)
+		indentLvl  int  // nesting level (for ListIndent)
+		ordered    bool // true for ordered lists
+		itemNumber int  // item number for ordered lists
+	}
+	var activeList *listCtx
+	inListCodeBlock := false
+	var listCodeContent strings.Builder
+
+	// Helper to emit a code block accumulated within a list item
+	emitListCodeBlock := func() {
+		if listCodeContent.Len() > 0 {
+			codeSpan := rich.Span{
+				Text: listCodeContent.String(),
+				Style: rich.Style{
+					Bg:       rich.InlineCodeBg,
+					Code:     true,
+					Block:    true,
+					ListItem: true,
+					ListIndent: activeList.indentLvl,
+					Scale:    1.0,
+				},
+			}
+			result = append(result, codeSpan)
+			listCodeContent.Reset()
+		}
+		inListCodeBlock = false
+	}
+
+	// Track blockquote-within-list state
+	inListBlockquote := false
+	listBlockquoteDepth := 0
+	listBlockquoteHadNewline := false
+
+	// Helper to end a blockquote within a list item
+	endListBlockquote := func() {
+		if inListBlockquote && len(result) > 0 && listBlockquoteHadNewline {
+			result[len(result)-1].Text += "\n"
+		}
+		inListBlockquote = false
+		listBlockquoteDepth = 0
+		listBlockquoteHadNewline = false
+	}
+
+	// Helper to end the active list context
+	endListContext := func() {
+		if inListCodeBlock {
+			emitListCodeBlock()
+		}
+		if inListBlockquote {
+			endListBlockquote()
+		}
+		activeList = nil
+	}
+
+	// Track blockquote state
+	inBlockquote := false
+	blockquoteDepth := 0
+	blockquoteLineHadNewline := false
+
+	// Helper to end the current blockquote by appending \n to the last span
+	endBlockquote := func() {
+		if inBlockquote && len(result) > 0 && blockquoteLineHadNewline {
+			result[len(result)-1].Text += "\n"
+		}
+		inBlockquote = false
+		blockquoteDepth = 0
+		blockquoteLineHadNewline = false
+	}
+
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
+
+		// --- List context: handle continuation lines within a list item ---
+		if activeList != nil {
+			// Inside a list code block: accumulate or close
+			if inListCodeBlock {
+				// Check if line is indented to contentCol and has a fence delimiter
+				stripped, ok := stripListIndent(line, activeList.contentCol)
+				if ok && isFenceDelimiter(stripped) {
+					// Closing fence — emit the code block
+					emitListCodeBlock()
+					continue
+				}
+				// Accumulate code content (strip list indent)
+				if ok {
+					listCodeContent.WriteString(stripped)
+				} else {
+					// Line not indented enough — still accumulate raw
+					// (handles empty lines within code blocks)
+					trimmed := strings.TrimRight(line, "\n")
+					if trimmed == "" {
+						listCodeContent.WriteString(line)
+					} else {
+						// Not indented enough and not blank — end code block and list context
+						emitListCodeBlock()
+						endListContext()
+						goto normalDispatch
+					}
+				}
+				continue
+			}
+
+			// Not in a list code block — check if this is a continuation line
+			// First check: is this another list item at same or lower indent?
+			isULCont, contIndent, _ := isUnorderedListItem(line)
+			isOLCont, contOLIndent, _, _ := isOrderedListItem(line)
+			if isULCont && contIndent <= activeList.indentLvl {
+				endListContext()
+				goto normalDispatch
+			}
+			if isOLCont && contOLIndent <= activeList.indentLvl {
+				endListContext()
+				goto normalDispatch
+			}
+
+			// Check if line is indented to contentCol (continuation)
+			stripped, ok := stripListIndent(line, activeList.contentCol)
+			if ok {
+				// It's a continuation line — check for nested blocks
+				if isFenceDelimiter(stripped) {
+					// Opening fence within list item
+					inListCodeBlock = true
+					listCodeContent.Reset()
+					continue
+				}
+				// Check for indented code within list item (4 extra spaces)
+				if isIndentedCodeLine(stripped) {
+					codeContent := stripIndent(stripped)
+					codeSpan := rich.Span{
+						Text: codeContent,
+						Style: rich.Style{
+							Bg:       rich.InlineCodeBg,
+							Code:     true,
+							Block:    true,
+							ListItem: true,
+							ListIndent: activeList.indentLvl,
+							Scale:    1.0,
+						},
+					}
+					result = append(result, codeSpan)
+					continue
+				}
+				// Check for blockquote within list item
+				if isBQ, depth, bqContentStart := isBlockquoteLine(stripped); isBQ {
+					lineHadNewline := strings.HasSuffix(stripped, "\n")
+					content := strings.TrimSuffix(stripped[bqContentStart:], "\n")
+
+					// End any active top-level blockquote
+					if inBlockquote {
+						endBlockquote()
+					}
+
+					if content == "" {
+						// Empty blockquote line within list item — skip
+						continue
+					}
+
+					// Continuation of same-depth list blockquote — join with space
+					if inListBlockquote && depth == listBlockquoteDepth {
+						if len(result) > 0 {
+							lastSpan := &result[len(result)-1]
+							if !strings.HasSuffix(lastSpan.Text, " ") {
+								lastSpan.Text += " "
+							}
+						}
+					} else if inListBlockquote && depth != listBlockquoteDepth {
+						// Depth changed — end previous list blockquote
+						endListBlockquote()
+					}
+
+					// Parse inner content with inline formatting
+					bqBaseStyle := rich.Style{
+						Blockquote:      true,
+						BlockquoteDepth: depth,
+						ListItem:        true,
+						ListIndent:      activeList.indentLvl,
+						Scale:           1.0,
+					}
+					spans := parseInline(content, bqBaseStyle, InlineOpts{})
+
+					// Merge consecutive spans with the same style
+					for _, span := range spans {
+						if len(result) > 0 && result[len(result)-1].Style == span.Style && !span.Style.Link {
+							result[len(result)-1].Text += span.Text
+						} else {
+							result = append(result, span)
+						}
+					}
+
+					inListBlockquote = true
+					listBlockquoteDepth = depth
+					listBlockquoteHadNewline = lineHadNewline
+					continue
+				}
+				// Other continuation content (plain text, etc.)
+				endListContext()
+				goto normalDispatch
+			}
+
+			// Check for blank line — could be intra-item paragraph break
+			trimmedCont := strings.TrimRight(line, "\n")
+			if trimmedCont == "" {
+				// Blank line — end list context (simple approach)
+				endListContext()
+				goto normalDispatch
+			}
+
+			// Line not indented enough and not a list item — end context
+			endListContext()
+			goto normalDispatch
+		}
+
+	normalDispatch:
 		// Check for fenced code block delimiter
 		if isFenceDelimiter(line) {
 			// If we were in an indented block, emit it first
 			if inIndentedBlock {
 				emitIndentedBlock()
+			}
+			// End blockquote before code block
+			if inBlockquote {
+				endBlockquote()
 			}
 			// End paragraph with newline before code block
 			if inParagraph && len(result) > 0 {
@@ -110,6 +328,10 @@ func Parse(text string) rich.Content {
 		// Check for indented code block (4 spaces or 1 tab)
 		// But NOT if it's a list item - list items take precedence
 		if isIndentedCodeLine(line) && !isListItemEarly {
+			// End blockquote before code block
+			if inBlockquote {
+				endBlockquote()
+			}
 			// End paragraph with newline before code block
 			if inParagraph && len(result) > 0 {
 				result[len(result)-1].Text += "\n"
@@ -129,8 +351,13 @@ func Parse(text string) rich.Content {
 		// Check for blank line (paragraph break)
 		trimmedLine := strings.TrimRight(line, "\n")
 		if trimmedLine == "" {
+			// End blockquote before paragraph break
+			wasInBlockquote := inBlockquote
+			if inBlockquote {
+				endBlockquote()
+			}
 			// Blank line = paragraph break
-			if inParagraph {
+			if inParagraph || wasInBlockquote {
 				// End the paragraph with a newline (with ParaBreak for extra spacing)
 				result = append(result, rich.Span{
 					Text:  "\n",
@@ -144,6 +371,10 @@ func Parse(text string) rich.Content {
 		// Check for table (must have header row followed by separator row)
 		isRow, _ := isTableRow(line)
 		if isRow && i+1 < len(lines) && isTableSeparatorRow(lines[i+1]) {
+			// End blockquote before table
+			if inBlockquote {
+				endBlockquote()
+			}
 			// End paragraph before table
 			if inParagraph && len(result) > 0 {
 				result[len(result)-1].Text += "\n"
@@ -157,9 +388,84 @@ func Parse(text string) rich.Content {
 			continue
 		}
 
+		// Check for blockquote
+		if isBQ, depth, contentStart := isBlockquoteLine(line); isBQ {
+			// End paragraph before blockquote
+			if inParagraph && len(result) > 0 {
+				result[len(result)-1].Text += "\n"
+			}
+			inParagraph = false
+
+			lineHadNewline := strings.HasSuffix(line, "\n")
+
+			// Get the inner content after stripping the prefix and trailing newline
+			content := strings.TrimSuffix(line[contentStart:], "\n")
+
+			// Empty blockquote line (just ">" or "> " with no content)
+			if content == "" {
+				if inBlockquote {
+					// Paragraph break within blockquote
+					endBlockquote()
+					result = append(result, rich.Span{
+						Text: "\n",
+						Style: rich.Style{
+							ParaBreak:       true,
+							Blockquote:      true,
+							BlockquoteDepth: depth,
+							Scale:           1.0,
+						},
+					})
+				}
+				// If not in a blockquote, empty blockquote produces no output
+				continue
+			}
+
+			// Depth changed — end previous blockquote
+			if inBlockquote && depth != blockquoteDepth {
+				endBlockquote()
+			}
+
+			// Continuation of same-depth blockquote — join with space
+			if inBlockquote && depth == blockquoteDepth {
+				if len(result) > 0 {
+					lastSpan := &result[len(result)-1]
+					if !strings.HasSuffix(lastSpan.Text, " ") {
+						lastSpan.Text += " "
+					}
+				}
+			}
+
+			// Parse inner content with inline formatting
+			bqBaseStyle := rich.Style{
+				Blockquote:      true,
+				BlockquoteDepth: depth,
+				Scale:           1.0,
+			}
+			spans := parseInline(content, bqBaseStyle, InlineOpts{})
+
+			// Merge consecutive spans with the same style
+			for _, span := range spans {
+				if len(result) > 0 && result[len(result)-1].Style == span.Style && !span.Style.Link {
+					result[len(result)-1].Text += span.Text
+				} else {
+					result = append(result, span)
+				}
+			}
+
+			inBlockquote = true
+			blockquoteDepth = depth
+			blockquoteLineHadNewline = lineHadNewline
+			continue
+		}
+
+		// Non-blockquote line — end any active blockquote
+		if inBlockquote {
+			endBlockquote()
+		}
+
 		// Check if this is a block-level element (heading, hrule, list item)
-		isUL, _, _ := isUnorderedListItem(line)
-		isOL, _, _, _ := isOrderedListItem(line)
+		isUL, ulIndent, ulContentStart := isUnorderedListItem(line)
+		isOL, olIndent, olContentStart, olItemNum := isOrderedListItem(line)
 		isListItem := isUL || isOL
 		isBlockElement := headingLevel(line) > 0 || isHorizontalRule(line) || isListItem
 
@@ -204,6 +510,33 @@ func Parse(text string) rich.Content {
 				result = append(result, span)
 			}
 		}
+
+		// After parsing a list item, set up list context for continuation detection
+		if isListItem {
+			if isUL {
+				activeList = &listCtx{
+					contentCol: ulContentStart,
+					indentLvl:  ulIndent,
+				}
+			} else {
+				activeList = &listCtx{
+					contentCol: olContentStart,
+					indentLvl:  olIndent,
+					ordered:    true,
+					itemNumber: olItemNum,
+				}
+			}
+		}
+	}
+
+	// Handle trailing list context
+	if activeList != nil {
+		endListContext()
+	}
+
+	// Handle trailing blockquote
+	if inBlockquote {
+		endBlockquote()
 	}
 
 	// Handle unclosed fenced code block - treat remaining content as code
@@ -260,6 +593,63 @@ func stripIndent(line string) string {
 		return line[4:]
 	}
 	return line
+}
+
+// stripListIndent strips leading whitespace up to contentCol columns from a line.
+// Returns the stripped line and true if the line was indented to at least contentCol,
+// or ("", false) if the line has insufficient indentation.
+// Tabs count as advancing to the next tab stop (every 4 columns).
+func stripListIndent(line string, contentCol int) (string, bool) {
+	col := 0
+	byteIdx := 0
+	for byteIdx < len(line) && col < contentCol {
+		if line[byteIdx] == ' ' {
+			col++
+			byteIdx++
+		} else if line[byteIdx] == '\t' {
+			col += 4 - (col % 4) // advance to next tab stop
+			byteIdx++
+		} else {
+			// Non-whitespace before reaching contentCol
+			return "", false
+		}
+	}
+	if col < contentCol {
+		return "", false
+	}
+	return line[byteIdx:], true
+}
+
+// isBlockquoteLine checks if a line starts with a blockquote marker.
+// Returns: (isBlockquote bool, depth int, contentStart int)
+// - isBlockquote: true if the line starts with `>`
+// - depth: nesting level (number of `>` markers)
+// - contentStart: byte index where inner content begins (after all `> ` prefixes)
+func isBlockquoteLine(line string) (bool, int, int) {
+	if len(line) == 0 || line[0] != '>' {
+		return false, 0, 0
+	}
+
+	depth := 0
+	i := 0
+	for i < len(line) && line[i] == '>' {
+		depth++
+		i++
+		// Skip optional space after each >
+		if i < len(line) && line[i] == ' ' {
+			i++
+		}
+	}
+
+	return true, depth, i
+}
+
+// applyBlockquoteStyle sets blockquote fields on all spans.
+func applyBlockquoteStyle(spans []rich.Span, depth int) {
+	for i := range spans {
+		spans[i].Style.Blockquote = true
+		spans[i].Style.BlockquoteDepth = depth
+	}
 }
 
 // isFenceDelimiter returns true if the line is a fenced code block delimiter (```).

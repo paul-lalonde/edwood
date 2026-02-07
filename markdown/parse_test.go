@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -4368,6 +4369,805 @@ func TestImageSourceMap(t *testing.T) {
 				srcStart, srcEnd := sourceMap.ToSource(0, 1)
 				if srcStart < 0 || srcEnd < 0 {
 					t.Errorf("invalid source mapping: srcStart=%d, srcEnd=%d", srcStart, srcEnd)
+				}
+			}
+		})
+	}
+}
+
+func TestParseBlockquote(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text            string
+			blockquote      bool
+			blockquoteDepth int
+		}
+	}{
+		{
+			name:  "single-line blockquote",
+			input: "> hello",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "hello", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "single-line blockquote with trailing newline",
+			input: "> hello\n",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "hello\n", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "multi-line blockquote joins as paragraph continuation",
+			input: "> line1\n> line2",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "line1 line2", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "multi-line blockquote three lines",
+			input: "> first\n> second\n> third",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "first second third", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "nested blockquote depth 2",
+			input: "> > inner",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "inner", blockquote: true, blockquoteDepth: 2},
+			},
+		},
+		{
+			name:  "nested blockquote depth 3",
+			input: "> > > deep",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "deep", blockquote: true, blockquoteDepth: 3},
+			},
+		},
+		{
+			name:  "compact nested blockquote (no spaces between markers)",
+			input: ">> inner",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "inner", blockquote: true, blockquoteDepth: 2},
+			},
+		},
+		{
+			name:  "blockquote with bold inline formatting",
+			input: "> **bold** text",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "bold", blockquote: true, blockquoteDepth: 1},
+				{text: " text", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "blockquote with italic inline formatting",
+			input: "> *italic* text",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "italic", blockquote: true, blockquoteDepth: 1},
+				{text: " text", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "blockquote with code span",
+			input: "> use `code` here",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "use ", blockquote: true, blockquoteDepth: 1},
+				{text: "code", blockquote: true, blockquoteDepth: 1},
+				{text: " here", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "blockquote with link",
+			input: "> [click](http://example.com)",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "click", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "blockquote with paragraph break",
+			input: "> para1\n>\n> para2",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "para1\n", blockquote: true, blockquoteDepth: 1},
+				{text: "\n", blockquote: true, blockquoteDepth: 1}, // paragraph break within blockquote
+				{text: "para2", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "empty blockquote marker only",
+			input: ">",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{},
+		},
+		{
+			name:  "empty blockquote with space",
+			input: "> ",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{},
+		},
+		{
+			name:  "blockquote followed by blank line and paragraph",
+			input: "> quote\n\nparagraph",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "quote\n", blockquote: true, blockquoteDepth: 1},
+				{text: "\n", blockquote: false, blockquoteDepth: 0}, // paragraph break
+				{text: "paragraph", blockquote: false, blockquoteDepth: 0},
+			},
+		},
+		{
+			name:  "blockquote followed by heading",
+			input: "> quote\n# Heading",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "quote\n", blockquote: true, blockquoteDepth: 1},
+				{text: "Heading", blockquote: false, blockquoteDepth: 0},
+			},
+		},
+		{
+			name:  "heading followed by blockquote",
+			input: "# Heading\n> quote",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "Heading\n", blockquote: false, blockquoteDepth: 0},
+				{text: "quote", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name:  "blockquote followed by list",
+			input: "> quote\n- item",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "quote\n", blockquote: true, blockquoteDepth: 1},
+				// list bullet and item spans follow, not blockquoted
+				{text: "•", blockquote: false, blockquoteDepth: 0},
+				{text: " ", blockquote: false, blockquoteDepth: 0},
+				{text: "item", blockquote: false, blockquoteDepth: 0},
+			},
+		},
+		{
+			name:  "depth change from 1 to 2",
+			input: "> outer\n> > inner",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "outer\n", blockquote: true, blockquoteDepth: 1},
+				{text: "inner", blockquote: true, blockquoteDepth: 2},
+			},
+		},
+		{
+			name:  "depth change from 2 to 1",
+			input: "> > inner\n> outer",
+			wantSpan: []struct {
+				text            string
+				blockquote      bool
+				blockquoteDepth int
+			}{
+				{text: "inner\n", blockquote: true, blockquoteDepth: 2},
+				{text: "outer", blockquote: true, blockquoteDepth: 1},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  got: %+v", len(got), len(tt.wantSpan), got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.Blockquote != want.blockquote {
+					t.Errorf("span[%d].Style.Blockquote = %v, want %v", i, got[i].Style.Blockquote, want.blockquote)
+				}
+				if got[i].Style.BlockquoteDepth != want.blockquoteDepth {
+					t.Errorf("span[%d].Style.BlockquoteDepth = %d, want %d", i, got[i].Style.BlockquoteDepth, want.blockquoteDepth)
+				}
+			}
+		})
+	}
+}
+
+func TestParseBlockquoteBoldCheck(t *testing.T) {
+	// Verify that inline formatting styles are preserved alongside blockquote fields
+	got := Parse("> **bold** and *italic*")
+	if len(got) < 3 {
+		t.Fatalf("got %d spans, want at least 3", len(got))
+	}
+
+	// First span should be bold and blockquoted
+	if !got[0].Style.Bold {
+		t.Errorf("span[0].Style.Bold = false, want true")
+	}
+	if !got[0].Style.Blockquote {
+		t.Errorf("span[0].Style.Blockquote = false, want true")
+	}
+	if got[0].Text != "bold" {
+		t.Errorf("span[0].Text = %q, want %q", got[0].Text, "bold")
+	}
+
+	// " and " span should be blockquoted but not bold/italic
+	if got[1].Style.Bold || got[1].Style.Italic {
+		t.Errorf("span[1] should not be bold or italic")
+	}
+	if !got[1].Style.Blockquote {
+		t.Errorf("span[1].Style.Blockquote = false, want true")
+	}
+
+	// "italic" span should be italic and blockquoted
+	if !got[2].Style.Italic {
+		t.Errorf("span[2].Style.Italic = false, want true")
+	}
+	if !got[2].Style.Blockquote {
+		t.Errorf("span[2].Style.Blockquote = false, want true")
+	}
+}
+
+func TestIsBlockquoteLine(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		wantIsBQ    bool
+		wantDepth   int
+		wantContent int // contentStart byte index
+	}{
+		{
+			name:        "simple blockquote with space",
+			line:        "> hello",
+			wantIsBQ:    true,
+			wantDepth:   1,
+			wantContent: 2,
+		},
+		{
+			name:        "blockquote without space after marker",
+			line:        ">hello",
+			wantIsBQ:    true,
+			wantDepth:   1,
+			wantContent: 1,
+		},
+		{
+			name:        "nested depth 2 with spaces",
+			line:        "> > inner",
+			wantIsBQ:    true,
+			wantDepth:   2,
+			wantContent: 4,
+		},
+		{
+			name:        "nested depth 2 compact",
+			line:        ">> inner",
+			wantIsBQ:    true,
+			wantDepth:   2,
+			wantContent: 3,
+		},
+		{
+			name:        "nested depth 3",
+			line:        "> > > deep",
+			wantIsBQ:    true,
+			wantDepth:   3,
+			wantContent: 6,
+		},
+		{
+			name:        "empty blockquote marker only",
+			line:        ">",
+			wantIsBQ:    true,
+			wantDepth:   1,
+			wantContent: 1,
+		},
+		{
+			name:        "empty blockquote with trailing space",
+			line:        "> ",
+			wantIsBQ:    true,
+			wantDepth:   1,
+			wantContent: 2,
+		},
+		{
+			name:        "not a blockquote - plain text",
+			line:        "hello world",
+			wantIsBQ:    false,
+			wantDepth:   0,
+			wantContent: 0,
+		},
+		{
+			name:        "not a blockquote - empty string",
+			line:        "",
+			wantIsBQ:    false,
+			wantDepth:   0,
+			wantContent: 0,
+		},
+		{
+			name:        "not a blockquote - space then marker",
+			line:        " > indented",
+			wantIsBQ:    false,
+			wantDepth:   0,
+			wantContent: 0,
+		},
+		{
+			name:        "blockquote with newline in content",
+			line:        "> hello\n",
+			wantIsBQ:    true,
+			wantDepth:   1,
+			wantContent: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isBQ, depth, contentStart := isBlockquoteLine(tt.line)
+			if isBQ != tt.wantIsBQ {
+				t.Errorf("isBlockquoteLine(%q) isBQ = %v, want %v", tt.line, isBQ, tt.wantIsBQ)
+			}
+			if depth != tt.wantDepth {
+				t.Errorf("isBlockquoteLine(%q) depth = %d, want %d", tt.line, depth, tt.wantDepth)
+			}
+			if contentStart != tt.wantContent {
+				t.Errorf("isBlockquoteLine(%q) contentStart = %d, want %d", tt.line, contentStart, tt.wantContent)
+			}
+		})
+	}
+}
+
+// Tests for Phase 8.2: Nested Code Blocks in Lists
+
+func TestParseNestedCodeBlockInList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text       string
+			code       bool
+			block      bool
+			listBullet bool
+			listItem   bool
+			listIndent int
+		}
+	}{
+		{
+			name: "fenced code block inside unordered list item",
+			input: "- Item\n" +
+				"  ```\n" +
+				"  code here\n" +
+				"  ```",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "code here\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "fenced code block inside ordered list item",
+			input: "1. Item\n" +
+				"   ```\n" +
+				"   some code\n" +
+				"   ```",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "some code\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "fenced code block in nested list item",
+			input: "- Outer\n" +
+				"  - Inner\n" +
+				"    ```\n" +
+				"    nested code\n" +
+				"    ```",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Outer\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Inner\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 1},
+				{text: "nested code\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+		{
+			name: "multiple list items with one code block",
+			input: "- First\n" +
+				"- Second\n" +
+				"  ```\n" +
+				"  code\n" +
+				"  ```\n" +
+				"- Third",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "First\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Second\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "code\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Third", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "code block followed by next list item",
+			input: "- Item\n" +
+				"  ```\n" +
+				"  code\n" +
+				"  ```\n" +
+				"- Next",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "code\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Next", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "indented code block inside list item",
+			// 2 spaces for list content + 4 spaces for code = 6 spaces total
+			input: "- Item\n" +
+				"      code line\n" +
+				"- Next",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "code line\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Next", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "fenced code block with multiple lines in list",
+			input: "- Item\n" +
+				"  ```\n" +
+				"  line one\n" +
+				"  line two\n" +
+				"  line three\n" +
+				"  ```",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "line one\nline two\nline three\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "code block preserves content in list",
+			// Verify code block content is not parsed for inline formatting
+			input: "- Item\n" +
+				"  ```\n" +
+				"  **not bold** and `not code`\n" +
+				"  ```",
+			wantSpan: []struct {
+				text       string
+				code       bool
+				block      bool
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", code: false, block: false, listBullet: false, listItem: true, listIndent: 0},
+				{text: "**not bold** and `not code`\n", code: true, block: true, listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				var gotDesc []string
+				for _, s := range got {
+					gotDesc = append(gotDesc, fmt.Sprintf("{text:%q code:%v block:%v listBullet:%v listItem:%v listIndent:%d}",
+						s.Text, s.Style.Code, s.Style.Block, s.Style.ListBullet, s.Style.ListItem, s.Style.ListIndent))
+				}
+				t.Fatalf("got %d spans, want %d spans\n  got:\n    %s",
+					len(got), len(tt.wantSpan), strings.Join(gotDesc, "\n    "))
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.Code != want.code {
+					t.Errorf("span[%d].Style.Code = %v, want %v", i, got[i].Style.Code, want.code)
+				}
+				if got[i].Style.Block != want.block {
+					t.Errorf("span[%d].Style.Block = %v, want %v", i, got[i].Style.Block, want.block)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+			}
+		})
+	}
+}
+
+// Tests for Phase 8.3: Nested Blockquotes in Lists
+
+func TestParseNestedBlockquoteInList(t *testing.T) {
+	type spanExpect struct {
+		text            string
+		listBullet      bool
+		listItem        bool
+		listIndent      int
+		blockquote      bool
+		blockquoteDepth int
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []spanExpect
+	}{
+		{
+			name: "single-line blockquote inside unordered list item",
+			input: "- Item\n" +
+				"  > Quoted text",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", listItem: true, listIndent: 0},
+				{text: "Quoted text", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name: "single-line blockquote inside ordered list item",
+			input: "1. Item\n" +
+				"   > Quoted text",
+			wantSpan: []spanExpect{
+				{text: "1.", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", listItem: true, listIndent: 0},
+				{text: "Quoted text", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name: "multi-line blockquote inside list item",
+			input: "- Item\n" +
+				"  > Line one\n" +
+				"  > Line two",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", listItem: true, listIndent: 0},
+				{text: "Line one Line two", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name: "nested blockquote (depth 2) inside list item",
+			input: "- Item\n" +
+				"  > > Deep quote",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", listItem: true, listIndent: 0},
+				{text: "Deep quote", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 2},
+			},
+		},
+		{
+			name: "blockquote with bold inside list item",
+			input: "- Item\n" +
+				"  > **bold** text",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item\n", listItem: true, listIndent: 0},
+				{text: "bold", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+				{text: " text", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name: "blockquote followed by another list item",
+			input: "- First\n" +
+				"  > Quoted\n" +
+				"- Second",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "First\n", listItem: true, listIndent: 0},
+				{text: "Quoted\n", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Second", listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name: "blockquote inside nested list item",
+			input: "- Outer\n" +
+				"  - Inner\n" +
+				"    > Quoted in inner",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Outer\n", listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Inner\n", listItem: true, listIndent: 1},
+				{text: "Quoted in inner", listItem: true, listIndent: 1, blockquote: true, blockquoteDepth: 1},
+			},
+		},
+		{
+			name: "multiple list items where only one has a blockquote",
+			input: "- First\n" +
+				"- Second\n" +
+				"  > Quoted\n" +
+				"- Third",
+			wantSpan: []spanExpect{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "First\n", listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Second\n", listItem: true, listIndent: 0},
+				{text: "Quoted\n", listItem: true, listIndent: 0, blockquote: true, blockquoteDepth: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Third", listItem: true, listIndent: 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				var gotDesc []string
+				for _, s := range got {
+					gotDesc = append(gotDesc, fmt.Sprintf("{text:%q listBullet:%v listItem:%v listIndent:%d blockquote:%v blockquoteDepth:%d}",
+						s.Text, s.Style.ListBullet, s.Style.ListItem, s.Style.ListIndent, s.Style.Blockquote, s.Style.BlockquoteDepth))
+				}
+				t.Fatalf("got %d spans, want %d spans\n  got:\n    %s",
+					len(got), len(tt.wantSpan), strings.Join(gotDesc, "\n    "))
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+				if got[i].Style.Blockquote != want.blockquote {
+					t.Errorf("span[%d].Style.Blockquote = %v, want %v", i, got[i].Style.Blockquote, want.blockquote)
+				}
+				if got[i].Style.BlockquoteDepth != want.blockquoteDepth {
+					t.Errorf("span[%d].Style.BlockquoteDepth = %d, want %d", i, got[i].Style.BlockquoteDepth, want.blockquoteDepth)
 				}
 			}
 		})

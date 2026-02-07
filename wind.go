@@ -81,6 +81,10 @@ type Window struct {
 	previewClickPos  int        // rune position of last B1 null-click
 	previewClickMsec uint32     // timestamp of last B1 null-click
 	previewClickRT   *RichText  // which richtext received the last click
+
+	// Incremental preview update state
+	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
+	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
 }
 
 var (
@@ -410,6 +414,14 @@ func (w *Window) MouseBut() {
 
 func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
+		// Cancel pending preview update timer to prevent callback
+		// firing on a closed window.
+		if w.previewUpdateTimer != nil {
+			w.previewUpdateTimer.Stop()
+			w.previewUpdateTimer = nil
+		}
+		w.previewMode = false
+		w.richBody = nil
 		xfidlog(w, "del")
 		w.tag.file.DelObserver(w)
 		w.body.file.DelTagStatusObserver(w)
@@ -1479,9 +1491,17 @@ func (w *Window) PreviewLookLinkURL(pos int) string {
 	return w.previewLinkMap.URLAt(pos)
 }
 
+// recordEdit accumulates an edit record for the incremental preview path.
+func (w *Window) recordEdit(e markdown.EditRecord) {
+	w.pendingEdits = append(w.pendingEdits, e)
+}
+
 // UpdatePreview updates the preview content from the body buffer.
 // This should be called when the body buffer changes and the window is in preview mode.
 // It re-parses the markdown and updates the richBody, preserving the scroll position.
+// When edit position information is available (from pendingEdits), it attempts an
+// incremental re-parse of only the affected blocks. Falls back to full re-parse
+// when the incremental path cannot determine the affected region.
 func (w *Window) UpdatePreview() {
 	if !w.previewMode || w.richBody == nil {
 		return
@@ -1493,13 +1513,41 @@ func (w *Window) UpdatePreview() {
 	// Read the current body content
 	bodyContent := w.body.file.String()
 
-	// Parse the markdown with source map and link map
-	content, sourceMap, linkMap := markdown.ParseWithSourceMap(bodyContent)
+	var content rich.Content
+	var sourceMap *markdown.SourceMap
+	var linkMap *markdown.LinkMap
+	var blockIdx *markdown.BlockIndex
+
+	// Try incremental path when we have a previous block index and pending edits.
+	if w.prevBlockIndex != nil && len(w.pendingEdits) > 0 {
+		old := markdown.StitchResult{
+			Content:  w.richBody.Content(),
+			SM:       w.previewSourceMap,
+			LM:       w.previewLinkMap,
+			BlockIdx: w.prevBlockIndex,
+		}
+		result, ok := markdown.IncrementalUpdate(old, bodyContent, w.pendingEdits)
+		if ok {
+			content = result.Content
+			sourceMap = result.SM
+			linkMap = result.LM
+			blockIdx = result.BlockIdx
+		}
+	}
+
+	// Full re-parse fallback.
+	if content == nil {
+		content, sourceMap, linkMap, blockIdx = markdown.ParseWithSourceMapAndIndex(bodyContent)
+	}
+
+	// Clear pending edits.
+	w.pendingEdits = w.pendingEdits[:0]
 
 	// Update the rich body content
 	w.richBody.SetContent(content)
 	w.previewSourceMap = sourceMap
 	w.previewLinkMap = linkMap
+	w.prevBlockIndex = blockIdx
 
 	// Try to restore the scroll position
 	// Clamp to the new content length if necessary
@@ -1523,6 +1571,8 @@ const previewUpdateDelay = 3 * time.Second
 // SchedulePreviewUpdate schedules a debounced update of the Markdeep preview.
 // If called multiple times in quick succession, only the last call will trigger
 // an update after the delay. This prevents excessive re-rendering during editing.
+//
+// Must be called with global.row.lk held.
 func (w *Window) SchedulePreviewUpdate() {
 	if !w.previewMode || w.richBody == nil {
 		return
@@ -1533,10 +1583,19 @@ func (w *Window) SchedulePreviewUpdate() {
 		w.previewUpdateTimer.Stop()
 	}
 
-	// Schedule a new update after the delay
+	// Schedule a new update after the delay.
+	// The callback runs on a timer goroutine; acquire the row lock
+	// to synchronize with mousethread, keyboardthread, and others.
 	w.previewUpdateTimer = time.AfterFunc(previewUpdateDelay, func() {
-		// UpdatePreview must be called from the main goroutine
-		// Use the global display channel to schedule the update
+		global.row.lk.Lock()
+		defer global.row.lk.Unlock()
+
+		// Re-check: window may have exited preview mode or been closed
+		// while we waited for the lock.
+		if !w.previewMode || w.richBody == nil {
+			return
+		}
+
 		w.UpdatePreview()
 	})
 }
