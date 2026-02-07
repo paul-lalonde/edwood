@@ -1566,3 +1566,1711 @@ func TestParseFencedCodeBlockHasBackground(t *testing.T) {
 		t.Errorf("code block Bg is not gray: R=%d, G=%d, B=%d (want components within 20)", r8, g8, b8)
 	}
 }
+
+// Tests for Phase 15A: Lists
+
+func TestIsUnorderedListItem(t *testing.T) {
+	tests := []struct {
+		name             string
+		line             string
+		wantIsListItem   bool
+		wantIndentLevel  int
+		wantContentStart int
+	}{
+		{
+			name:             "hyphen marker",
+			line:             "- Item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 2,
+		},
+		{
+			name:             "asterisk marker",
+			line:             "* Item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 2,
+		},
+		{
+			name:             "plus marker",
+			line:             "+ Item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 2,
+		},
+		{
+			name:             "hyphen with trailing newline",
+			line:             "- Item\n",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 2,
+		},
+		{
+			name:             "just marker and space",
+			line:             "- ",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 2,
+		},
+		{
+			name:             "no space after marker",
+			line:             "-Item",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+		{
+			name:             "just marker no space",
+			line:             "-",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+		{
+			name:             "empty line",
+			line:             "",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+		{
+			name:             "plain text",
+			line:             "Hello world",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+		{
+			name:             "hyphen in middle of text",
+			line:             "some - text",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+		{
+			name:             "double hyphen (not list)",
+			line:             "-- Not a list",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isListItem, indentLevel, contentStart := isUnorderedListItem(tt.line)
+			if isListItem != tt.wantIsListItem {
+				t.Errorf("isUnorderedListItem(%q) isListItem = %v, want %v", tt.line, isListItem, tt.wantIsListItem)
+			}
+			if indentLevel != tt.wantIndentLevel {
+				t.Errorf("isUnorderedListItem(%q) indentLevel = %d, want %d", tt.line, indentLevel, tt.wantIndentLevel)
+			}
+			if contentStart != tt.wantContentStart {
+				t.Errorf("isUnorderedListItem(%q) contentStart = %d, want %d", tt.line, contentStart, tt.wantContentStart)
+			}
+		})
+	}
+}
+
+func TestIsUnorderedListItemNested(t *testing.T) {
+	tests := []struct {
+		name             string
+		line             string
+		wantIsListItem   bool
+		wantIndentLevel  int
+		wantContentStart int
+	}{
+		{
+			name:             "one level indent with 2 spaces",
+			line:             "  - Nested item",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 4,
+		},
+		{
+			name:             "two levels indent with 4 spaces",
+			line:             "    - Deep nested",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 6,
+		},
+		{
+			name:             "three levels indent with 6 spaces",
+			line:             "      - Very deep",
+			wantIsListItem:   true,
+			wantIndentLevel:  3,
+			wantContentStart: 8,
+		},
+		{
+			name:             "one level indent with tab",
+			line:             "\t- Tab nested",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 3,
+		},
+		{
+			name:             "two levels indent with tabs",
+			line:             "\t\t- Double tab",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 4,
+		},
+		{
+			name:             "mixed indent (tab + 2 spaces)",
+			line:             "\t  - Mixed indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 5,
+		},
+		{
+			name:             "nested asterisk",
+			line:             "  * Nested asterisk",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 4,
+		},
+		{
+			name:             "nested plus",
+			line:             "  + Nested plus",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 4,
+		},
+		{
+			name:             "odd number of spaces (1 space)",
+			line:             " - One space indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  0, // 1 space alone doesn't make a full indent level
+			wantContentStart: 3,
+		},
+		{
+			name:             "odd number of spaces (3 spaces)",
+			line:             "   - Three space indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  1, // 3 spaces = 1 full indent level
+			wantContentStart: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isListItem, indentLevel, contentStart := isUnorderedListItem(tt.line)
+			if isListItem != tt.wantIsListItem {
+				t.Errorf("isUnorderedListItem(%q) isListItem = %v, want %v", tt.line, isListItem, tt.wantIsListItem)
+			}
+			if indentLevel != tt.wantIndentLevel {
+				t.Errorf("isUnorderedListItem(%q) indentLevel = %d, want %d", tt.line, indentLevel, tt.wantIndentLevel)
+			}
+			if contentStart != tt.wantContentStart {
+				t.Errorf("isUnorderedListItem(%q) contentStart = %d, want %d", tt.line, contentStart, tt.wantContentStart)
+			}
+		})
+	}
+}
+
+func TestIsOrderedListItem(t *testing.T) {
+	tests := []struct {
+		name             string
+		line             string
+		wantIsListItem   bool
+		wantIndentLevel  int
+		wantContentStart int
+		wantItemNumber   int
+	}{
+		{
+			name:             "simple number with period",
+			line:             "1. Item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "number 2 with period",
+			line:             "2. Second item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   2,
+		},
+		{
+			name:             "number 10 with period",
+			line:             "10. Tenth item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 4,
+			wantItemNumber:   10,
+		},
+		{
+			name:             "large number with period",
+			line:             "999. Large number",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 5,
+			wantItemNumber:   999,
+		},
+		{
+			name:             "number with paren",
+			line:             "1) Item with paren",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "number 5 with paren",
+			line:             "5) Fifth item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   5,
+		},
+		{
+			name:             "with trailing newline",
+			line:             "1. Item\n",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "just number period space",
+			line:             "1. ",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "no space after period",
+			line:             "1.Item",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "no space after paren",
+			line:             "1)Item",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "just number no delimiter",
+			line:             "1",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "empty line",
+			line:             "",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "plain text",
+			line:             "Hello world",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "number in middle of text",
+			line:             "some 1. text",
+			wantIsListItem:   false,
+			wantIndentLevel:  0,
+			wantContentStart: 0,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "zero as number",
+			line:             "0. Zero item",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 3,
+			wantItemNumber:   0,
+		},
+		{
+			name:             "leading zero in number",
+			line:             "01. Padded number",
+			wantIsListItem:   true,
+			wantIndentLevel:  0,
+			wantContentStart: 4,
+			wantItemNumber:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isListItem, indentLevel, contentStart, itemNumber := isOrderedListItem(tt.line)
+			if isListItem != tt.wantIsListItem {
+				t.Errorf("isOrderedListItem(%q) isListItem = %v, want %v", tt.line, isListItem, tt.wantIsListItem)
+			}
+			if indentLevel != tt.wantIndentLevel {
+				t.Errorf("isOrderedListItem(%q) indentLevel = %d, want %d", tt.line, indentLevel, tt.wantIndentLevel)
+			}
+			if contentStart != tt.wantContentStart {
+				t.Errorf("isOrderedListItem(%q) contentStart = %d, want %d", tt.line, contentStart, tt.wantContentStart)
+			}
+			if itemNumber != tt.wantItemNumber {
+				t.Errorf("isOrderedListItem(%q) itemNumber = %d, want %d", tt.line, itemNumber, tt.wantItemNumber)
+			}
+		})
+	}
+}
+
+func TestIsOrderedListItemNested(t *testing.T) {
+	tests := []struct {
+		name             string
+		line             string
+		wantIsListItem   bool
+		wantIndentLevel  int
+		wantContentStart int
+		wantItemNumber   int
+	}{
+		{
+			name:             "one level indent with 2 spaces",
+			line:             "  1. Nested item",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 5,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "two levels indent with 4 spaces",
+			line:             "    1. Deep nested",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 7,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "three levels indent with 6 spaces",
+			line:             "      1. Very deep",
+			wantIsListItem:   true,
+			wantIndentLevel:  3,
+			wantContentStart: 9,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "one level indent with tab",
+			line:             "\t1. Tab nested",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 4,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "two levels indent with tabs",
+			line:             "\t\t1. Double tab",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 5,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "mixed indent (tab + 2 spaces)",
+			line:             "\t  1. Mixed indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  2,
+			wantContentStart: 6,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "nested with paren delimiter",
+			line:             "  1) Nested paren",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 5,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "nested with multi-digit number",
+			line:             "  10. Multi-digit nested",
+			wantIsListItem:   true,
+			wantIndentLevel:  1,
+			wantContentStart: 6,
+			wantItemNumber:   10,
+		},
+		{
+			name:             "odd number of spaces (1 space)",
+			line:             " 1. One space indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  0, // 1 space alone doesn't make a full indent level
+			wantContentStart: 4,
+			wantItemNumber:   1,
+		},
+		{
+			name:             "odd number of spaces (3 spaces)",
+			line:             "   1. Three space indent",
+			wantIsListItem:   true,
+			wantIndentLevel:  1, // 3 spaces = 1 full indent level
+			wantContentStart: 6,
+			wantItemNumber:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isListItem, indentLevel, contentStart, itemNumber := isOrderedListItem(tt.line)
+			if isListItem != tt.wantIsListItem {
+				t.Errorf("isOrderedListItem(%q) isListItem = %v, want %v", tt.line, isListItem, tt.wantIsListItem)
+			}
+			if indentLevel != tt.wantIndentLevel {
+				t.Errorf("isOrderedListItem(%q) indentLevel = %d, want %d", tt.line, indentLevel, tt.wantIndentLevel)
+			}
+			if contentStart != tt.wantContentStart {
+				t.Errorf("isOrderedListItem(%q) contentStart = %d, want %d", tt.line, contentStart, tt.wantContentStart)
+			}
+			if itemNumber != tt.wantItemNumber {
+				t.Errorf("isOrderedListItem(%q) itemNumber = %d, want %d", tt.line, itemNumber, tt.wantItemNumber)
+			}
+		})
+	}
+}
+
+func TestParseUnorderedList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text       string
+			listBullet bool
+			listItem   bool
+			listIndent int
+		}
+	}{
+		{
+			name:  "simple unordered list item",
+			input: "- Item one",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item one", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "unordered list with asterisk marker",
+			input: "* Item with asterisk",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item with asterisk", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "unordered list with plus marker",
+			input: "+ Item with plus",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Item with plus", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "multiple unordered list items",
+			input: "- First\n- Second\n- Third",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "First\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Second\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Third", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "unordered list with bold text",
+			input: "- **Bold** item",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Bold", listBullet: false, listItem: true, listIndent: 0},   // bold
+				{text: " item", listBullet: false, listItem: true, listIndent: 0}, // plain
+			},
+		},
+		{
+			name:  "unordered list with code span",
+			input: "- Use `code` here",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Use ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "code", listBullet: false, listItem: true, listIndent: 0}, // code span
+				{text: " here", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "empty unordered list item",
+			input: "- ",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  got: %+v", len(got), len(tt.wantSpan), got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+			}
+		})
+	}
+}
+
+func TestParseNestedList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text       string
+			listBullet bool
+			listItem   bool
+			listIndent int
+		}
+	}{
+		{
+			name:  "simple nested unordered list",
+			input: "- Parent\n  - Child",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child", listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+		{
+			name:  "nested list with multiple children",
+			input: "- Parent\n  - Child 1\n  - Child 2",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child 1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child 2", listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+		{
+			name:  "nested list back to parent level",
+			input: "- Parent 1\n  - Child\n- Parent 2",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent 1\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent 2", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "nested ordered list",
+			input: "1. Parent\n   1. Child",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "1.", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child", listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+		{
+			name:  "mixed nested lists",
+			input: "- Unordered parent\n  1. Ordered child",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Unordered parent\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "1.", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Ordered child", listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+		{
+			name:  "nested list with tab indent",
+			input: "- Parent\n\t- Child",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Parent\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Child", listBullet: false, listItem: true, listIndent: 1},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  got: %+v", len(got), len(tt.wantSpan), got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+			}
+		})
+	}
+}
+
+func TestParseDeepNestedList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text       string
+			listBullet bool
+			listItem   bool
+			listIndent int
+		}
+	}{
+		{
+			name:  "three level nested unordered list",
+			input: "- Level 0\n  - Level 1\n    - Level 2",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Level 0\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Level 1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 2},
+				{text: " ", listBullet: false, listItem: true, listIndent: 2},
+				{text: "Level 2", listBullet: false, listItem: true, listIndent: 2},
+			},
+		},
+		{
+			name:  "four level nested list",
+			input: "- L0\n  - L1\n    - L2\n      - L3",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "L0\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "L1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 2},
+				{text: " ", listBullet: false, listItem: true, listIndent: 2},
+				{text: "L2\n", listBullet: false, listItem: true, listIndent: 2},
+				{text: "•", listBullet: true, listItem: false, listIndent: 3},
+				{text: " ", listBullet: false, listItem: true, listIndent: 3},
+				{text: "L3", listBullet: false, listItem: true, listIndent: 3},
+			},
+		},
+		{
+			name:  "deep nested then return to shallow",
+			input: "- L0\n  - L1\n    - L2\n  - L1 again\n- L0 again",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "L0\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "L1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 2},
+				{text: " ", listBullet: false, listItem: true, listIndent: 2},
+				{text: "L2\n", listBullet: false, listItem: true, listIndent: 2},
+				{text: "•", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "L1 again\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "L0 again", listBullet: false, listItem: true, listIndent: 0},
+			},
+		},
+		{
+			name:  "three level nested ordered list",
+			input: "1. Level 0\n  1. Level 1\n    1. Level 2", // Use 2-space indentation (consistent with unordered lists)
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Level 0\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "1.", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Level 1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "1.", listBullet: true, listItem: false, listIndent: 2},
+				{text: " ", listBullet: false, listItem: true, listIndent: 2},
+				{text: "Level 2", listBullet: false, listItem: true, listIndent: 2},
+			},
+		},
+		{
+			name:  "mixed deep nested lists",
+			input: "- Unordered L0\n  1. Ordered L1\n    - Unordered L2",
+			wantSpan: []struct {
+				text       string
+				listBullet bool
+				listItem   bool
+				listIndent int
+			}{
+				{text: "•", listBullet: true, listItem: false, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listIndent: 0},
+				{text: "Unordered L0\n", listBullet: false, listItem: true, listIndent: 0},
+				{text: "1.", listBullet: true, listItem: false, listIndent: 1},
+				{text: " ", listBullet: false, listItem: true, listIndent: 1},
+				{text: "Ordered L1\n", listBullet: false, listItem: true, listIndent: 1},
+				{text: "•", listBullet: true, listItem: false, listIndent: 2},
+				{text: " ", listBullet: false, listItem: true, listIndent: 2},
+				{text: "Unordered L2", listBullet: false, listItem: true, listIndent: 2},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  got: %+v", len(got), len(tt.wantSpan), got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+			}
+		})
+	}
+}
+
+func TestParseOrderedList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text        string
+			listBullet  bool
+			listItem    bool
+			listOrdered bool
+			listNumber  int
+			listIndent  int
+		}
+	}{
+		{
+			name:  "simple ordered list item",
+			input: "1. First item",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: "First item", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+			},
+		},
+		{
+			name:  "ordered list item with paren",
+			input: "1) First item",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: "First item", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+			},
+		},
+		{
+			name:  "multiple ordered list items",
+			input: "1. First\n2. Second\n3. Third",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: "First\n", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: "2.", listBullet: true, listItem: false, listOrdered: true, listNumber: 2, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 2, listIndent: 0},
+				{text: "Second\n", listBullet: false, listItem: true, listOrdered: true, listNumber: 2, listIndent: 0},
+				{text: "3.", listBullet: true, listItem: false, listOrdered: true, listNumber: 3, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 3, listIndent: 0},
+				{text: "Third", listBullet: false, listItem: true, listOrdered: true, listNumber: 3, listIndent: 0},
+			},
+		},
+		{
+			name:  "ordered list with multi-digit number",
+			input: "10. Tenth item",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "10.", listBullet: true, listItem: false, listOrdered: true, listNumber: 10, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 10, listIndent: 0},
+				{text: "Tenth item", listBullet: false, listItem: true, listOrdered: true, listNumber: 10, listIndent: 0},
+			},
+		},
+		{
+			name:  "ordered list with bold text",
+			input: "1. **Bold** item",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: "Bold", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},   // bold
+				{text: " item", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0}, // plain
+			},
+		},
+		{
+			name:  "empty ordered list item",
+			input: "1. ",
+			wantSpan: []struct {
+				text        string
+				listBullet  bool
+				listItem    bool
+				listOrdered bool
+				listNumber  int
+				listIndent  int
+			}{
+				{text: "1.", listBullet: true, listItem: false, listOrdered: true, listNumber: 1, listIndent: 0},
+				{text: " ", listBullet: false, listItem: true, listOrdered: true, listNumber: 1, listIndent: 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  got: %+v", len(got), len(tt.wantSpan), got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.ListBullet != want.listBullet {
+					t.Errorf("span[%d].Style.ListBullet = %v, want %v", i, got[i].Style.ListBullet, want.listBullet)
+				}
+				if got[i].Style.ListItem != want.listItem {
+					t.Errorf("span[%d].Style.ListItem = %v, want %v", i, got[i].Style.ListItem, want.listItem)
+				}
+				if got[i].Style.ListOrdered != want.listOrdered {
+					t.Errorf("span[%d].Style.ListOrdered = %v, want %v", i, got[i].Style.ListOrdered, want.listOrdered)
+				}
+				if got[i].Style.ListNumber != want.listNumber {
+					t.Errorf("span[%d].Style.ListNumber = %d, want %d", i, got[i].Style.ListNumber, want.listNumber)
+				}
+				if got[i].Style.ListIndent != want.listIndent {
+					t.Errorf("span[%d].Style.ListIndent = %d, want %d", i, got[i].Style.ListIndent, want.listIndent)
+				}
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Table Tests (Phase 15B)
+// =============================================================================
+
+// Alignment is imported from rich package for use in tests
+type Alignment = rich.Alignment
+
+const (
+	AlignLeft   = rich.AlignLeft
+	AlignCenter = rich.AlignCenter
+	AlignRight  = rich.AlignRight
+)
+
+func TestIsTableRow(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantIs    bool
+		wantCells int // expected number of cells if it is a table row
+	}{
+		{
+			name:      "simple table row",
+			input:     "| A | B |",
+			wantIs:    true,
+			wantCells: 2,
+		},
+		{
+			name:      "table row with more cells",
+			input:     "| A | B | C | D |",
+			wantIs:    true,
+			wantCells: 4,
+		},
+		{
+			name:      "table row without leading pipe",
+			input:     "A | B |",
+			wantIs:    false,
+			wantCells: 0,
+		},
+		{
+			name:      "table row without trailing pipe",
+			input:     "| A | B",
+			wantIs:    true, // Common markdown parsers accept this
+			wantCells: 2,
+		},
+		{
+			name:      "plain text with pipe",
+			input:     "This is not | a table",
+			wantIs:    false,
+			wantCells: 0,
+		},
+		{
+			name:      "empty line",
+			input:     "",
+			wantIs:    false,
+			wantCells: 0,
+		},
+		{
+			name:      "only pipes",
+			input:     "|||",
+			wantIs:    true,
+			wantCells: 2, // Two empty cells
+		},
+		{
+			name:      "table row with trailing newline",
+			input:     "| A | B |\n",
+			wantIs:    true,
+			wantCells: 2,
+		},
+		{
+			name:      "table row with spaces in cells",
+			input:     "| Header 1 | Header 2 |",
+			wantIs:    true,
+			wantCells: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIs, gotCells := isTableRow(tt.input)
+			if gotIs != tt.wantIs {
+				t.Errorf("isTableRow(%q) = %v, want %v", tt.input, gotIs, tt.wantIs)
+			}
+			if gotIs && len(gotCells) != tt.wantCells {
+				t.Errorf("isTableRow(%q) cells = %d, want %d", tt.input, len(gotCells), tt.wantCells)
+			}
+		})
+	}
+}
+
+func TestIsTableRowMultipleCells(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCells []string
+	}{
+		{
+			name:      "two cells",
+			input:     "| A | B |",
+			wantCells: []string{"A", "B"},
+		},
+		{
+			name:      "three cells with content",
+			input:     "| Name | Age | City |",
+			wantCells: []string{"Name", "Age", "City"},
+		},
+		{
+			name:      "cells with extra whitespace",
+			input:     "|  A  |  B  |",
+			wantCells: []string{"A", "B"}, // Whitespace should be trimmed
+		},
+		{
+			name:      "empty cells",
+			input:     "| | |",
+			wantCells: []string{"", ""},
+		},
+		{
+			name:      "single cell",
+			input:     "| A |",
+			wantCells: []string{"A"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isRow, cells := isTableRow(tt.input)
+			if !isRow {
+				t.Fatalf("isTableRow(%q) = false, want true", tt.input)
+			}
+			if len(cells) != len(tt.wantCells) {
+				t.Errorf("cell count = %d, want %d\n  got: %v", len(cells), len(tt.wantCells), cells)
+				return
+			}
+			for i, want := range tt.wantCells {
+				if cells[i] != want {
+					t.Errorf("cell[%d] = %q, want %q", i, cells[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestIsTableSeparator(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		wantIs bool
+	}{
+		{
+			name:   "simple separator",
+			input:  "|---|---|",
+			wantIs: true,
+		},
+		{
+			name:   "separator with spaces",
+			input:  "| --- | --- |",
+			wantIs: true,
+		},
+		{
+			name:   "separator with more dashes",
+			input:  "|-----|-----|",
+			wantIs: true,
+		},
+		{
+			name:   "not enough dashes",
+			input:  "|--|--|",
+			wantIs: false, // Need at least 3 dashes
+		},
+		{
+			name:   "header row not separator",
+			input:  "| A | B |",
+			wantIs: false,
+		},
+		{
+			name:   "mixed content",
+			input:  "|---| A |",
+			wantIs: false, // All cells must be separator cells
+		},
+		{
+			name:   "empty line",
+			input:  "",
+			wantIs: false,
+		},
+		{
+			name:   "only pipes",
+			input:  "|||",
+			wantIs: false,
+		},
+		{
+			name:   "single separator cell",
+			input:  "|---|",
+			wantIs: true,
+		},
+		{
+			name:   "many separator cells",
+			input:  "|---|---|---|---|",
+			wantIs: true,
+		},
+		{
+			name:   "separator with trailing newline",
+			input:  "|---|---|\n",
+			wantIs: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isTableSeparatorRow(tt.input)
+			if got != tt.wantIs {
+				t.Errorf("isTableSeparatorRow(%q) = %v, want %v", tt.input, got, tt.wantIs)
+			}
+		})
+	}
+}
+
+func TestIsTableSeparatorWithAlignment(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantIs     bool
+		wantAligns []Alignment
+	}{
+		{
+			name:       "left aligned",
+			input:      "|:---|:---|",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignLeft, AlignLeft},
+		},
+		{
+			name:       "right aligned",
+			input:      "|---:|---:|",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignRight, AlignRight},
+		},
+		{
+			name:       "center aligned",
+			input:      "|:---:|:---:|",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignCenter, AlignCenter},
+		},
+		{
+			name:       "mixed alignment",
+			input:      "|:---|:---:|---:|",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignLeft, AlignCenter, AlignRight},
+		},
+		{
+			name:       "default alignment (no colons)",
+			input:      "|---|---|",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignLeft, AlignLeft}, // Default is left
+		},
+		{
+			name:       "with spaces",
+			input:      "| :--- | :---: | ---: |",
+			wantIs:     true,
+			wantAligns: []Alignment{AlignLeft, AlignCenter, AlignRight},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIs, gotAligns := parseTableSeparator(tt.input)
+			if gotIs != tt.wantIs {
+				t.Errorf("parseTableSeparator(%q) = %v, want %v", tt.input, gotIs, tt.wantIs)
+				return
+			}
+			if !gotIs {
+				return
+			}
+			if len(gotAligns) != len(tt.wantAligns) {
+				t.Errorf("alignment count = %d, want %d\n  got: %v", len(gotAligns), len(tt.wantAligns), gotAligns)
+				return
+			}
+			for i, want := range tt.wantAligns {
+				if gotAligns[i] != want {
+					t.Errorf("align[%d] = %d, want %d", i, gotAligns[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseSimpleTable(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantSpan []struct {
+			text        string
+			table       bool
+			tableHeader bool
+			code        bool
+			block       bool
+		}
+	}{
+		{
+			name: "simple 2x2 table",
+			input: `| A | B |
+|---|---|
+| 1 | 2 |`,
+			wantSpan: []struct {
+				text        string
+				table       bool
+				tableHeader bool
+				code        bool
+				block       bool
+			}{
+				// Header row
+				{text: "| A | B |\n", table: true, tableHeader: true, code: true, block: true},
+				// Separator row
+				{text: "|---|---|\n", table: true, tableHeader: false, code: true, block: true},
+				// Data row
+				{text: "| 1 | 2 |", table: true, tableHeader: false, code: true, block: true},
+			},
+		},
+		{
+			name: "table with multiple data rows",
+			input: `| Name | Value |
+|------|-------|
+| foo  | 1     |
+| bar  | 2     |`,
+			wantSpan: []struct {
+				text        string
+				table       bool
+				tableHeader bool
+				code        bool
+				block       bool
+			}{
+				{text: "| Name | Value |\n", table: true, tableHeader: true, code: true, block: true},
+				{text: "|------|-------|\n", table: true, tableHeader: false, code: true, block: true},
+				{text: "| foo  | 1     |\n", table: true, tableHeader: false, code: true, block: true},
+				{text: "| bar  | 2     |", table: true, tableHeader: false, code: true, block: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			if len(got) != len(tt.wantSpan) {
+				t.Fatalf("got %d spans, want %d spans\n  input: %q\n  got: %+v", len(got), len(tt.wantSpan), tt.input, got)
+			}
+			for i, want := range tt.wantSpan {
+				if got[i].Text != want.text {
+					t.Errorf("span[%d].Text = %q, want %q", i, got[i].Text, want.text)
+				}
+				if got[i].Style.Table != want.table {
+					t.Errorf("span[%d].Style.Table = %v, want %v", i, got[i].Style.Table, want.table)
+				}
+				if got[i].Style.TableHeader != want.tableHeader {
+					t.Errorf("span[%d].Style.TableHeader = %v, want %v", i, got[i].Style.TableHeader, want.tableHeader)
+				}
+				if got[i].Style.Code != want.code {
+					t.Errorf("span[%d].Style.Code = %v, want %v", i, got[i].Style.Code, want.code)
+				}
+				if got[i].Style.Block != want.block {
+					t.Errorf("span[%d].Style.Block = %v, want %v", i, got[i].Style.Block, want.block)
+				}
+			}
+		})
+	}
+}
+
+func TestParseTableWithAlignment(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantAligns []Alignment // Alignment for each column
+	}{
+		{
+			name: "left aligned columns",
+			input: `| A | B |
+|:--|:--|
+| 1 | 2 |`,
+			wantAligns: []Alignment{AlignLeft, AlignLeft},
+		},
+		{
+			name: "center aligned columns",
+			input: `| A | B |
+|:--:|:--:|
+| 1 | 2 |`,
+			wantAligns: []Alignment{AlignCenter, AlignCenter},
+		},
+		{
+			name: "right aligned columns",
+			input: `| A | B |
+|--:|--:|
+| 1 | 2 |`,
+			wantAligns: []Alignment{AlignRight, AlignRight},
+		},
+		{
+			name: "mixed alignment",
+			input: `| Left | Center | Right |
+|:-----|:------:|------:|
+| L    |   C    |     R |`,
+			wantAligns: []Alignment{AlignLeft, AlignCenter, AlignRight},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse and check that alignments are captured correctly
+			// The alignment should be stored in the table spans
+			got := Parse(tt.input)
+
+			// Find a data cell span to check alignment
+			foundDataCell := false
+			for _, span := range got {
+				if span.Style.Table && !span.Style.TableHeader {
+					foundDataCell = true
+					// For now, we just verify the table is parsed
+					// The full alignment check would require checking per-cell alignment
+					break
+				}
+			}
+
+			if !foundDataCell {
+				t.Error("no data cell found in parsed table")
+			}
+		})
+	}
+}
+
+func TestCalculateColumnWidths(t *testing.T) {
+	tests := []struct {
+		name       string
+		rows       [][]string
+		wantWidths []int
+	}{
+		{
+			name: "uniform widths",
+			rows: [][]string{
+				{"A", "B"},
+				{"1", "2"},
+			},
+			wantWidths: []int{1, 1},
+		},
+		{
+			name: "varying widths",
+			rows: [][]string{
+				{"Name", "Value"},
+				{"foo", "1"},
+				{"barbaz", "12345"},
+			},
+			wantWidths: []int{6, 5}, // max of each column
+		},
+		{
+			name: "empty cells",
+			rows: [][]string{
+				{"A", "B", "C"},
+				{"", "xx", ""},
+			},
+			wantWidths: []int{1, 2, 1},
+		},
+		{
+			name: "single row",
+			rows: [][]string{
+				{"Header1", "Header2", "Header3"},
+			},
+			wantWidths: []int{7, 7, 7},
+		},
+		{
+			name:       "empty table",
+			rows:       [][]string{},
+			wantWidths: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateColumnWidths(tt.rows)
+			if len(got) != len(tt.wantWidths) {
+				t.Errorf("width count = %d, want %d\n  got: %v", len(got), len(tt.wantWidths), got)
+				return
+			}
+			for i, want := range tt.wantWidths {
+				if got[i] != want {
+					t.Errorf("width[%d] = %d, want %d", i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestEmitAlignedTable(t *testing.T) {
+	// Test that table cells are padded to column widths
+	input := `| A | BB |
+|---|---|
+| 1 | 2  |`
+
+	got := Parse(input)
+
+	// The table should be rendered with aligned columns
+	// We just check that it parses without error and produces table spans
+	foundTable := false
+	for _, span := range got {
+		if span.Style.Table {
+			foundTable = true
+			break
+		}
+	}
+
+	if !foundTable {
+		t.Error("no table spans found in parsed output")
+	}
+}
+
+func TestEmitTableWithWrap(t *testing.T) {
+	// Test table with longer cell content
+	input := `| Column A | Column B |
+|----------|----------|
+| Short    | This is a longer cell |`
+
+	got := Parse(input)
+
+	// The table should be rendered (for now, we don't wrap cells)
+	// Just verify it parses as a table
+	foundTable := false
+	for _, span := range got {
+		if span.Style.Table {
+			foundTable = true
+			break
+		}
+	}
+
+	if !foundTable {
+		t.Error("no table spans found in parsed output")
+	}
+}
+
+func TestTableSourceMap(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name: "simple table source mapping",
+			input: `| A | B |
+|---|---|
+| 1 | 2 |`,
+		},
+		{
+			name: "table in document",
+			input: `# Header
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+Some text after.`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, sourceMap, _ := ParseWithSourceMap(tt.input)
+
+			// Verify content was parsed
+			if len(content) == 0 {
+				t.Error("no content parsed")
+				return
+			}
+
+			// Verify source map exists and can map positions
+			// ToSource should return valid positions for rendered content
+			totalLen := 0
+			for _, span := range content {
+				totalLen += len([]rune(span.Text))
+			}
+
+			if totalLen > 0 {
+				// Map from start of rendered to source
+				srcStart, srcEnd := sourceMap.ToSource(0, 1)
+				if srcStart < 0 || srcEnd < 0 {
+					t.Errorf("invalid source mapping: srcStart=%d, srcEnd=%d", srcStart, srcEnd)
+				}
+			}
+		})
+	}
+}
+
+func TestTableInDocument(t *testing.T) {
+	// Test table surrounded by other content
+	input := `# Title
+
+Some paragraph text here.
+
+| Header 1 | Header 2 |
+|----------|----------|
+| Data 1   | Data 2   |
+
+More text after the table.`
+
+	got := Parse(input)
+
+	// Should have heading, paragraph, table, and trailing paragraph
+	foundHeading := false
+	foundTable := false
+	foundParagraph := false
+
+	for _, span := range got {
+		if span.Style.Bold && span.Style.Scale > 1.0 {
+			foundHeading = true
+		}
+		if span.Style.Table {
+			foundTable = true
+		}
+		if !span.Style.Bold && !span.Style.Table && span.Style.Scale == 1.0 && span.Text != "\n" {
+			foundParagraph = true
+		}
+	}
+
+	if !foundHeading {
+		t.Error("no heading found")
+	}
+	if !foundTable {
+		t.Error("no table found")
+	}
+	if !foundParagraph {
+		t.Error("no paragraph found")
+	}
+}
+
+func TestTableNotTable(t *testing.T) {
+	// Test that certain patterns are NOT parsed as tables
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "pipe in regular text",
+			input: "This is | not a table",
+		},
+		{
+			name:  "pipe at start but no separator",
+			input: "| This looks like a header\nBut has no separator row",
+		},
+		{
+			name:  "code block with pipe",
+			input: "```\n| A | B |\n|---|---|\n```",
+		},
+		{
+			name:  "single pipe row",
+			input: "| Just one row |",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.input)
+			for _, span := range got {
+				if span.Style.Table {
+					t.Errorf("unexpected table span found in %q: %+v", tt.input, span)
+				}
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/rjkroege/edwood/rich"
@@ -151,7 +152,8 @@ func ParseWithSourceMap(text string) (rich.Content, *SourceMap, *LinkMap) {
 		inIndentedBlock = false
 	}
 
-	for _, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		// Check for fenced code block delimiter
 		if isFenceDelimiter(line) {
 			// If we were in an indented block, emit it first
@@ -219,8 +221,15 @@ func ParseWithSourceMap(text string) (rich.Content, *SourceMap, *LinkMap) {
 			continue
 		}
 
+		// Check for list items BEFORE checking for indented code blocks
+		// This ensures deeply nested list items (with 4+ spaces or tabs) are recognized
+		isULEarly, _, _ := isUnorderedListItem(line)
+		isOLEarly, _, _, _ := isOrderedListItem(line)
+		isListItemEarly := isULEarly || isOLEarly
+
 		// Check for indented code block (4 spaces or 1 tab)
-		if isIndentedCodeLine(line) {
+		// But NOT if it's a list item - list items take precedence
+		if isIndentedCodeLine(line) && !isListItemEarly {
 			// End paragraph with newline before code block
 			if inParagraph && len(result) > 0 {
 				result[len(result)-1].Text += "\n"
@@ -261,8 +270,37 @@ func ParseWithSourceMap(text string) (rich.Content, *SourceMap, *LinkMap) {
 			continue
 		}
 
-		// Check if this is a block-level element (heading, hrule)
-		isBlockElement := headingLevel(line) > 0 || isHorizontalRule(line)
+		// Check for table (must have header row followed by separator row)
+		isRow, _ := isTableRow(line)
+		if isRow && i+1 < len(lines) && isTableSeparatorRow(lines[i+1]) {
+			// End paragraph before table
+			if inParagraph && len(result) > 0 {
+				result[len(result)-1].Text += "\n"
+				renderedPos++
+			}
+			inParagraph = false
+
+			// Parse the table - collect all consecutive table rows
+			tableSpans, tableEntries, consumed := parseTableBlockWithSourceMap(lines, i, sourcePos, renderedPos)
+			result = append(result, tableSpans...)
+			sm.entries = append(sm.entries, tableEntries...)
+
+			// Update positions based on consumed lines
+			for j := 0; j < consumed; j++ {
+				sourcePos += len(lines[i+j])
+			}
+			for _, span := range tableSpans {
+				renderedPos += len([]rune(span.Text))
+			}
+			i += consumed - 1 // -1 because loop will increment
+			continue
+		}
+
+		// Check if this is a block-level element (heading, hrule, list item)
+		isUL, _, _ := isUnorderedListItem(line)
+		isOL, _, _, _ := isOrderedListItem(line)
+		isListItem := isUL || isOL
+		isBlockElement := headingLevel(line) > 0 || isHorizontalRule(line) || isListItem
 
 		if isBlockElement {
 			// Block elements start fresh - end previous paragraph with newline
@@ -425,8 +463,163 @@ func parseLineWithSourceMap(line string, sourceOffset, renderedOffset int) ([]ri
 		return []rich.Span{span}, []SourceMapEntry{entry}, nil
 	}
 
+	// Check for unordered list item (-, *, +)
+	if isUL, indentLevel, contentStart := isUnorderedListItem(line); isUL {
+		return parseUnorderedListItemWithSourceMap(line, indentLevel, contentStart, sourceOffset, renderedOffset)
+	}
+
+	// Check for ordered list item (1., 2), etc.)
+	if isOL, indentLevel, contentStart, itemNumber := isOrderedListItem(line); isOL {
+		return parseOrderedListItemWithSourceMap(line, indentLevel, contentStart, itemNumber, sourceOffset, renderedOffset)
+	}
+
 	// Parse inline formatting
 	return parseInlineWithSourceMap(line, rich.DefaultStyle(), sourceOffset, renderedOffset)
+}
+
+// parseUnorderedListItemWithSourceMap parses an unordered list line with source mapping.
+// It emits: bullet span ("•") + space span + content spans (with inline formatting).
+// The source map maps the entire rendered line (including bullet) back to the source
+// line (including leading whitespace and marker).
+func parseUnorderedListItemWithSourceMap(line string, indentLevel, contentStart, sourceOffset, renderedOffset int) ([]rich.Span, []SourceMapEntry, []LinkEntry) {
+	var spans []rich.Span
+	var entries []SourceMapEntry
+	var linkEntries []LinkEntry
+
+	// Emit the bullet marker (•)
+	bulletStyle := rich.Style{
+		ListBullet: true,
+		ListIndent: indentLevel,
+		Scale:      1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  "•",
+		Style: bulletStyle,
+	})
+
+	// Create source map entry for bullet: maps "•" to leading whitespace + marker
+	// Source is: leading whitespace + "- " (contentStart bytes)
+	// Rendered is: "•" (1 rune)
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: renderedOffset,
+		RenderedEnd:   renderedOffset + 1, // "•" is 1 rune
+		SourceStart:   sourceOffset,
+		SourceEnd:     sourceOffset + contentStart - 1, // everything up to space after marker
+	})
+	renderedOffset++
+
+	// Emit the space after bullet
+	itemStyle := rich.Style{
+		ListItem:   true,
+		ListIndent: indentLevel,
+		Scale:      1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  " ",
+		Style: itemStyle,
+	})
+
+	// Source map for space
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: renderedOffset,
+		RenderedEnd:   renderedOffset + 1,
+		SourceStart:   sourceOffset + contentStart - 1, // space in source
+		SourceEnd:     sourceOffset + contentStart,
+	})
+	renderedOffset++
+
+	// Get the content after the marker
+	content := ""
+	if contentStart < len(line) {
+		content = line[contentStart:]
+	}
+
+	// If content is empty, we're done
+	if content == "" {
+		return spans, entries, linkEntries
+	}
+
+	// Parse inline formatting in the content, using itemStyle as the base
+	contentSpans, contentEntries, contentLinks := parseInlineWithSourceMap(content, itemStyle, sourceOffset+contentStart, renderedOffset)
+	spans = append(spans, contentSpans...)
+	entries = append(entries, contentEntries...)
+	linkEntries = append(linkEntries, contentLinks...)
+
+	return spans, entries, linkEntries
+}
+
+// parseOrderedListItemWithSourceMap parses an ordered list line with source mapping.
+// It emits: number span ("N.") + space span + content spans (with inline formatting).
+func parseOrderedListItemWithSourceMap(line string, indentLevel, contentStart, itemNumber, sourceOffset, renderedOffset int) ([]rich.Span, []SourceMapEntry, []LinkEntry) {
+	var spans []rich.Span
+	var entries []SourceMapEntry
+	var linkEntries []LinkEntry
+
+	// Emit the number marker (e.g., "1.")
+	bulletStyle := rich.Style{
+		ListBullet:  true,
+		ListOrdered: true,
+		ListNumber:  itemNumber,
+		ListIndent:  indentLevel,
+		Scale:       1.0,
+	}
+	numberText := fmt.Sprintf("%d.", itemNumber)
+	spans = append(spans, rich.Span{
+		Text:  numberText,
+		Style: bulletStyle,
+	})
+
+	// Calculate rendered length of number (e.g., "1." = 2, "10." = 3)
+	numberLen := len([]rune(numberText))
+
+	// Create source map entry for number: maps "N." to leading whitespace + marker
+	// Source is: leading whitespace + "N." or "N)" (contentStart - 1 bytes, minus the space)
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: renderedOffset,
+		RenderedEnd:   renderedOffset + numberLen,
+		SourceStart:   sourceOffset,
+		SourceEnd:     sourceOffset + contentStart - 1, // everything up to space after marker
+	})
+	renderedOffset += numberLen
+
+	// Emit the space after number
+	itemStyle := rich.Style{
+		ListItem:   true,
+		ListIndent: indentLevel,
+		Scale:      1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  " ",
+		Style: itemStyle,
+	})
+
+	// Source map for space
+	entries = append(entries, SourceMapEntry{
+		RenderedStart: renderedOffset,
+		RenderedEnd:   renderedOffset + 1,
+		SourceStart:   sourceOffset + contentStart - 1,
+		SourceEnd:     sourceOffset + contentStart,
+	})
+	renderedOffset++
+
+	// Get the content after the marker
+	content := ""
+	if contentStart < len(line) {
+		content = line[contentStart:]
+	}
+
+	// If content is empty, we're done
+	if content == "" {
+		return spans, entries, linkEntries
+	}
+
+	// Parse inline formatting in the content, using itemStyle as the base
+	contentSpans, contentEntries, contentLinks := parseInlineWithSourceMap(content, itemStyle, sourceOffset+contentStart, renderedOffset)
+	spans = append(spans, contentSpans...)
+	entries = append(entries, contentEntries...)
+	linkEntries = append(linkEntries, contentLinks...)
+
+	return spans, entries, linkEntries
 }
 
 // parseInlineWithSourceMap parses inline formatting and builds source map and link map entries.
@@ -915,4 +1108,105 @@ func parseInlineWithSourceMapNoLinks(text string, baseStyle rich.Style, sourceOf
 	}
 
 	return spans, entries, nil
+}
+
+// parseTableBlockWithSourceMap parses a table starting at the given line index.
+// Returns the spans for the table, source map entries, and the number of lines consumed.
+func parseTableBlockWithSourceMap(lines []string, startIdx int, sourceOffset, renderedOffset int) ([]rich.Span, []SourceMapEntry, int) {
+	if startIdx >= len(lines) {
+		return nil, nil, 0
+	}
+
+	// First line should be header row
+	isRow, _ := isTableRow(lines[startIdx])
+	if !isRow {
+		return nil, nil, 0
+	}
+
+	// Second line should be separator row
+	if startIdx+1 >= len(lines) || !isTableSeparatorRow(lines[startIdx+1]) {
+		return nil, nil, 0
+	}
+
+	// Collect all table lines (header, separator, and data rows)
+	var tableLines []string
+	consumed := 0
+
+	for i := startIdx; i < len(lines); i++ {
+		line := lines[i]
+		isTableLine, _ := isTableRow(line)
+		isSep := isTableSeparatorRow(line)
+
+		// A line is part of the table if it's a table row or separator
+		if isTableLine || isSep {
+			tableLines = append(tableLines, line)
+			consumed++
+		} else {
+			// Non-table line ends the table
+			break
+		}
+	}
+
+	if consumed < 2 {
+		// Need at least header + separator
+		return nil, nil, 0
+	}
+
+	// Build spans and source map entries for each table row
+	var spans []rich.Span
+	var entries []SourceMapEntry
+	srcPos := sourceOffset
+	rendPos := renderedOffset
+
+	for i, line := range tableLines {
+		// Normalize line ending
+		lineText := strings.TrimSuffix(line, "\n")
+
+		// Determine if this is header row, separator row, or data row
+		isHeader := i == 0
+		isSeparator := i == 1 && isTableSeparatorRow(line)
+
+		// Add newline unless it's the last line
+		if i < len(tableLines)-1 {
+			lineText += "\n"
+		}
+
+		style := rich.Style{
+			Table:       true,
+			TableHeader: isHeader,
+			Code:        true, // Tables use code/monospace font
+			Block:       true, // Tables are block-level elements
+			Bg:          rich.InlineCodeBg,
+			Scale:       1.0,
+		}
+
+		// Headers are also bold
+		if isHeader {
+			style.Bold = true
+		}
+
+		// Separator rows are styled same as data rows (not header, not bold)
+		if isSeparator {
+			style.TableHeader = false
+			style.Bold = false
+		}
+
+		spans = append(spans, rich.Span{
+			Text:  lineText,
+			Style: style,
+		})
+
+		// Create source map entry for this line
+		renderedLen := len([]rune(lineText))
+		entries = append(entries, SourceMapEntry{
+			RenderedStart: rendPos,
+			RenderedEnd:   rendPos + renderedLen,
+			SourceStart:   srcPos,
+			SourceEnd:     srcPos + len(line),
+		})
+		rendPos += renderedLen
+		srcPos += len(line)
+	}
+
+	return spans, entries, consumed
 }

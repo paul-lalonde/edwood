@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/rjkroege/edwood/rich"
@@ -55,7 +56,8 @@ func Parse(text string) rich.Content {
 	// Track if we're in a paragraph (consecutive non-block lines)
 	inParagraph := false
 
-	for _, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		// Check for fenced code block delimiter
 		if isFenceDelimiter(line) {
 			// If we were in an indented block, emit it first
@@ -98,8 +100,15 @@ func Parse(text string) rich.Content {
 			continue
 		}
 
+		// Check for list items BEFORE checking for indented code blocks
+		// This ensures deeply nested list items (with 4+ spaces or tabs) are recognized
+		isULEarly, _, _ := isUnorderedListItem(line)
+		isOLEarly, _, _, _ := isOrderedListItem(line)
+		isListItemEarly := isULEarly || isOLEarly
+
 		// Check for indented code block (4 spaces or 1 tab)
-		if isIndentedCodeLine(line) {
+		// But NOT if it's a list item - list items take precedence
+		if isIndentedCodeLine(line) && !isListItemEarly {
 			// End paragraph with newline before code block
 			if inParagraph && len(result) > 0 {
 				result[len(result)-1].Text += "\n"
@@ -131,8 +140,27 @@ func Parse(text string) rich.Content {
 			continue
 		}
 
-		// Check if this is a block-level element (heading, hrule)
-		isBlockElement := headingLevel(line) > 0 || isHorizontalRule(line)
+		// Check for table (must have header row followed by separator row)
+		isRow, _ := isTableRow(line)
+		if isRow && i+1 < len(lines) && isTableSeparatorRow(lines[i+1]) {
+			// End paragraph before table
+			if inParagraph && len(result) > 0 {
+				result[len(result)-1].Text += "\n"
+			}
+			inParagraph = false
+
+			// Parse the table - collect all consecutive table rows
+			tableSpans, consumed := parseTableBlock(lines, i)
+			result = append(result, tableSpans...)
+			i += consumed - 1 // -1 because loop will increment
+			continue
+		}
+
+		// Check if this is a block-level element (heading, hrule, list item)
+		isUL, _, _ := isUnorderedListItem(line)
+		isOL, _, _, _ := isOrderedListItem(line)
+		isListItem := isUL || isOL
+		isBlockElement := headingLevel(line) > 0 || isHorizontalRule(line) || isListItem
 
 		if isBlockElement {
 			// Block elements start fresh - end previous paragraph with newline
@@ -155,17 +183,20 @@ func Parse(text string) rich.Content {
 		}
 
 		// Normal line parsing - strip trailing newline for paragraph text
+		// But preserve newline for list items so they end with \n
 		lineToPass := line
 		if !isBlockElement {
 			lineToPass = strings.TrimSuffix(line, "\n")
+		} else if isListItem {
+			// List items keep their trailing newline (if present) in the content
+			// but parseLine will handle the line with the newline
 		}
 		spans := parseLine(lineToPass)
 
 		// Merge consecutive spans with the same style
-		// (but don't merge link spans - each link should remain distinct
-		// for proper LinkMap tracking)
+		// (but don't merge link spans or list item spans - each should remain distinct)
 		for _, span := range spans {
-			if len(result) > 0 && result[len(result)-1].Style == span.Style && !span.Style.Link {
+			if len(result) > 0 && result[len(result)-1].Style == span.Style && !span.Style.Link && !span.Style.ListItem && !span.Style.ListBullet {
 				// Merge with previous span
 				result[len(result)-1].Text += span.Text
 			} else {
@@ -304,6 +335,16 @@ func parseLine(line string) []rich.Span {
 				Scale: headingScales[level],
 			},
 		}}
+	}
+
+	// Check for unordered list item (-, *, +)
+	if isUL, indentLevel, contentStart := isUnorderedListItem(line); isUL {
+		return parseUnorderedListItem(line, indentLevel, contentStart)
+	}
+
+	// Check for ordered list item (1., 2), etc.)
+	if isOL, indentLevel, contentStart, itemNumber := isOrderedListItem(line); isOL {
+		return parseOrderedListItem(line, indentLevel, contentStart, itemNumber)
 	}
 
 	// Parse inline formatting (bold, italic)
@@ -520,6 +561,363 @@ func parseInlineFormatting(text string, baseStyle rich.Style) []rich.Span {
 	return spans
 }
 
+// parseInlineFormattingWithListStyle parses inline formatting while preserving list style fields.
+// All output spans will have ListItem, ListIndent, ListOrdered, and ListNumber from baseStyle.
+func parseInlineFormattingWithListStyle(text string, baseStyle rich.Style) []rich.Span {
+	var spans []rich.Span
+	var currentText strings.Builder
+	i := 0
+
+	for i < len(text) {
+		// Check for [ (potential link) - must be checked early
+		if text[i] == '[' {
+			linkEnd := strings.Index(text[i+1:], "]")
+			if linkEnd != -1 {
+				closeBracket := i + 1 + linkEnd
+				if closeBracket+1 < len(text) && text[closeBracket+1] == '(' {
+					urlEnd := strings.Index(text[closeBracket+2:], ")")
+					if urlEnd != -1 {
+						if currentText.Len() > 0 {
+							spans = append(spans, rich.Span{
+								Text:  currentText.String(),
+								Style: baseStyle,
+							})
+							currentText.Reset()
+						}
+						linkText := text[i+1 : closeBracket]
+						linkStyle := rich.Style{
+							Fg:          rich.LinkBlue,
+							Bg:          baseStyle.Bg,
+							Link:        true,
+							ListItem:    baseStyle.ListItem,
+							ListIndent:  baseStyle.ListIndent,
+							ListOrdered: baseStyle.ListOrdered,
+							ListNumber:  baseStyle.ListNumber,
+							Scale:       baseStyle.Scale,
+						}
+						if linkText == "" {
+							spans = append(spans, rich.Span{
+								Text:  "",
+								Style: linkStyle,
+							})
+						} else {
+							linkSpans := parseInlineFormattingWithListStyleNoLinks(linkText, linkStyle)
+							spans = append(spans, linkSpans...)
+						}
+						i = closeBracket + 2 + urlEnd + 1
+						continue
+					}
+				}
+			}
+			currentText.WriteByte(text[i])
+			i++
+			continue
+		}
+
+		// Check for ` (code span)
+		if text[i] == '`' {
+			end := strings.Index(text[i+1:], "`")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+1 : i+1+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          rich.InlineCodeBg,
+						Code:        true,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 1 + end + 1
+				continue
+			}
+			currentText.WriteByte(text[i])
+			i++
+			continue
+		}
+
+		// Check for *** (bold+italic)
+		if i+2 < len(text) && text[i:i+3] == "***" {
+			end := strings.Index(text[i+3:], "***")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+3 : i+3+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        true,
+						Italic:      true,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 3 + end + 3
+				continue
+			}
+		}
+
+		// Check for ** (bold)
+		if i+1 < len(text) && text[i:i+2] == "**" {
+			end := strings.Index(text[i+2:], "**")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+2 : i+2+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        true,
+						Italic:      baseStyle.Italic,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 2 + end + 2
+				continue
+			}
+			currentText.WriteString("**")
+			i += 2
+			continue
+		}
+
+		// Check for * (italic)
+		if text[i] == '*' {
+			end := strings.Index(text[i+1:], "*")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+1 : i+1+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        baseStyle.Bold,
+						Italic:      true,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 1 + end + 1
+				continue
+			}
+		}
+
+		currentText.WriteByte(text[i])
+		i++
+	}
+
+	if currentText.Len() > 0 {
+		spans = append(spans, rich.Span{
+			Text:  currentText.String(),
+			Style: baseStyle,
+		})
+	}
+
+	if len(spans) == 0 {
+		return []rich.Span{{
+			Text:  text,
+			Style: baseStyle,
+		}}
+	}
+
+	return spans
+}
+
+// parseInlineFormattingWithListStyleNoLinks parses inline formatting while preserving list style fields,
+// but does not parse links (to avoid infinite recursion when parsing link text).
+func parseInlineFormattingWithListStyleNoLinks(text string, baseStyle rich.Style) []rich.Span {
+	var spans []rich.Span
+	var currentText strings.Builder
+	i := 0
+
+	for i < len(text) {
+		// Check for ` (code span)
+		if text[i] == '`' {
+			end := strings.Index(text[i+1:], "`")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+1 : i+1+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          rich.InlineCodeBg,
+						Code:        true,
+						Link:        baseStyle.Link,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 1 + end + 1
+				continue
+			}
+			currentText.WriteByte(text[i])
+			i++
+			continue
+		}
+
+		// Check for *** (bold+italic)
+		if i+2 < len(text) && text[i:i+3] == "***" {
+			end := strings.Index(text[i+3:], "***")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+3 : i+3+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        true,
+						Italic:      true,
+						Link:        baseStyle.Link,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 3 + end + 3
+				continue
+			}
+		}
+
+		// Check for ** (bold)
+		if i+1 < len(text) && text[i:i+2] == "**" {
+			end := strings.Index(text[i+2:], "**")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+2 : i+2+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        true,
+						Italic:      baseStyle.Italic,
+						Link:        baseStyle.Link,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 2 + end + 2
+				continue
+			}
+			currentText.WriteString("**")
+			i += 2
+			continue
+		}
+
+		// Check for * (italic)
+		if text[i] == '*' {
+			end := strings.Index(text[i+1:], "*")
+			if end != -1 {
+				if currentText.Len() > 0 {
+					spans = append(spans, rich.Span{
+						Text:  currentText.String(),
+						Style: baseStyle,
+					})
+					currentText.Reset()
+				}
+				spans = append(spans, rich.Span{
+					Text: text[i+1 : i+1+end],
+					Style: rich.Style{
+						Fg:          baseStyle.Fg,
+						Bg:          baseStyle.Bg,
+						Bold:        baseStyle.Bold,
+						Italic:      true,
+						Link:        baseStyle.Link,
+						ListItem:    baseStyle.ListItem,
+						ListIndent:  baseStyle.ListIndent,
+						ListOrdered: baseStyle.ListOrdered,
+						ListNumber:  baseStyle.ListNumber,
+						Scale:       baseStyle.Scale,
+					},
+				})
+				i = i + 1 + end + 1
+				continue
+			}
+		}
+
+		currentText.WriteByte(text[i])
+		i++
+	}
+
+	if currentText.Len() > 0 {
+		spans = append(spans, rich.Span{
+			Text:  currentText.String(),
+			Style: baseStyle,
+		})
+	}
+
+	if len(spans) == 0 {
+		return []rich.Span{{
+			Text:  text,
+			Style: baseStyle,
+		}}
+	}
+
+	return spans
+}
+
 // parseInlineFormattingNoLinks parses code spans, bold/italic markers but NOT links.
 // Used for parsing text inside link labels to avoid infinite recursion.
 func parseInlineFormattingNoLinks(text string, baseStyle rich.Style) []rich.Span {
@@ -719,4 +1117,481 @@ func headingLevel(line string) int {
 	}
 
 	return level
+}
+
+// isOrderedListItem returns true if line starts with an ordered list marker.
+// Returns: (isListItem bool, indentLevel int, contentStart int, itemNumber int)
+// - isListItem: true if the line is an ordered list item
+// - indentLevel: the nesting level (0 = top level, 1 = first nested level, etc.)
+// - contentStart: the byte index where the item content begins (after "1. ")
+// - itemNumber: the number from the list marker (e.g., 1 for "1.")
+//
+// Ordered list markers are: one or more digits followed by '.' or ')' and a space.
+// Indentation is counted as: 2 spaces or 1 tab = 1 indent level.
+func isOrderedListItem(line string) (bool, int, int, int) {
+	if len(line) == 0 {
+		return false, 0, 0, 0
+	}
+
+	// Count leading whitespace and calculate indent level
+	// 2 spaces = 1 indent level, 1 tab = 1 indent level
+	i := 0
+	spaceCount := 0
+	tabCount := 0
+	for i < len(line) {
+		if line[i] == ' ' {
+			spaceCount++
+			i++
+		} else if line[i] == '\t' {
+			tabCount++
+			i++
+		} else {
+			break
+		}
+	}
+
+	// Calculate indent level: each tab counts as 1 level, each 2 spaces counts as 1 level
+	indentLevel := tabCount + spaceCount/2
+
+	// After whitespace, check for digits
+	if i >= len(line) {
+		return false, 0, 0, 0
+	}
+
+	// Must start with a digit
+	if line[i] < '0' || line[i] > '9' {
+		return false, 0, 0, 0
+	}
+
+	// Parse the number
+	numStart := i
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	numEnd := i
+
+	// Must have at least one digit
+	if numEnd == numStart {
+		return false, 0, 0, 0
+	}
+
+	// Parse the number value
+	itemNumber := 0
+	for j := numStart; j < numEnd; j++ {
+		itemNumber = itemNumber*10 + int(line[j]-'0')
+	}
+
+	// Must be followed by '.' or ')'
+	if i >= len(line) {
+		return false, 0, 0, 0
+	}
+
+	delimiter := line[i]
+	if delimiter != '.' && delimiter != ')' {
+		return false, 0, 0, 0
+	}
+	i++
+
+	// Delimiter must be followed by a space
+	if i >= len(line) || line[i] != ' ' {
+		return false, 0, 0, 0
+	}
+
+	// Content starts after "N. " or "N) "
+	contentStart := i + 1
+
+	return true, indentLevel, contentStart, itemNumber
+}
+
+// parseUnorderedListItem parses an unordered list line and returns styled spans.
+// It emits: bullet span + space span + content spans (with inline formatting).
+func parseUnorderedListItem(line string, indentLevel int, contentStart int) []rich.Span {
+	var spans []rich.Span
+
+	// Emit the bullet marker (•)
+	bulletStyle := rich.Style{
+		ListBullet: true,
+		ListIndent: indentLevel,
+		Scale:      1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  "•",
+		Style: bulletStyle,
+	})
+
+	// Emit the space after bullet
+	itemStyle := rich.Style{
+		ListItem:   true,
+		ListIndent: indentLevel,
+		Scale:      1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  " ",
+		Style: itemStyle,
+	})
+
+	// Get the content after the marker
+	content := ""
+	if contentStart < len(line) {
+		content = line[contentStart:]
+	}
+
+	// If content is empty, we're done
+	if content == "" {
+		return spans
+	}
+
+	// Parse inline formatting in the content, using itemStyle as the base
+	contentSpans := parseInlineFormattingWithListStyle(content, itemStyle)
+	spans = append(spans, contentSpans...)
+
+	return spans
+}
+
+// parseOrderedListItem parses an ordered list line and returns styled spans.
+// It emits: number span + space span + content spans (with inline formatting).
+func parseOrderedListItem(line string, indentLevel int, contentStart int, itemNumber int) []rich.Span {
+	var spans []rich.Span
+
+	// Emit the number marker (e.g., "1.")
+	// Always normalize to "N." format regardless of original delimiter
+	bulletStyle := rich.Style{
+		ListBullet:  true,
+		ListOrdered: true,
+		ListNumber:  itemNumber,
+		ListIndent:  indentLevel,
+		Scale:       1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  fmt.Sprintf("%d.", itemNumber),
+		Style: bulletStyle,
+	})
+
+	// Emit the space after number
+	itemStyle := rich.Style{
+		ListItem:    true,
+		ListOrdered: true,
+		ListNumber:  itemNumber,
+		ListIndent:  indentLevel,
+		Scale:       1.0,
+	}
+	spans = append(spans, rich.Span{
+		Text:  " ",
+		Style: itemStyle,
+	})
+
+	// Get the content after the marker
+	content := ""
+	if contentStart < len(line) {
+		content = line[contentStart:]
+	}
+
+	// If content is empty, we're done
+	if content == "" {
+		return spans
+	}
+
+	// Parse inline formatting in the content, using itemStyle as the base
+	contentSpans := parseInlineFormattingWithListStyle(content, itemStyle)
+	spans = append(spans, contentSpans...)
+
+	return spans
+}
+
+// isUnorderedListItem returns true if line starts with an unordered list marker.
+// Returns: (isListItem bool, indentLevel int, contentStart int)
+// - isListItem: true if the line is an unordered list item
+// - indentLevel: the nesting level (0 = top level, 1 = first nested level, etc.)
+// - contentStart: the byte index where the item content begins (after "- ")
+//
+// Unordered list markers are: -, *, + followed by a space.
+// Indentation is counted as: 2 spaces or 1 tab = 1 indent level.
+func isUnorderedListItem(line string) (bool, int, int) {
+	if len(line) == 0 {
+		return false, 0, 0
+	}
+
+	// Count leading whitespace and calculate indent level
+	// 2 spaces = 1 indent level, 1 tab = 1 indent level
+	i := 0
+	spaceCount := 0
+	tabCount := 0
+	for i < len(line) {
+		if line[i] == ' ' {
+			spaceCount++
+			i++
+		} else if line[i] == '\t' {
+			tabCount++
+			i++
+		} else {
+			break
+		}
+	}
+
+	// Calculate indent level: each tab counts as 1 level, each 2 spaces counts as 1 level
+	indentLevel := tabCount + spaceCount/2
+
+	// After whitespace, check for list marker (-, *, +)
+	if i >= len(line) {
+		return false, 0, 0
+	}
+
+	marker := line[i]
+	if marker != '-' && marker != '*' && marker != '+' {
+		return false, 0, 0
+	}
+
+	// Marker must be followed by a space
+	if i+1 >= len(line) || line[i+1] != ' ' {
+		return false, 0, 0
+	}
+
+	// Check for double markers like "--" which are not list items
+	if i+1 < len(line) && line[i+1] == marker {
+		return false, 0, 0
+	}
+
+	// Content starts after "marker "
+	contentStart := i + 2
+
+	return true, indentLevel, contentStart
+}
+
+// =============================================================================
+// Table Detection Functions (Phase 15B)
+// =============================================================================
+
+// isTableRow returns true if line is a table row (starts with |).
+// Also returns the cell contents (trimmed) if it is a table row.
+func isTableRow(line string) (bool, []string) {
+	// Strip trailing newline for comparison
+	trimmed := strings.TrimSuffix(line, "\n")
+	if trimmed == "" {
+		return false, nil
+	}
+
+	// Must start with |
+	if trimmed[0] != '|' {
+		return false, nil
+	}
+
+	// Split by | and extract cells
+	cells := splitTableCells(trimmed)
+	if len(cells) == 0 {
+		return false, nil
+	}
+
+	return true, cells
+}
+
+// splitTableCells splits a table row into cells, trimming whitespace from each.
+func splitTableCells(line string) []string {
+	// Remove leading and trailing |
+	trimmed := strings.TrimPrefix(line, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+
+	// Split by |
+	parts := strings.Split(trimmed, "|")
+
+	// Trim whitespace from each cell
+	cells := make([]string, len(parts))
+	for i, p := range parts {
+		cells[i] = strings.TrimSpace(p)
+	}
+
+	return cells
+}
+
+// isTableSeparatorRow returns true if the line is a table separator row.
+// A separator row contains cells with only dashes (and optional alignment colons).
+func isTableSeparatorRow(line string) bool {
+	isSep, _ := parseTableSeparator(line)
+	return isSep
+}
+
+// parseTableSeparator parses a table separator row and returns the alignment for each column.
+func parseTableSeparator(line string) (bool, []rich.Alignment) {
+	// Strip trailing newline for comparison
+	trimmed := strings.TrimSuffix(line, "\n")
+	if trimmed == "" {
+		return false, nil
+	}
+
+	// Must start with |
+	if trimmed[0] != '|' {
+		return false, nil
+	}
+
+	cells := splitTableCells(trimmed)
+	if len(cells) == 0 {
+		return false, nil
+	}
+
+	aligns := make([]rich.Alignment, len(cells))
+	for i, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		align, ok := parseSeparatorCell(cell)
+		if !ok {
+			return false, nil
+		}
+		aligns[i] = align
+	}
+
+	return true, aligns
+}
+
+// parseSeparatorCell checks if a cell is a valid separator cell (dashes with optional alignment colons).
+// Returns the alignment and whether it's valid.
+func parseSeparatorCell(cell string) (rich.Alignment, bool) {
+	// Minimum valid separator cell is "---" (3 chars) or ":--" / "--:" (also 3 chars)
+	if len(cell) < 3 {
+		return rich.AlignLeft, false
+	}
+
+	// Check for alignment markers
+	hasLeftColon := strings.HasPrefix(cell, ":")
+	hasRightColon := strings.HasSuffix(cell, ":")
+
+	// Remove colons for dash check
+	inner := cell
+	if hasLeftColon {
+		inner = inner[1:]
+	}
+	if hasRightColon && len(inner) > 0 {
+		inner = inner[:len(inner)-1]
+	}
+
+	// Must have at least 1 dash (after removing colons)
+	// CommonMark requires at least 1 dash; we require 1 for compatibility
+	if len(inner) < 1 {
+		return rich.AlignLeft, false
+	}
+
+	// Rest must be all dashes
+	for _, c := range inner {
+		if c != '-' {
+			return rich.AlignLeft, false
+		}
+	}
+
+	// Determine alignment
+	if hasLeftColon && hasRightColon {
+		return rich.AlignCenter, true
+	}
+	if hasRightColon {
+		return rich.AlignRight, true
+	}
+	// Default is left (including explicit left with just leading colon)
+	return rich.AlignLeft, true
+}
+
+// calculateColumnWidths calculates the maximum width for each column.
+func calculateColumnWidths(rows [][]string) []int {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	// Find the number of columns from the first row
+	numCols := len(rows[0])
+	widths := make([]int, numCols)
+
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < numCols {
+				w := len(cell)
+				if w > widths[i] {
+					widths[i] = w
+				}
+			}
+		}
+	}
+
+	return widths
+}
+
+// parseTableBlock parses a table starting at the given line index.
+// Returns the spans for the table and the number of lines consumed.
+func parseTableBlock(lines []string, startIdx int) ([]rich.Span, int) {
+	if startIdx >= len(lines) {
+		return nil, 0
+	}
+
+	// First line should be header row
+	isRow, _ := isTableRow(lines[startIdx])
+	if !isRow {
+		return nil, 0
+	}
+
+	// Second line should be separator row
+	if startIdx+1 >= len(lines) || !isTableSeparatorRow(lines[startIdx+1]) {
+		return nil, 0
+	}
+
+	// Collect all table lines (header, separator, and data rows)
+	var tableLines []string
+	consumed := 0
+
+	for i := startIdx; i < len(lines); i++ {
+		line := lines[i]
+		isTableLine, _ := isTableRow(line)
+		isSep := isTableSeparatorRow(line)
+
+		// A line is part of the table if it's a table row or separator
+		if isTableLine || isSep {
+			tableLines = append(tableLines, line)
+			consumed++
+		} else {
+			// Non-table line ends the table
+			break
+		}
+	}
+
+	if consumed < 2 {
+		// Need at least header + separator
+		return nil, 0
+	}
+
+	// Build spans for each table row
+	var spans []rich.Span
+
+	for i, line := range tableLines {
+		// Normalize line ending
+		lineText := strings.TrimSuffix(line, "\n")
+
+		// Determine if this is header row, separator row, or data row
+		isHeader := i == 0
+		isSeparator := i == 1 && isTableSeparatorRow(line)
+
+		// Add newline unless it's the last line
+		if i < len(tableLines)-1 {
+			lineText += "\n"
+		}
+
+		style := rich.Style{
+			Table:       true,
+			TableHeader: isHeader,
+			Code:        true, // Tables use code/monospace font
+			Block:       true, // Tables are block-level elements
+			Bg:          rich.InlineCodeBg,
+			Scale:       1.0,
+		}
+
+		// Headers are also bold
+		if isHeader {
+			style.Bold = true
+		}
+
+		// Separator rows are styled same as data rows (not header, not bold)
+		if isSeparator {
+			style.TableHeader = false
+			style.Bold = false
+		}
+
+		spans = append(spans, rich.Span{
+			Text:  lineText,
+			Style: style,
+		})
+	}
+
+	return spans, consumed
 }
