@@ -1009,10 +1009,14 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 	// Handle button 2 (B2/middle-click) in frame area for Execute action
 	if m.Point.In(frameRect) && m.Buttons&2 != 0 {
+		// Save the prior selection to restore after B2 execute
+		priorP0, priorP1 := rt.Selection()
+
 		var p0, p1 int
 		if mc != nil {
-			// Use Frame.Select() for proper drag selection with B2
-			p0, p1 = rt.Frame().Select(mc, m)
+			// Use Frame.SelectWithColor() for proper drag selection with B2
+			// Pass global.but2col (red) for colored sweep during drag
+			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but2col)
 			rt.SetSelection(p0, p1)
 		} else {
 			// Fallback: just set point selection if no Mousectl available
@@ -1039,6 +1043,12 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		if cmdText != "" {
 			previewExecute(&w.body, cmdText)
 		}
+		// Restore prior selection after B2 execute action
+		rt.SetSelection(priorP0, priorP1)
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
 		return true
 	}
 
@@ -1047,7 +1057,9 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		// First, perform sweep selection (like B1/B2)
 		var p0, p1 int
 		if mc != nil {
-			p0, p1 = rt.Frame().Select(mc, m)
+			// Use Frame.SelectWithColor() for proper drag selection with B3
+			// Pass global.but3col (green) for colored sweep during drag
+			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but3col)
 			rt.SetSelection(p0, p1)
 		} else {
 			charPos := rt.Frame().Charofpt(m.Point)
@@ -1121,20 +1133,94 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 		// Not a link or image - use selected text for Look (search in body)
 		w.syncSourceSelection()
+
+		// Read source text from body selection (not rendered text)
+		// This ensures we search for the actual markdown source, not stripped text
+		srcLen := w.body.q1 - w.body.q0
+		if srcLen > 0 {
+			srcBuf := make([]rune, srcLen)
+			w.body.file.Read(w.body.q0, srcBuf)
+
+			// Search source buffer for the source text
+			if search(&w.body, srcBuf) {
+				// Map the search result (body.q0/q1) back to rendered positions
+				if w.previewSourceMap != nil {
+					rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+					if rendStart >= 0 && rendEnd >= 0 {
+						rt.SetSelection(rendStart, rendEnd)
+						w.scrollPreviewToMatch(rt, rendStart)
+						// Warp cursor to found text, matching normal Acme's look3() behavior
+						if w.display != nil {
+							warpPt := rt.Frame().Ptofchar(rendStart).Add(
+								image.Pt(4, rt.Frame().DefaultFontHeight()-4))
+							w.display.MoveTo(warpPt)
+						}
+					}
+				}
+			}
+		}
+
 		w.Draw()
 		if w.display != nil {
 			w.display.Flush()
-		}
-
-		lookText := w.PreviewLookText()
-		if lookText != "" {
-			// Search for the text in the body buffer
-			search(&w.body, []rune(lookText))
 		}
 		return true
 	}
 
 	return false
+}
+
+// scrollPreviewToMatch scrolls the preview so that the match at rendStart
+// is visible, placing it roughly 1/3 from the top of the frame (matching
+// Acme's Show() scroll behavior). If the match is already visible, no
+// scrolling occurs.
+func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
+	fr := rt.Frame()
+	if fr == nil {
+		return
+	}
+
+	// Get layout information
+	lineStarts := fr.LineStartRunes()
+	maxLines := fr.MaxLines()
+	if maxLines <= 0 || len(lineStarts) == 0 {
+		return
+	}
+
+	// Find which line contains rendStart
+	origin := rt.Origin()
+	matchLine := 0
+	for i, start := range lineStarts {
+		if rendStart >= start {
+			matchLine = i
+		} else {
+			break
+		}
+	}
+
+	// Find which line corresponds to the current origin
+	originLine := 0
+	for i, start := range lineStarts {
+		if origin >= start {
+			originLine = i
+		} else {
+			break
+		}
+	}
+
+	// Check if the match is already visible
+	if matchLine >= originLine && matchLine < originLine+maxLines {
+		return
+	}
+
+	// Scroll so the match is ~1/3 from the top
+	targetLine := matchLine - maxLines/3
+	if targetLine < 0 {
+		targetLine = 0
+	}
+	if targetLine < len(lineStarts) {
+		rt.SetOrigin(lineStarts[targetLine])
+	}
 }
 
 // SetPreviewSourceMap sets the source map used for mapping rendered positions
