@@ -1,5 +1,5 @@
 // Package command provides command dispatch functionality for edwood.
-// This file contains types and helpers for preview commands (Markdeep).
+// This file contains types and helpers for preview commands (Markdown).
 package command
 
 import (
@@ -22,7 +22,7 @@ const (
 
 // PreviewState represents the state of a window for preview commands.
 // This type captures the state needed to make decisions about whether
-// the Markdeep command can be executed.
+// the Markdown command can be executed.
 type PreviewState struct {
 	fileName    string
 	hasWindow   bool
@@ -88,8 +88,8 @@ func (ps *PreviewState) ToggleAction() PreviewAction {
 // Preview Operation Types
 // =============================================================================
 
-// PreviewOperation represents the parameters for a preview (Markdeep) operation.
-// Markdeep toggles between showing raw markdown and rendered preview.
+// PreviewOperation represents the parameters for a preview (Markdown) operation.
+// Markdown toggles between showing raw markdown and rendered preview.
 type PreviewOperation struct{}
 
 // NewPreviewOperation creates a new PreviewOperation.
@@ -99,7 +99,7 @@ func NewPreviewOperation() *PreviewOperation {
 
 // Name returns the command name.
 func (p *PreviewOperation) Name() string {
-	return "Markdeep"
+	return "Markdown"
 }
 
 // RequiresWindow returns true because preview operates on a window.
@@ -112,7 +112,7 @@ func (p *PreviewOperation) RequiresMarkdown() bool {
 	return true
 }
 
-// IsToggle returns true because Markdeep toggles preview mode on/off.
+// IsToggle returns true because Markdown toggles preview mode on/off.
 func (p *PreviewOperation) IsToggle() bool {
 	return true
 }
@@ -208,9 +208,9 @@ func NewPreviewCommandRegistry() *PreviewCommandRegistry {
 }
 
 // RegisterPreviewCommands registers all preview commands with the dispatcher.
-// The commands registered are: Markdeep
+// The commands registered are: Markdown
 func (r *PreviewCommandRegistry) RegisterPreviewCommands(d *Dispatcher) {
-	// Markdeep is not undoable (it's a view toggle, not text modification)
-	// Flags are unused for Markdeep
-	d.RegisterCommand(NewCommandEntry("Markdeep", false, true, true))
+	// Markdown is not undoable (it's a view toggle, not text modification)
+	// Flags are unused for Markdown
+	d.RegisterCommand(NewCommandEntry("Markdown", false, true, true))
 }

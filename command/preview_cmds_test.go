@@ -10,7 +10,7 @@ import (
 // =============================================================================
 //
 // These tests verify the interfaces and behaviors needed for preview commands
-// (Markdeep) that will be extracted from exec.go.
+// (Markdown) that will be extracted from exec.go.
 //
 // The actual command implementations depend on main package types (Window,
 // RichText, markdown.SourceMap, etc.). These tests verify the command package
@@ -193,7 +193,7 @@ func TestPreviewOperationNew(t *testing.T) {
 		t.Error("preview should require markdown file")
 	}
 	if !op.IsToggle() {
-		t.Error("Markdeep should be a toggle command")
+		t.Error("Markdown should be a toggle command")
 	}
 }
 
@@ -201,9 +201,9 @@ func TestPreviewOperationNew(t *testing.T) {
 func TestPreviewOperationName(t *testing.T) {
 	op := NewPreviewOperation()
 
-	// The command is called "Markdeep" in the UI
-	if op.Name() != "Markdeep" {
-		t.Errorf("Name() = %q, want %q", op.Name(), "Markdeep")
+	// The command is called "Markdown" in the UI
+	if op.Name() != "Markdown" {
+		t.Errorf("Name() = %q, want %q", op.Name(), "Markdown")
 	}
 }
 
@@ -292,26 +292,26 @@ func TestPreviewResourcesNeedsClear(t *testing.T) {
 // Preview Command Entry Tests
 // =============================================================================
 
-// TestPreviewCommandEntry tests that Markdeep command has correct properties.
+// TestPreviewCommandEntry tests that Markdown command has correct properties.
 func TestPreviewCommandEntry(t *testing.T) {
 	d := NewDispatcher()
 	reg := NewPreviewCommandRegistry()
 	reg.RegisterPreviewCommands(d)
 
-	// Verify Markdeep is registered
-	cmd := d.LookupCommand("Markdeep")
+	// Verify Markdown is registered
+	cmd := d.LookupCommand("Markdown")
 	if cmd == nil {
-		t.Fatal("Markdeep command not found")
+		t.Fatal("Markdown command not found")
 	}
 
-	// Markdeep is not undoable (it's a view toggle, not a text modification)
+	// Markdown is not undoable (it's a view toggle, not a text modification)
 	if cmd.Mark() {
-		t.Error("Markdeep should not be undoable (mark=false)")
+		t.Error("Markdown should not be undoable (mark=false)")
 	}
 
 	// Verify the name
-	if cmd.Name() != "Markdeep" {
-		t.Errorf("Name() = %q, want %q", cmd.Name(), "Markdeep")
+	if cmd.Name() != "Markdown" {
+		t.Errorf("Name() = %q, want %q", cmd.Name(), "Markdown")
 	}
 }
 
@@ -326,11 +326,11 @@ func TestPreviewCommandDispatch(t *testing.T) {
 		wantName string
 		found    bool
 	}{
-		{"Markdeep", "Markdeep", true},
-		{"markdeep", "", false}, // Case sensitive
-		{"MARKDEEP", "", false}, // Case sensitive
+		{"Markdown", "Markdown", true},
+		{"markdown", "", false}, // Case sensitive
+		{"MARKDOWN", "", false}, // Case sensitive
 		{"Preview", "", false},  // Not the command name
-		{"Markdown", "", false}, // Not the command name
+		{"Markdeep", "", false}, // Not the command name
 	}
 
 	for _, tc := range tests {
@@ -365,9 +365,9 @@ func TestPreviewCommandRegistryIntegration(t *testing.T) {
 		t.Errorf("expected 1 command, got %d", len(cmds))
 	}
 
-	// Verify the command is Markdeep
-	if len(cmds) > 0 && cmds[0].Name() != "Markdeep" {
-		t.Errorf("expected Markdeep command, got %s", cmds[0].Name())
+	// Verify the command is Markdown
+	if len(cmds) > 0 && cmds[0].Name() != "Markdown" {
+		t.Errorf("expected Markdown command, got %s", cmds[0].Name())
 	}
 }
 
@@ -407,8 +407,8 @@ func TestAllCommandTypesWithPreview(t *testing.T) {
 	if d.LookupCommand("Zerox") == nil {
 		t.Error("Zerox (window command) should be registered")
 	}
-	if d.LookupCommand("Markdeep") == nil {
-		t.Error("Markdeep (preview command) should be registered")
+	if d.LookupCommand("Markdown") == nil {
+		t.Error("Markdown (preview command) should be registered")
 	}
 }
 

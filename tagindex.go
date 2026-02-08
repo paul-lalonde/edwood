@@ -171,7 +171,7 @@ func (w *Window) setTag1() {
 		Lput      = " Put"
 		Llook     = " Look"
 		Ledit     = " Edit"
-		Lmarkdeep = " Markdeep"
+		Lmarkdown = " Markdown"
 		Lpipe     = " |"
 	)
 
@@ -212,9 +212,9 @@ func (w *Window) setTag1() {
 		sb.WriteString(Lpipe)
 		sb.WriteString(Llook)
 		sb.WriteString(Ledit)
-		// Add Markdeep command for markdown files
+		// Add Markdown command for markdown files
 		if strings.HasSuffix(strings.ToLower(w.body.file.Name()), ".md") {
-			sb.WriteString(Lmarkdeep)
+			sb.WriteString(Lmarkdown)
 		}
 		sb.WriteString(" ")
 	}

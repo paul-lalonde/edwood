@@ -77,7 +77,7 @@ var globalexectab = []Exectab{
 	{"Newcol", newcol, false, true /*unused*/, true /*unused*/},
 	{"Paste", paste, true, true, true /*unused*/},
 	{"Plain", plaincmd, false, true /*unused*/, true /*unused*/},
-	{"Markdeep", previewcmd, false, true /*unused*/, true /*unused*/},
+	{"Markdown", previewcmd, false, true /*unused*/, true /*unused*/},
 	{"Put", put, false, true /*unused*/, true /*unused*/},
 	{"Putall", putall, false, true /*unused*/, true /*unused*/},
 	{"Redo", undo, false, false, true /*unused*/},
@@ -1204,13 +1204,13 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	// Get the file name
 	name := t.file.Name()
 	if name == "" {
-		warning(nil, "Markdeep: no file name\n")
+		warning(nil, "Markdown: no file name\n")
 		return
 	}
 
 	// Check if it's a markdown file
 	if !strings.HasSuffix(strings.ToLower(name), ".md") {
-		warning(nil, "Markdeep: %s is not a markdown file\n", name)
+		warning(nil, "Markdown: %s is not a markdown file\n", name)
 		return
 	}
 
@@ -1258,12 +1258,12 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	// Allocate colors for the preview
 	bgImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
 	if err != nil {
-		warning(nil, "Markdeep: failed to allocate background: %v\n", err)
+		warning(nil, "Markdown: failed to allocate background: %v\n", err)
 		return
 	}
 	textImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
 	if err != nil {
-		warning(nil, "Markdeep: failed to allocate text color: %v\n", err)
+		warning(nil, "Markdown: failed to allocate text color: %v\n", err)
 		return
 	}
 
@@ -1403,9 +1403,12 @@ func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 // fileHooks maps lowercase file extensions to external tool names
 // that should be automatically run when a file with that extension is opened.
 var fileHooks = map[string]string{
-	".go": "edcolor",
-	".py": "edcolor",
-	".rs": "edcolor",
+	".go":  "edcolor",
+	".py":  "edcolor",
+	".rs":  "edcolor",
+	".tex": "edcolor",
+	".sty": "edcolor",
+	".cls": "edcolor",
 }
 
 // fileHookTool returns the tool name for the given filename based on its

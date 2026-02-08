@@ -85,8 +85,9 @@ type Window struct {
 	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
 	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
 
-	spanStore  *SpanStore // styled text runs (nil when no spans)
-	styledMode bool       // true when showing span-styled text via rich.Frame
+	spanStore        *SpanStore // styled text runs (nil when no spans)
+	styledMode       bool       // true when showing span-styled text via rich.Frame
+	styledSuppressed bool       // true when user explicitly chose Plain; suppresses auto-enable
 }
 
 var (
@@ -418,6 +419,7 @@ func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
 		w.previewMode = false
 		w.styledMode = false
+		w.styledSuppressed = false
 		w.richBody = nil
 		xfidlog(w, "del")
 		w.tag.file.DelObserver(w)
@@ -1262,10 +1264,10 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 					Data: []byte(url),
 				}
 				if err := pm.Send(plumbsendfid); err != nil {
-					warning(nil, "Markdeep B3: plumb failed: %v\n", err)
+					warning(nil, "Markdown B3: plumb failed: %v\n", err)
 				}
 			} else {
-				warning(nil, "Markdeep B3: plumber not running\n")
+				warning(nil, "Markdown B3: plumber not running\n")
 			}
 			return true
 		}
@@ -1283,10 +1285,10 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 					Data: []byte(imageURL),
 				}
 				if err := pm.Send(plumbsendfid); err != nil {
-					warning(nil, "Markdeep B3 image: plumb failed: %v\n", err)
+					warning(nil, "Markdown B3 image: plumb failed: %v\n", err)
 				}
 			} else {
-				warning(nil, "Markdeep B3 image: plumber not running\n")
+				warning(nil, "Markdown B3 image: plumber not running\n")
 			}
 			return true
 		}
@@ -1511,15 +1513,23 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 		return
 	}
 
-	// Get layout information
+	// Use pixel coordinates for visibility check.
+	// MaxLines() overestimates for variable-height content (images,
+	// code blocks, paragraph spacing), so use Ptofchar instead.
+	pt := fr.Ptofchar(rendStart)
+	frameRect := fr.Rect()
+	fontHeight := fr.DefaultFontHeight()
+	if pt.Y >= frameRect.Min.Y && pt.Y+fontHeight <= frameRect.Max.Y {
+		return // Actually visible in the viewport
+	}
+
+	// Need to scroll. Find line-based coordinates.
 	lineStarts := fr.LineStartRunes()
 	maxLines := fr.MaxLines()
 	if maxLines <= 0 || len(lineStarts) == 0 {
 		return
 	}
 
-	// Find which line contains rendStart
-	origin := rt.Origin()
 	matchLine := 0
 	for i, start := range lineStarts {
 		if rendStart >= start {
@@ -1527,21 +1537,6 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 		} else {
 			break
 		}
-	}
-
-	// Find which line corresponds to the current origin
-	originLine := 0
-	for i, start := range lineStarts {
-		if origin >= start {
-			originLine = i
-		} else {
-			break
-		}
-	}
-
-	// Check if the match is already visible
-	if matchLine >= originLine && matchLine < originLine+maxLines {
-		return
 	}
 
 	// Scroll so the match is ~1/3 from the top
@@ -2105,6 +2100,7 @@ func (w *Window) initStyledMode() {
 
 	w.richBody = rt
 	w.styledMode = true
+	w.styledSuppressed = false
 }
 
 // exitStyledMode switches the window from styled rendering back to plain mode.
@@ -2121,6 +2117,7 @@ func (w *Window) exitStyledMode() {
 	}
 
 	w.styledMode = false
+	w.styledSuppressed = true
 	w.richBody = nil
 
 	if w.display != nil {

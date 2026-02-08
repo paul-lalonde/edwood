@@ -438,7 +438,7 @@ func TestDispatcherIntegration(t *testing.T) {
 		{"New", false, true, true},
 		{"Newcol", false, true, true},
 		{"Paste", true, true, true},
-		{"Markdeep", false, true, true},
+		{"Markdown", false, true, true},
 		{"Put", false, true, true},
 		{"Putall", false, true, true},
 		{"Redo", false, false, true},
