@@ -85,7 +85,8 @@ type Window struct {
 	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
 	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
 
-	spanStore *SpanStore // styled text runs (nil when no spans)
+	spanStore  *SpanStore // styled text runs (nil when no spans)
+	styledMode bool       // true when showing span-styled text via rich.Frame
 }
 
 var (
@@ -349,14 +350,14 @@ func (w *Window) Resize(r image.Rectangle, safe, keepextra bool) int {
 			r1.Max.Y = y
 		}
 		// Always resize body Text to maintain canonical rectangle
-		// Pass noredraw=true if in preview mode (we'll render ourselves)
-		y = w.body.Resize(r1, keepextra, w.previewMode /* noredraw */)
+		// Pass noredraw=true if in preview or styled mode (we'll render ourselves)
+		y = w.body.Resize(r1, keepextra, w.previewMode || w.styledMode /* noredraw */)
 		w.r = r
 		w.r.Max.Y = y
 		w.body.all.Min.Y = oy
 
 		// Render the appropriate view
-		if w.previewMode && w.richBody != nil {
+		if (w.previewMode || w.styledMode) && w.richBody != nil {
 			w.richBody.Render(w.body.all)
 		} else {
 			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
@@ -416,6 +417,7 @@ func (w *Window) MouseBut() {
 func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
 		w.previewMode = false
+		w.styledMode = false
 		w.richBody = nil
 		xfidlog(w, "del")
 		w.tag.file.DelObserver(w)
@@ -912,7 +914,7 @@ func (w *Window) RichBody() *RichText {
 // Draw renders the window. In preview mode, it renders the richBody;
 // otherwise, it uses the normal body rendering.
 func (w *Window) Draw() {
-	if w.previewMode && w.richBody != nil {
+	if (w.previewMode || w.styledMode) && w.richBody != nil {
 		w.richBody.Render(w.body.all)
 	} else {
 		// Normal body rendering is handled by the existing Text.Redraw
@@ -2050,4 +2052,122 @@ func resolveImagePath(basePath, imgPath string) string {
 	// Join and clean the path
 	resolved := filepath.Join(baseDir, imgPath)
 	return filepath.Clean(resolved)
+}
+
+// IsStyledMode returns true if the window is in styled rendering mode.
+func (w *Window) IsStyledMode() bool {
+	return w.styledMode
+}
+
+// initStyledMode switches the window from plain text to styled rendering mode.
+// It initializes a RichText renderer for span-styled content. No-op if already
+// in styled or preview mode.
+func (w *Window) initStyledMode() {
+	if w.styledMode || w.previewMode {
+		return
+	}
+
+	display := w.display
+	if display == nil {
+		display = global.row.display
+	}
+	if display == nil {
+		return
+	}
+
+	font := fontget(global.tagfont, display)
+	boldFont := tryLoadFontVariant(display, global.tagfont, "bold")
+	italicFont := tryLoadFontVariant(display, global.tagfont, "italic")
+	boldItalicFont := tryLoadFontVariant(display, global.tagfont, "bolditalic")
+
+	rt := NewRichText()
+
+	bgImage, err := display.AllocImage(
+		image.Rect(0, 0, 1, 1),
+		display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	if err != nil {
+		return
+	}
+	textImage, err := display.AllocImage(
+		image.Rect(0, 0, 1, 1),
+		display.ScreenImage().Pix(), true, 0x000000FF)
+	if err != nil {
+		return
+	}
+
+	rtOpts := []RichTextOption{
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+		WithRichTextSelectionColor(global.textcolors[frame.ColHigh]),
+		WithScrollbarColors(
+			global.textcolors[frame.ColBord],
+			global.textcolors[frame.ColBack]),
+	}
+	if boldFont != nil {
+		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
+	}
+	if italicFont != nil {
+		rtOpts = append(rtOpts, WithRichTextItalicFont(italicFont))
+	}
+	if boldItalicFont != nil {
+		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
+	}
+
+	rt.Init(display, font, rtOpts...)
+
+	w.richBody = rt
+	w.styledMode = true
+}
+
+// exitStyledMode switches the window from styled rendering back to plain mode.
+// No-op if not in styled mode.
+func (w *Window) exitStyledMode() {
+	if !w.styledMode {
+		return
+	}
+	w.styledMode = false
+	w.richBody = nil
+
+	if w.display != nil {
+		w.body.Resize(w.body.all, true, false)
+		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+		w.display.Flush()
+	}
+}
+
+// buildStyledContent builds rich.Content from the body text and span store.
+func (w *Window) buildStyledContent() rich.Content {
+	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
+		return rich.Plain(w.body.file.String())
+	}
+
+	var content []rich.Span
+	offset := 0
+	w.spanStore.ForEachRun(func(run StyleRun) {
+		if run.Len == 0 {
+			return
+		}
+		buf := make([]rune, run.Len)
+		w.body.file.Read(offset, buf)
+
+		span := rich.Span{
+			Text:  string(buf),
+			Style: styleAttrsToRichStyle(run.Style),
+		}
+		content = append(content, span)
+		offset += run.Len
+	})
+	return rich.Content(content)
+}
+
+// styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
+func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
+	s := rich.Style{
+		Scale: 1.0,
+	}
+	s.Fg = sa.Fg
+	s.Bg = sa.Bg
+	s.Bold = sa.Bold
+	s.Italic = sa.Italic
+	return s
 }
