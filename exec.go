@@ -1403,8 +1403,9 @@ func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 // fileHooks maps lowercase file extensions to external tool names
 // that should be automatically run when a file with that extension is opened.
 var fileHooks = map[string]string{
-	".go": "gocolor",
-	".py": "pycolor",
+	".go": "edcolor",
+	".py": "edcolor",
+	".rs": "edcolor",
 }
 
 // fileHookTool returns the tool name for the given filename based on its

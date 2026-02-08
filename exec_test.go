@@ -791,13 +791,16 @@ func TestFileHookTool(t *testing.T) {
 		want string
 	}{
 		{"", ""},
-		{"main.go", "gocolor"},
-		{"main.GO", "gocolor"},
-		{"script.py", "pycolor"},
-		{"script.PY", "pycolor"},
+		{"main.go", "edcolor"},
+		{"main.GO", "edcolor"},
+		{"script.py", "edcolor"},
+		{"script.PY", "edcolor"},
+		{"main.rs", "edcolor"},
+		{"main.RS", "edcolor"},
 		{"readme.txt", ""},
-		{"/path/to/file.go", "gocolor"},
-		{"/path/to/file.py", "pycolor"},
+		{"/path/to/file.go", "edcolor"},
+		{"/path/to/file.py", "edcolor"},
+		{"/path/to/file.rs", "edcolor"},
 		{"/path/to/file.c", ""},
 		{"noext", ""},
 	}
