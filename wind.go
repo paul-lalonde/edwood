@@ -1597,6 +1597,7 @@ func (w *Window) UpdatePreview() {
 
 	// Get the current scroll position to preserve it
 	currentOrigin := w.richBody.Origin()
+	currentYOffset := w.richBody.GetOriginYOffset()
 
 	// Read the current body content
 	bodyContent := w.body.file.String()
@@ -1644,6 +1645,7 @@ func (w *Window) UpdatePreview() {
 		currentOrigin = newLen
 	}
 	w.richBody.SetOrigin(currentOrigin)
+	w.richBody.SetOriginYOffset(currentYOffset)
 
 	// Render the preview using body.all as the canonical geometry
 	w.richBody.Render(w.body.all)
@@ -1846,127 +1848,79 @@ func (w *Window) HandlePreviewKey(key rune) bool {
 		return false
 	}
 
-	// Helper to count lines and get line start positions in the content
-	getLineInfo := func() (lineCount int, lineStarts []int) {
-		content := rt.Content()
-		if content == nil {
-			return 1, []int{0}
+	// Compute current pixel position for pixel-based scrolling.
+	// Uses the frame's layout line data (which accounts for images and
+	// other tall elements) rather than content newlines.
+	lineHeights := frame.LinePixelHeights()
+	lineStarts := frame.LineStartRunes()
+	if len(lineHeights) == 0 || len(lineStarts) == 0 {
+		if key == 0x1B {
+			w.SetPreviewMode(false)
+			return true
 		}
-		lineCount = 1
-		lineStarts = []int{0}
-		runeOffset := 0
-		for _, span := range content {
-			for _, r := range span.Text {
-				if r == '\n' {
-					lineCount++
-					lineStarts = append(lineStarts, runeOffset+1)
-				}
-				runeOffset++
-			}
-		}
-		return lineCount, lineStarts
+		return false
 	}
 
-	// Helper to find origin for a specific line
-	findOriginForLine := func(line int, lineStarts []int) int {
-		if line < 0 {
-			return 0
-		}
-		if line >= len(lineStarts) {
-			return lineStarts[len(lineStarts)-1]
-		}
-		return lineStarts[line]
+	totalPixelHeight := 0
+	for _, h := range lineHeights {
+		totalPixelHeight += h
+	}
+	frameHeight := frame.Rect().Dy()
+	fontH := frame.DefaultFontHeight()
+	if fontH <= 0 {
+		fontH = 14
 	}
 
-	// Helper to find current line from origin
-	findCurrentLine := func(origin int, lineStarts []int) int {
-		currentLine := 0
-		for i, start := range lineStarts {
-			if origin >= start {
-				currentLine = i
-			} else {
-				break
-			}
-		}
-		return currentLine
+	currentLine := findLineForOrigin(rt.Origin(), lineStarts)
+	currentPixelY := lineOffsetToPixel(currentLine, rt.GetOriginYOffset(), lineHeights)
+
+	maxPixelY := totalPixelHeight - frameHeight
+	if maxPixelY < 0 {
+		maxPixelY = 0
 	}
 
 	switch key {
 	case draw.KeyPageDown:
-		// Scroll down by a page
-		lineCount, lineStarts := getLineInfo()
-		maxLines := frame.MaxLines()
-		if maxLines <= 0 {
-			maxLines = 10
+		// Scroll down by a page worth of pixels
+		step := frame.MaxLines() * fontH
+		if step <= 0 {
+			step = 10 * fontH
 		}
-		currentLine := findCurrentLine(rt.Origin(), lineStarts)
-		newLine := currentLine + maxLines
-		if newLine >= lineCount {
-			newLine = lineCount - 1
-		}
-		rt.SetOrigin(findOriginForLine(newLine, lineStarts))
+		rt.ScrollToPixelY(currentPixelY + step)
 		rt.Redraw()
 		return true
 
 	case draw.KeyPageUp:
-		// Scroll up by a page
-		_, lineStarts := getLineInfo()
-		maxLines := frame.MaxLines()
-		if maxLines <= 0 {
-			maxLines = 10
+		// Scroll up by a page worth of pixels
+		step := frame.MaxLines() * fontH
+		if step <= 0 {
+			step = 10 * fontH
 		}
-		currentLine := findCurrentLine(rt.Origin(), lineStarts)
-		newLine := currentLine - maxLines
-		if newLine < 0 {
-			newLine = 0
-		}
-		rt.SetOrigin(findOriginForLine(newLine, lineStarts))
+		rt.ScrollToPixelY(currentPixelY - step)
 		rt.Redraw()
 		return true
 
 	case draw.KeyDown:
-		// Scroll down by one line
-		lineCount, lineStarts := getLineInfo()
-		currentLine := findCurrentLine(rt.Origin(), lineStarts)
-		newLine := currentLine + 1
-		if newLine >= lineCount {
-			newLine = lineCount - 1
-		}
-		rt.SetOrigin(findOriginForLine(newLine, lineStarts))
+		// Scroll down by one text line of pixels
+		rt.ScrollToPixelY(currentPixelY + fontH)
 		rt.Redraw()
 		return true
 
 	case draw.KeyUp:
-		// Scroll up by one line
-		_, lineStarts := getLineInfo()
-		currentLine := findCurrentLine(rt.Origin(), lineStarts)
-		newLine := currentLine - 1
-		if newLine < 0 {
-			newLine = 0
-		}
-		rt.SetOrigin(findOriginForLine(newLine, lineStarts))
+		// Scroll up by one text line of pixels
+		rt.ScrollToPixelY(currentPixelY - fontH)
 		rt.Redraw()
 		return true
 
 	case draw.KeyHome:
 		// Scroll to beginning
-		rt.SetOrigin(0)
+		rt.ScrollToPixelY(0)
 		rt.Redraw()
 		return true
 
 	case draw.KeyEnd:
 		// Scroll to end
-		lineCount, lineStarts := getLineInfo()
-		maxLines := frame.MaxLines()
-		if maxLines <= 0 {
-			maxLines = 10
-		}
-		// Position so that last lines are visible
-		endLine := lineCount - maxLines
-		if endLine < 0 {
-			endLine = 0
-		}
-		rt.SetOrigin(findOriginForLine(endLine, lineStarts))
+		rt.ScrollToPixelY(maxPixelY)
 		rt.Redraw()
 		return true
 

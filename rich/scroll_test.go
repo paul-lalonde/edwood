@@ -520,3 +520,144 @@ func TestFullWithOrigin(t *testing.T) {
 		t.Errorf("Full() with origin=18 = true, want false for remaining 2 lines (max 3)")
 	}
 }
+
+// TestOriginYOffset tests the sub-line pixel offset for scrolling within tall lines.
+func TestOriginYOffset(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	f.SetContent(Plain("hello\nworld\nthird"))
+
+	// Initial originYOffset should be 0
+	if got := f.GetOriginYOffset(); got != 0 {
+		t.Errorf("Initial GetOriginYOffset() = %d, want 0", got)
+	}
+
+	// Set pixel offset
+	f.SetOriginYOffset(5)
+	if got := f.GetOriginYOffset(); got != 5 {
+		t.Errorf("GetOriginYOffset() = %d, want 5", got)
+	}
+
+	// SetOrigin should reset pixel offset to 0
+	f.SetOrigin(6) // start of "world"
+	if got := f.GetOriginYOffset(); got != 0 {
+		t.Errorf("GetOriginYOffset() after SetOrigin = %d, want 0", got)
+	}
+
+	// Clear should also reset pixel offset
+	f.SetOriginYOffset(10)
+	f.Clear()
+	if got := f.GetOriginYOffset(); got != 0 {
+		t.Errorf("GetOriginYOffset() after Clear = %d, want 0", got)
+	}
+}
+
+// TestOriginYOffsetLayout tests that the pixel offset shifts Y coordinates
+// in layoutFromOrigin.
+func TestOriginYOffsetLayout(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	f.SetContent(Plain("hello\nworld\nthird"))
+
+	// Without offset, first visible line starts at Y=0
+	f.SetOrigin(0)
+	fi := f.(*frameImpl)
+	lines, _ := fi.layoutFromOrigin()
+	if len(lines) == 0 {
+		t.Fatal("layoutFromOrigin returned no lines")
+	}
+	if lines[0].Y != 0 {
+		t.Errorf("Without offset: first line Y = %d, want 0", lines[0].Y)
+	}
+
+	// With offset of 5, first visible line starts at Y=-5
+	f.SetOrigin(0)
+	f.SetOriginYOffset(5)
+	lines, _ = fi.layoutFromOrigin()
+	if len(lines) == 0 {
+		t.Fatal("layoutFromOrigin returned no lines with offset")
+	}
+	if lines[0].Y != -5 {
+		t.Errorf("With offset 5: first line Y = %d, want -5", lines[0].Y)
+	}
+
+	// Second line should also be shifted
+	if len(lines) > 1 {
+		expectedY := 14 - 5 // font height - offset
+		if lines[1].Y != expectedY {
+			t.Errorf("With offset 5: second line Y = %d, want %d", lines[1].Y, expectedY)
+		}
+	}
+
+	// With origin at line 2 (rune 6 = "world") and offset 3
+	f.SetOrigin(6)
+	f.SetOriginYOffset(3)
+	lines, _ = fi.layoutFromOrigin()
+	if len(lines) == 0 {
+		t.Fatal("layoutFromOrigin returned no lines for origin=6")
+	}
+	if lines[0].Y != -3 {
+		t.Errorf("Origin=6, offset=3: first line Y = %d, want -3", lines[0].Y)
+	}
+}
+
+// TestOriginYOffsetClamp tests that originYOffset is clamped when it exceeds
+// the origin line's height (e.g., after content changes shrink lines).
+func TestOriginYOffsetClamp(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	// Content with 3 lines, each 14px tall
+	f.SetContent(Plain("hello\nworld\nthird"))
+
+	// Set offset larger than line height - should advance to next line
+	f.SetOrigin(0)
+	f.SetOriginYOffset(14) // exactly one line height
+
+	fi := f.(*frameImpl)
+	lines, _ := fi.layoutFromOrigin()
+	if len(lines) == 0 {
+		t.Fatal("layoutFromOrigin returned no lines")
+	}
+
+	// The offset should have been clamped/advanced: offset 14 on a 14px line
+	// should advance to the next line with offset 0, so first visible line Y = 0
+	if lines[0].Y != 0 {
+		t.Errorf("Clamped offset: first line Y = %d, want 0 (advanced to next line)", lines[0].Y)
+	}
+
+	// Set offset of 20 (exceeds 14px line) - should advance and have remainder 6
+	f.SetOrigin(0)
+	f.SetOriginYOffset(20)
+	lines, _ = fi.layoutFromOrigin()
+	if len(lines) == 0 {
+		t.Fatal("layoutFromOrigin returned no lines for offset 20")
+	}
+	// 20 - 14 = 6 pixels into the second line, so first visible is second line at Y=-6
+	if lines[0].Y != -6 {
+		t.Errorf("Offset 20: first line Y = %d, want -6", lines[0].Y)
+	}
+}

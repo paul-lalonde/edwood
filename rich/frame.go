@@ -45,6 +45,8 @@ type Frame interface {
 	// Scrolling
 	SetOrigin(org int)
 	GetOrigin() int
+	SetOriginYOffset(pixels int)
+	GetOriginYOffset() int
 	MaxLines() int
 	VisibleLines() int
 	TotalLines() int         // Total number of layout lines in the content
@@ -104,6 +106,7 @@ type frameImpl struct {
 	font           edwooddraw.Font  // font for text rendering
 	content        Content
 	origin         int
+	originYOffset  int // pixel offset within the origin line (for sub-line scrolling)
 	p0, p1         int // selection
 
 	// Font variants for styled text
@@ -180,6 +183,7 @@ func (f *frameImpl) Init(r image.Rectangle, opts ...Option) {
 func (f *frameImpl) Clear() {
 	f.content = nil
 	f.origin = 0
+	f.originYOffset = 0
 	f.p0 = 0
 	f.p1 = 0
 }
@@ -659,13 +663,26 @@ func (f *frameImpl) GetSelection() (p0, p1 int) {
 }
 
 // SetOrigin sets the scroll origin.
+// Resets the pixel offset within the origin line to 0.
 func (f *frameImpl) SetOrigin(org int) {
 	f.origin = org
+	f.originYOffset = 0
 }
 
 // GetOrigin returns the current scroll origin.
 func (f *frameImpl) GetOrigin() int {
 	return f.origin
+}
+
+// SetOriginYOffset sets the pixel offset within the origin line.
+// This enables sub-line scrolling for tall elements (images, large code blocks).
+func (f *frameImpl) SetOriginYOffset(pixels int) {
+	f.originYOffset = pixels
+}
+
+// GetOriginYOffset returns the pixel offset within the origin line.
+func (f *frameImpl) GetOriginYOffset() int {
+	return f.originYOffset
 }
 
 // MaxLines returns the maximum number of lines that can be displayed.
@@ -1317,8 +1334,8 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// Default tab width (8 characters worth)
 	maxtab := 8 * f.font.StringWidth("0")
 
-	// If origin is 0, just return the normal layout (using cache if available)
-	if f.origin == 0 {
+	// If origin is 0 and no pixel offset, just return the normal layout (using cache if available)
+	if f.origin == 0 && f.originYOffset == 0 {
 		lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 		regions := findBlockRegions(lines)
 		f.syncHScrollState(len(regions))
@@ -1376,6 +1393,24 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		originY = line.Y
 	}
 
+	// Clamp originYOffset: if it exceeds the origin line's height,
+	// advance to subsequent lines. This handles content changes where
+	// line heights shrink (e.g., after an async image load).
+	yOffset := f.originYOffset
+	for startLineIdx < len(allLines) && yOffset >= allLines[startLineIdx].Height {
+		if startLineIdx+1 >= len(allLines) {
+			// Can't advance past the last line; clamp to max offset.
+			yOffset = allLines[startLineIdx].Height - 1
+			if yOffset < 0 {
+				yOffset = 0
+			}
+			break
+		}
+		yOffset -= allLines[startLineIdx].Height
+		startLineIdx++
+		originY = allLines[startLineIdx].Y
+	}
+
 	// Count block regions entirely above the viewport.
 	offset := 0
 	for _, r := range regions {
@@ -1387,11 +1422,12 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 
 	// Extract lines from the origin line onwards and adjust Y coordinates.
 	// Y values already include scrollbar heights from the adjustment above.
+	// Apply originYOffset so the first visible line starts at Y = -yOffset.
 	visibleLines := make([]Line, 0, len(allLines)-startLineIdx)
 	for i := startLineIdx; i < len(allLines); i++ {
 		line := allLines[i]
 		adjustedLine := Line{
-			Y:            line.Y - originY,
+			Y:            line.Y - originY - yOffset,
 			Height:       line.Height,
 			ContentWidth: line.ContentWidth,
 			Boxes:        line.Boxes,

@@ -846,11 +846,11 @@ func TestScrollbarClickAtBottom(t *testing.T) {
 
 	newOrigin := rt.ScrollClick(3, image.Pt(scrollRect.Min.X+5, scrollRect.Max.Y-1))
 
-	// Should scroll to near the end (significant forward movement)
-	// 30 lines * 5 runes = 150 total runes
-	// Clicking at the bottom should advance significantly
-	if newOrigin < 50 {
-		t.Errorf("ScrollClick(3, bottom): got origin %d, expected larger value", newOrigin)
+	// Should scroll forward significantly.
+	// 30 lines * 14px = 420px total, 300px frame → maxPixelY = 120px ≈ line 8.
+	// B3 at bottom scrolls by ~full frame, clamped to max scroll position.
+	if newOrigin <= 0 {
+		t.Errorf("ScrollClick(3, bottom): got origin %d, expected > 0", newOrigin)
 	}
 }
 
@@ -1060,8 +1060,8 @@ func TestMouseWheelScrollUpAtTop(t *testing.T) {
 	}
 }
 
-// TestMouseWheelScrollDownAtBottom tests that scrolling down when already at the
-// end of content doesn't go past the last line.
+// TestMouseWheelScrollDownAtBottom tests that scrolling down when near the
+// end of content is bounded and doesn't crash.
 func TestMouseWheelScrollDownAtBottom(t *testing.T) {
 	displayRect := image.Rect(0, 0, 800, 600)
 	display := edwoodtest.NewDisplay(displayRect)
@@ -1094,21 +1094,24 @@ func TestMouseWheelScrollDownAtBottom(t *testing.T) {
 	rect := image.Rect(0, 0, 400, 300)
 	rt.Render(rect)
 
-	// Set origin to last line (line 29 starts at 5*29 = 145)
-	rt.SetOrigin(145)
-	beforeOrigin := rt.Origin()
-
-	// Scroll down (button 5) multiple times
+	// Scroll down from the beginning many times to reach the end
+	rt.SetOrigin(0)
 	var newOrigin int
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		newOrigin = rt.ScrollWheel(false) // false = scroll down
 	}
 
-	// Origin should not have increased significantly beyond the last line
-	// It may increase slightly but should be bounded
-	// The important thing is it doesn't crash or return invalid values
-	if newOrigin < beforeOrigin {
-		t.Errorf("ScrollWheel(down) at end: origin decreased from %d to %d", beforeOrigin, newOrigin)
+	// After many scrolls, we should be at the end of the scrollable range.
+	// The origin should be valid (>= 0) and bounded.
+	// 30 lines * 14px = 420px total, 300px frame → maxPixelY = 120px → ~line 8.
+	if newOrigin < 0 {
+		t.Errorf("ScrollWheel(down) at end: origin = %d, want >= 0", newOrigin)
+	}
+
+	// Scrolling down again should not change the origin (already at max)
+	finalOrigin := rt.ScrollWheel(false)
+	if finalOrigin != newOrigin {
+		t.Errorf("ScrollWheel(down) past end: origin changed from %d to %d", newOrigin, finalOrigin)
 	}
 }
 
@@ -1860,5 +1863,272 @@ func TestImageWidthEndToEndNoWidthTag(t *testing.T) {
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 	if len(ops) == 0 {
 		t.Error("Render() did not produce any draw operations")
+	}
+}
+
+// TestPixelToLineOffset tests the helper function that converts absolute pixel Y
+// to (lineIndex, pixelWithinLine).
+func TestPixelToLineOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		pixelY      int
+		lineHeights []int
+		wantLine    int
+		wantOffset  int
+	}{
+		{
+			name:        "first line",
+			pixelY:      5,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    0,
+			wantOffset:  5,
+		},
+		{
+			name:        "second line start",
+			pixelY:      14,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    1,
+			wantOffset:  0,
+		},
+		{
+			name:        "second line middle",
+			pixelY:      20,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    1,
+			wantOffset:  6,
+		},
+		{
+			name:        "last line",
+			pixelY:      35,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    2,
+			wantOffset:  7,
+		},
+		{
+			name:        "past end",
+			pixelY:      100,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    2,
+			wantOffset:  0,
+		},
+		{
+			name:        "zero",
+			pixelY:      0,
+			lineHeights: []int{14, 14, 14},
+			wantLine:    0,
+			wantOffset:  0,
+		},
+		{
+			name:        "tall line in middle",
+			pixelY:      50,
+			lineHeights: []int{14, 800, 14},
+			wantLine:    1,
+			wantOffset:  36,
+		},
+		{
+			name:        "empty heights",
+			pixelY:      10,
+			lineHeights: []int{},
+			wantLine:    0,
+			wantOffset:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLine, gotOffset := pixelToLineOffset(tt.pixelY, tt.lineHeights)
+			if gotLine != tt.wantLine || gotOffset != tt.wantOffset {
+				t.Errorf("pixelToLineOffset(%d, %v) = (%d, %d), want (%d, %d)",
+					tt.pixelY, tt.lineHeights, gotLine, gotOffset, tt.wantLine, tt.wantOffset)
+			}
+		})
+	}
+}
+
+// TestLineOffsetToPixel tests the helper function that converts (lineIndex, pixelWithinLine)
+// to absolute pixel Y.
+func TestLineOffsetToPixel(t *testing.T) {
+	tests := []struct {
+		name        string
+		lineIdx     int
+		offset      int
+		lineHeights []int
+		wantPixelY  int
+	}{
+		{
+			name:        "first line no offset",
+			lineIdx:     0,
+			offset:      0,
+			lineHeights: []int{14, 14, 14},
+			wantPixelY:  0,
+		},
+		{
+			name:        "first line with offset",
+			lineIdx:     0,
+			offset:      5,
+			lineHeights: []int{14, 14, 14},
+			wantPixelY:  5,
+		},
+		{
+			name:        "second line no offset",
+			lineIdx:     1,
+			offset:      0,
+			lineHeights: []int{14, 14, 14},
+			wantPixelY:  14,
+		},
+		{
+			name:        "third line with offset",
+			lineIdx:     2,
+			offset:      7,
+			lineHeights: []int{14, 14, 14},
+			wantPixelY:  35,
+		},
+		{
+			name:        "tall line in middle",
+			lineIdx:     2,
+			offset:      0,
+			lineHeights: []int{14, 800, 14},
+			wantPixelY:  814,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lineOffsetToPixel(tt.lineIdx, tt.offset, tt.lineHeights)
+			if got != tt.wantPixelY {
+				t.Errorf("lineOffsetToPixel(%d, %d, %v) = %d, want %d",
+					tt.lineIdx, tt.offset, tt.lineHeights, got, tt.wantPixelY)
+			}
+		})
+	}
+}
+
+// TestPixelToLineOffsetRoundTrip verifies that pixelToLineOffset and lineOffsetToPixel
+// are inverse operations (within the valid range).
+func TestPixelToLineOffsetRoundTrip(t *testing.T) {
+	lineHeights := []int{14, 800, 14, 14}
+	totalHeight := 0
+	for _, h := range lineHeights {
+		totalHeight += h
+	}
+
+	// For all valid pixel positions, converting to line+offset and back should return
+	// the original pixel position.
+	for pixelY := 0; pixelY < totalHeight; pixelY++ {
+		lineIdx, offset := pixelToLineOffset(pixelY, lineHeights)
+		gotPixelY := lineOffsetToPixel(lineIdx, offset, lineHeights)
+		if gotPixelY != pixelY {
+			t.Errorf("Round trip failed for pixelY=%d: got lineIdx=%d, offset=%d, back=%d",
+				pixelY, lineIdx, offset, gotPixelY)
+		}
+	}
+}
+
+// TestScrollWheelTallLine tests that scroll wheel progressively reveals a tall
+// image line (taller than the viewport) via sub-line pixel scrolling.
+func TestScrollWheelTallLine(t *testing.T) {
+	// Create a temporary tall image (10x800 pixels)
+	tmpDir := t.TempDir()
+	imgPath := filepath.Join(tmpDir, "tall.png")
+	img := image.NewRGBA(image.Rect(0, 0, 10, 800))
+	for y := 0; y < 800; y++ {
+		for x := 0; x < 10; x++ {
+			img.Set(x, y, color.RGBA{R: 128, G: 128, B: 128, A: 255})
+		}
+	}
+	f, err := os.Create(imgPath)
+	if err != nil {
+		t.Fatalf("failed to create test PNG: %v", err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatalf("failed to encode test PNG: %v", err)
+	}
+	f.Close()
+
+	displayRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(displayRect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+	scrBg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Palebluegreen)
+	scrThumb, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Medblue)
+
+	cache := rich.NewImageCache(10)
+	if _, err := cache.Load(imgPath); err != nil {
+		t.Fatalf("failed to pre-load image: %v", err)
+	}
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+		WithScrollbarColors(scrBg, scrThumb),
+		WithRichTextImageCache(cache),
+	)
+
+	// Content: a text line, then a tall image, then another text line
+	content := rich.Content{
+		rich.Span{Text: "before\n", Style: rich.Style{}},
+		rich.Span{
+			Text: "[Image: tall]",
+			Style: rich.Style{
+				Image:    true,
+				ImageURL: imgPath,
+				ImageAlt: "tall",
+			},
+		},
+		rich.Span{Text: "\nafter", Style: rich.Style{}},
+	}
+	rt.SetContent(content)
+
+	// Render into a 300px-tall frame
+	rect := image.Rect(0, 0, 400, 300)
+	rt.Render(rect)
+
+	// Start at origin 0
+	rt.SetOrigin(0)
+
+	// Verify the image line is actually tall
+	lineHeights := rt.Frame().LinePixelHeights()
+	foundTall := false
+	for _, h := range lineHeights {
+		if h > 300 { // taller than viewport
+			foundTall = true
+			break
+		}
+	}
+	if !foundTall {
+		t.Skipf("No line taller than viewport found (heights: %v); skipping tall-line scroll test", lineHeights)
+	}
+
+	// Scroll down and check that originYOffset increases (sub-line scrolling)
+	// The first scroll should move into the text line before the image.
+	// Keep scrolling until we're on a tall line with a non-zero offset.
+	var sawNonZeroOffset bool
+	for i := 0; i < 50; i++ {
+		rt.ScrollWheel(false) // scroll down
+		offset := rt.GetOriginYOffset()
+		if offset > 0 {
+			sawNonZeroOffset = true
+			break
+		}
+	}
+
+	if !sawNonZeroOffset {
+		t.Errorf("After scrolling down through tall image, expected non-zero originYOffset at some point")
+	}
+
+	// Scroll back up and verify we can return to origin 0
+	for i := 0; i < 100; i++ {
+		rt.ScrollWheel(true) // scroll up
+	}
+
+	if rt.Origin() != 0 {
+		t.Errorf("After scrolling all the way back up: origin = %d, want 0", rt.Origin())
+	}
+	if rt.GetOriginYOffset() != 0 {
+		t.Errorf("After scrolling all the way back up: originYOffset = %d, want 0", rt.GetOriginYOffset())
 	}
 }

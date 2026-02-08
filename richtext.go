@@ -172,10 +172,26 @@ func (rt *RichText) Origin() int {
 }
 
 // SetOrigin sets the scroll origin.
+// This resets the pixel offset within the origin line to 0.
 func (rt *RichText) SetOrigin(org int) {
 	if rt.frame != nil {
 		rt.frame.SetOrigin(org)
 	}
+}
+
+// SetOriginYOffset sets the pixel offset within the origin line.
+func (rt *RichText) SetOriginYOffset(pixels int) {
+	if rt.frame != nil {
+		rt.frame.SetOriginYOffset(pixels)
+	}
+}
+
+// GetOriginYOffset returns the pixel offset within the origin line.
+func (rt *RichText) GetOriginYOffset() int {
+	if rt.frame == nil {
+		return 0
+	}
+	return rt.frame.GetOriginYOffset()
 }
 
 // Redraw redraws the RichText component using the last rendered rectangle.
@@ -329,18 +345,18 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	}
 	clickProportion := float64(clickY) / float64(scrollHeight)
 
-	// Find current origin line
+	// Find current origin line and compute current pixel Y
 	currentOrigin := rt.Origin()
-	currentLine := 0
-	for i, start := range lineStarts {
-		if currentOrigin >= start {
-			currentLine = i
-		} else {
-			break
-		}
+	currentLine := findLineForOrigin(currentOrigin, lineStarts)
+	currentPixelY := lineOffsetToPixel(currentLine, rt.GetOriginYOffset(), lineHeights)
+
+	maxPixelY := totalPixelHeight - frameHeight
+	if maxPixelY < 0 {
+		maxPixelY = 0
 	}
 
-	var newOrigin int
+	fontH := rt.frame.DefaultFontHeight()
+	var newPixelY int
 
 	switch button {
 	case 1:
@@ -349,64 +365,44 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 		if pixelsToMove < 1 {
 			pixelsToMove = 1
 		}
-
-		// Walk backwards from current line, summing pixel heights
-		newLine := currentLine
-		accumulated := 0
-		for newLine > 0 && accumulated < pixelsToMove {
-			newLine--
-			accumulated += lineHeights[newLine]
+		newPixelY = currentPixelY - pixelsToMove
+		// Clamp to [0, maxPixelY]
+		if newPixelY < 0 {
+			newPixelY = 0
 		}
-
-		newOrigin = lineStarts[newLine]
 
 	case 2:
-		// Button 2 (middle): jump to absolute position
-		// Map click proportion to a target pixel offset, then find the line there
-		targetPixelY := int(float64(totalPixelHeight) * clickProportion)
-
-		targetLine := 0
-		accumulated := 0
-		for i, h := range lineHeights {
-			if accumulated+h > targetPixelY {
-				targetLine = i
-				break
-			}
-			accumulated += h
-			targetLine = i
+		// Button 2 (middle): jump to absolute position in the document.
+		// Acme convention: clicking at X% means "show from X% of the content."
+		// B2 can scroll past the bounded range to show any line (matching
+		// acme behavior where the last line can appear at the top of the
+		// viewport with empty space below).
+		newPixelY = int(float64(totalPixelHeight) * clickProportion)
+		if newPixelY < 0 {
+			newPixelY = 0
 		}
-
-		if targetLine >= len(lineStarts) {
-			targetLine = len(lineStarts) - 1
-		}
-		newOrigin = lineStarts[targetLine]
 
 	case 3:
-		// Button 3 (right): scroll down by a screenful scaled by click position
+		// Button 3 (right): scroll down by a screenful scaled by click position.
 		pixelsToMove := int(float64(frameHeight) * clickProportion)
 		if pixelsToMove < 1 {
 			pixelsToMove = 1
 		}
-
-		// Walk forwards from current line, summing pixel heights
-		newLine := currentLine
-		accumulated := 0
-		for newLine < lineCount-1 && accumulated < pixelsToMove {
-			accumulated += lineHeights[newLine]
-			newLine++
+		newPixelY = currentPixelY + pixelsToMove
+		if newPixelY > maxPixelY {
+			newPixelY = maxPixelY
 		}
-
-		if newLine >= len(lineStarts) {
-			newLine = len(lineStarts) - 1
-		}
-		newOrigin = lineStarts[newLine]
 
 	default:
 		return rt.Origin()
 	}
 
-	// Update the origin
-	rt.SetOrigin(newOrigin)
+	newLine, newOffset := pixelToLineOffset(newPixelY, lineHeights)
+	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
+
+	newOrigin := lineStarts[newLine]
+	rt.frame.SetOrigin(newOrigin)
+	rt.frame.SetOriginYOffset(newOffset)
 	return newOrigin
 }
 
@@ -473,11 +469,12 @@ func (rt *RichText) scrThumbRectAt(scrollRect image.Rectangle) image.Rectangle {
 		}
 	}
 
-	// Compute pixel offset of the origin line
+	// Compute pixel offset of the origin line, including sub-line offset
 	originPixelY := 0
 	for i := 0; i < originLine && i < len(lineHeights); i++ {
 		originPixelY += lineHeights[i]
 	}
+	originPixelY += rt.GetOriginYOffset()
 
 	// Position proportion based on pixel offset
 	scrollablePixels := totalPixelHeight - frameHeight
@@ -603,9 +600,103 @@ func WithRichTextSelectionColor(c draw.Image) RichTextOption {
 // scrollWheelLines is the number of lines to scroll per mouse wheel event.
 const scrollWheelLines = 3
 
+// pixelToLineOffset converts an absolute pixel Y position (from document top)
+// to a (lineIndex, pixelWithinLine) pair. Used for sub-line pixel scrolling.
+func pixelToLineOffset(pixelY int, lineHeights []int) (lineIdx, offset int) {
+	for i, h := range lineHeights {
+		if pixelY < h {
+			return i, pixelY
+		}
+		pixelY -= h
+	}
+	if len(lineHeights) > 0 {
+		return len(lineHeights) - 1, 0
+	}
+	return 0, 0
+}
+
+// lineOffsetToPixel converts a (lineIndex, pixelWithinLine) pair to an absolute
+// pixel Y position from the document top. Used for sub-line pixel scrolling.
+func lineOffsetToPixel(lineIdx, offset int, lineHeights []int) int {
+	total := 0
+	for i := 0; i < lineIdx && i < len(lineHeights); i++ {
+		total += lineHeights[i]
+	}
+	return total + offset
+}
+
+// findLineForOrigin returns the line index corresponding to the given rune origin.
+func findLineForOrigin(origin int, lineStarts []int) int {
+	line := 0
+	for i, start := range lineStarts {
+		if origin >= start {
+			line = i
+		} else {
+			break
+		}
+	}
+	return line
+}
+
+// snapOffset snaps the pixel offset to 0 for short lines (height <= 2*fontH),
+// preserving line-granular scrolling for normal text while allowing sub-line
+// scrolling only on tall elements (images, large code blocks).
+func snapOffset(lineIdx, offset, fontH int, lineHeights []int) int {
+	if lineIdx < len(lineHeights) && lineHeights[lineIdx] <= 2*fontH {
+		return 0
+	}
+	return offset
+}
+
+// ScrollToPixelY scrolls to an absolute pixel Y position in the document.
+// Converts the pixel position to a (line, offset) pair and sets both the
+// origin rune and pixel offset. Returns the new rune origin.
+func (rt *RichText) ScrollToPixelY(pixelY int) int {
+	if rt.content == nil || rt.frame == nil {
+		return 0
+	}
+
+	lineHeights := rt.frame.LinePixelHeights()
+	lineStarts := rt.frame.LineStartRunes()
+	if len(lineHeights) == 0 {
+		return 0
+	}
+
+	// Clamp to valid range
+	totalPixelHeight := 0
+	for _, h := range lineHeights {
+		totalPixelHeight += h
+	}
+	frameHeight := rt.frame.Rect().Dy()
+
+	maxPixelY := totalPixelHeight - frameHeight
+	if maxPixelY < 0 {
+		maxPixelY = 0
+	}
+	if pixelY < 0 {
+		pixelY = 0
+	}
+	if pixelY > maxPixelY {
+		pixelY = maxPixelY
+	}
+
+	newLine, newOffset := pixelToLineOffset(pixelY, lineHeights)
+
+	// Snap to line boundary for short lines
+	fontH := rt.frame.DefaultFontHeight()
+	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
+
+	rt.frame.SetOrigin(lineStarts[newLine])
+	// SetOrigin resets originYOffset, so set it after:
+	rt.frame.SetOriginYOffset(newOffset)
+	return lineStarts[newLine]
+}
+
 // ScrollWheel handles mouse scroll wheel events.
 // If up is true, scroll up (show earlier content), otherwise scroll down.
 // Returns the new origin after scrolling.
+// Uses pixel-based scrolling so that tall elements (images, code blocks)
+// can be scrolled through smoothly.
 func (rt *RichText) ScrollWheel(up bool) int {
 	// If no content or frame, return 0
 	if rt.content == nil || rt.frame == nil {
@@ -636,35 +727,39 @@ func (rt *RichText) ScrollWheel(up bool) int {
 		return 0
 	}
 
-	// Find current line
+	// Compute current absolute pixel position
 	currentOrigin := rt.Origin()
-	currentLine := 0
-	for i, start := range lineStarts {
-		if currentOrigin >= start {
-			currentLine = i
-		} else {
-			break
-		}
-	}
+	currentLine := findLineForOrigin(currentOrigin, lineStarts)
+	currentPixelY := lineOffsetToPixel(currentLine, rt.GetOriginYOffset(), lineHeights)
 
-	var newLine int
+	// Fixed pixel step per scroll event
+	scrollStep := scrollWheelLines * rt.frame.DefaultFontHeight()
+
+	var newPixelY int
 	if up {
-		// Scroll up - go back scrollWheelLines lines
-		newLine = currentLine - scrollWheelLines
-		if newLine < 0 {
-			newLine = 0
+		newPixelY = currentPixelY - scrollStep
+		if newPixelY < 0 {
+			newPixelY = 0
 		}
 	} else {
-		// Scroll down - go forward scrollWheelLines lines
-		newLine = currentLine + scrollWheelLines
-		// Don't go past the last line
-		maxScrollLine := len(lineStarts) - 1
-		if newLine > maxScrollLine {
-			newLine = maxScrollLine
+		maxPixelY := totalPixelHeight - frameHeight
+		if maxPixelY < 0 {
+			maxPixelY = 0
+		}
+		newPixelY = currentPixelY + scrollStep
+		if newPixelY > maxPixelY {
+			newPixelY = maxPixelY
 		}
 	}
 
-	newOrigin := lineStarts[newLine]
-	rt.SetOrigin(newOrigin)
-	return newOrigin
+	newLine, newOffset := pixelToLineOffset(newPixelY, lineHeights)
+
+	// Snap to line boundary on short lines (preserves line-based feel for text)
+	fontH := rt.frame.DefaultFontHeight()
+	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
+
+	rt.frame.SetOrigin(lineStarts[newLine])
+	// SetOrigin resets originYOffset, so set it after:
+	rt.frame.SetOriginYOffset(newOffset)
+	return lineStarts[newLine]
 }
