@@ -388,7 +388,7 @@ func (c *ImageCache) evictOldest() {
 //
 // The onLoaded callback runs on an unspecified goroutine. Callers that
 // need main-goroutine execution must marshal through the row lock or a
-// channel (same pattern as SchedulePreviewUpdate).
+// channel (same pattern as other row-lock-marshaled callbacks).
 //
 // If path is already loading (Loading=true in cache), returns the
 // existing placeholder without starting a second goroutine.

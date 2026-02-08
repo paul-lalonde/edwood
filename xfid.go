@@ -428,6 +428,9 @@ func xfidwrite(x *Xfid) {
 					t.Show(q0+(nr), q0+(nr), true)
 				}
 				t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+				if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
+					t.w.UpdatePreview()
+				}
 			}
 			if qid == QWwrsel {
 				w.wrselrange.q1 += len(r)
@@ -524,6 +527,9 @@ func xfidwrite(x *Xfid) {
 			t.Show(q0+len(r), q0+len(r), false)
 		}
 		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
+			t.w.UpdatePreview()
+		}
 		w.addr.q0 += len(r)
 		w.addr.q1 = w.addr.q0
 		fc.Count = x.fcall.Count

@@ -73,8 +73,7 @@ type Window struct {
 	richBody           *RichText           // rich text renderer for preview mode
 	previewSourceMap   *markdown.SourceMap // maps rendered positions to source positions
 	previewLinkMap     *markdown.LinkMap   // maps rendered positions to link URLs
-	previewUpdateTimer *time.Timer         // debounce timer for preview updates
-	imageCache         *rich.ImageCache    // cache for loaded images in preview mode
+	imageCache *rich.ImageCache // cache for loaded images in preview mode
 	selectionContext   *SelectionContext   // context metadata for the current preview selection
 
 	// Preview double-click state (mirrors clicktext/clickmsec in text.go)
@@ -414,12 +413,6 @@ func (w *Window) MouseBut() {
 
 func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
-		// Cancel pending preview update timer to prevent callback
-		// firing on a closed window.
-		if w.previewUpdateTimer != nil {
-			w.previewUpdateTimer.Stop()
-			w.previewUpdateTimer = nil
-		}
 		w.previewMode = false
 		w.richBody = nil
 		xfidlog(w, "del")
@@ -445,6 +438,15 @@ func (w *Window) Delete() {
 func (w *Window) Undo(isundo bool) {
 	w.utflastqid = -1
 	body := &w.body
+
+	// End any in-progress typing sequence so that the next typed character
+	// creates a fresh undo point via Mark(). Without this, eq0 stays set
+	// from the previous typing session and HandlePreviewType (and Text.Type)
+	// skips Mark(), leaving seq at the value returned by the undo — which is
+	// 0 when all changes have been undone. A subsequent Insert with seq 0
+	// triggers FlattenHistory, permanently destroying the undo stack.
+	body.eq0 = ^0
+
 	if q0, q1, ok := body.file.Undo(isundo); ok {
 		body.q0, body.q1 = q0, q1
 	}
@@ -453,9 +455,8 @@ func (w *Window) Undo(isundo bool) {
 	// Be sure not to do this inside of the Undo operation's callbacks.
 	body.Show(body.q0, body.q1, true)
 
-	// Undo/Redo bypasses the buffer's Insert/Delete observers, so the
-	// preview is not notified through the normal SchedulePreviewUpdate path.
-	// Update it immediately — undo is a discrete action, not rapid typing.
+	// Undo/Redo bypasses the buffer's Insert/Delete observers, so
+	// update the preview directly.
 	if w.IsPreviewMode() {
 		w.UpdatePreview()
 	}
@@ -1654,42 +1655,6 @@ func (w *Window) UpdatePreview() {
 	}
 }
 
-// previewUpdateDelay is the duration to wait after the last edit before
-// re-rendering the Markdeep preview. This debounces rapid edits.
-const previewUpdateDelay = 3 * time.Second
-
-// SchedulePreviewUpdate schedules a debounced update of the Markdeep preview.
-// If called multiple times in quick succession, only the last call will trigger
-// an update after the delay. This prevents excessive re-rendering during editing.
-//
-// Must be called with global.row.lk held.
-func (w *Window) SchedulePreviewUpdate() {
-	if !w.previewMode || w.richBody == nil {
-		return
-	}
-
-	// Cancel any pending update
-	if w.previewUpdateTimer != nil {
-		w.previewUpdateTimer.Stop()
-	}
-
-	// Schedule a new update after the delay.
-	// The callback runs on a timer goroutine; acquire the row lock
-	// to synchronize with mousethread, keyboardthread, and others.
-	w.previewUpdateTimer = time.AfterFunc(previewUpdateDelay, func() {
-		global.row.lk.Lock()
-		defer global.row.lk.Unlock()
-
-		// Re-check: window may have exited preview mode or been closed
-		// while we waited for the lock.
-		if !w.previewMode || w.richBody == nil {
-			return
-		}
-
-		w.UpdatePreview()
-	})
-}
-
 // PreviewSnarf returns the text that would be snarfed (copied) when in preview mode.
 // It uses the source map to convert the selection in the rendered rich text back to
 // positions in the source markdown, then extracts that range from the body buffer.
@@ -2032,6 +1997,7 @@ func (w *Window) HandlePreviewType(t *Text, r rune) {
 	// 4. If range selected, cut it first (like Text.Type).
 	if t.q1 > t.q0 {
 		cut(t, t, nil, false, true, "")
+		t.eq0 = ^0
 	}
 
 	// 5. Insert the character into the source buffer.
@@ -2042,14 +2008,9 @@ func (w *Window) HandlePreviewType(t *Text, r rune) {
 	w.previewTypeFinish(t)
 }
 
-// previewTypeFinish completes a preview-mode edit by cancelling the debounce
-// timer, doing an immediate re-render, and remapping the cursor position.
+// previewTypeFinish completes a preview-mode edit by doing an immediate
+// re-render and remapping the cursor position.
 func (w *Window) previewTypeFinish(t *Text) {
-	// Cancel the debounce timer that the observer scheduled.
-	if w.previewUpdateTimer != nil {
-		w.previewUpdateTimer.Stop()
-	}
-
 	// Immediate re-render (uses incremental path via pendingEdits).
 	w.UpdatePreview()
 

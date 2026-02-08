@@ -191,6 +191,9 @@ func allupdate(w *Window) {
 		if f.EditClean {
 			f.Clean()
 		}
+		if t.w.IsPreviewMode() {
+			t.w.UpdatePreview()
+		}
 		t.w.owner = owner
 	}
 }

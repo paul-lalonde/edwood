@@ -446,12 +446,12 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 		t.q0 += nr
 	}
 
-	// In Markdeep mode, don't update the text frame directly.
-	// Instead, schedule a debounced re-render of the Markdeep view.
+	// In preview mode, don't update the text frame directly.
+	// Record the edit for incremental update; the caller is responsible
+	// for calling UpdatePreview() when the editing operation is complete.
 	if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
 		t.logInsert(oq0, b, nr)
 		t.w.recordEdit(markdown.EditRecord{Pos: q0, OldLen: 0, NewLen: nr})
-		t.w.SchedulePreviewUpdate()
 		return
 	}
 
@@ -599,12 +599,12 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 		t.q1 -= util.Min(n, t.q1-q0)
 	}
 
-	// In Markdeep mode, don't update the text frame directly.
-	// Instead, schedule a debounced re-render of the Markdeep view.
+	// In preview mode, don't update the text frame directly.
+	// Record the edit for incremental update; the caller is responsible
+	// for calling UpdatePreview() when the editing operation is complete.
 	if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
 		t.logInsertDelete(q0, q1)
 		t.w.recordEdit(markdown.EditRecord{Pos: q0, OldLen: q1 - q0, NewLen: 0})
-		t.w.SchedulePreviewUpdate()
 		return
 	}
 
