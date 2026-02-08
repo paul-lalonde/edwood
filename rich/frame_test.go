@@ -1247,7 +1247,7 @@ func TestPtofcharWithTab(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
 
 	// "a\tb" = 'a' (1 char) + tab (1 char) + 'b' (1 char)
 	f.SetContent(Plain("a\tb"))
@@ -1458,7 +1458,7 @@ func TestCharofptWithTab(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
 
 	// "a\tb" = 'a' (1 char) + tab (1 char) + 'b' (1 char)
 	// Layout: 'a' at 0-10, tab from 10-80, 'b' at 80-90
@@ -1615,6 +1615,68 @@ func TestCoordinateRoundTripWithTabs(t *testing.T) {
 		if got != i {
 			t.Errorf("Charofpt(Ptofchar(%d)) = %d, want %d (pt=%v)", i, got, i, pt)
 		}
+	}
+}
+
+// TestWithMaxTabOption tests that WithMaxTab stores the value in frameImpl.
+func TestWithMaxTabOption(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(6))
+
+	fi := f.(*frameImpl)
+	if fi.maxtabChars != 6 {
+		t.Errorf("maxtabChars = %d, want 6", fi.maxtabChars)
+	}
+}
+
+// TestMaxtabPixelsDefault tests that maxtabPixels defaults to 4 chars when unset.
+func TestMaxtabPixelsDefault(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14) // 10px per char
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	fi := f.(*frameImpl)
+	got := fi.maxtabPixels()
+	want := 4 * 10 // default 4 chars * 10px
+	if got != want {
+		t.Errorf("maxtabPixels() = %d, want %d", got, want)
+	}
+}
+
+// TestDefaultTabWidthCoordinates tests that the default 4-char tab produces correct coordinates.
+func TestDefaultTabWidthCoordinates(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14) // 10px per char, default tab = 4*10 = 40px
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	f := NewFrame()
+	// No WithMaxTab — should default to 4 chars
+	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+
+	// "a\tb" with 4-char tabs: 'a' at 0-10, tab from 10-40, 'b' at 40-50
+	f.SetContent(Plain("a\tb"))
+
+	// Position 2 = 'b' should be at X = 40 (tab stop at 4*10)
+	pt := f.Ptofchar(2)
+	want := image.Point{X: 40, Y: 0}
+	if pt != want {
+		t.Errorf("Ptofchar(2) with default tab = %v, want %v", pt, want)
 	}
 }
 

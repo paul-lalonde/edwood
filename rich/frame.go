@@ -164,6 +164,19 @@ type frameImpl struct {
 	// Horizontal scrollbar colors (passed from RichText to match vertical scrollbar)
 	hscrollBg    edwooddraw.Image
 	hscrollThumb edwooddraw.Image
+
+	// Tab width in characters (default 4 when zero)
+	maxtabChars int
+}
+
+// maxtabPixels returns the tab width in pixels.
+// Defaults to 4 characters if maxtabChars is unset (zero).
+func (f *frameImpl) maxtabPixels() int {
+	chars := f.maxtabChars
+	if chars <= 0 {
+		chars = 4
+	}
+	return chars * f.font.StringWidth("0")
 }
 
 // NewFrame creates a new Frame.
@@ -724,8 +737,7 @@ func (f *frameImpl) TotalLines() int {
 	// Calculate frame width for layout
 	frameWidth := f.rect.Dx()
 
-	// Default tab width (8 characters worth)
-	maxtab := 8 * f.font.StringWidth("0")
+	maxtab := f.maxtabPixels()
 
 	// Layout all boxes (using cache if available)
 	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
@@ -748,8 +760,7 @@ func (f *frameImpl) LineStartRunes() []int {
 	// Calculate frame width for layout
 	frameWidth := f.rect.Dx()
 
-	// Default tab width (8 characters worth)
-	maxtab := 8 * f.font.StringWidth("0")
+	maxtab := f.maxtabPixels()
 
 	// Layout all boxes (using cache if available)
 	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
@@ -788,7 +799,7 @@ func (f *frameImpl) LinePixelHeights() []int {
 	}
 
 	frameWidth := f.rect.Dx()
-	maxtab := 8 * f.font.StringWidth("0")
+	maxtab := f.maxtabPixels()
 	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 
 	heights := make([]int, len(lines))
@@ -1331,8 +1342,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// Calculate frame width for layout
 	frameWidth := f.rect.Dx()
 
-	// Default tab width (8 characters worth)
-	maxtab := 8 * f.font.StringWidth("0")
+	maxtab := f.maxtabPixels()
 
 	// If origin is 0 and no pixel offset, just return the normal layout (using cache if available)
 	if f.origin == 0 && f.originYOffset == 0 {

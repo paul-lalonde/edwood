@@ -48,6 +48,9 @@ type RichText struct {
 
 	// Callback invoked when an async image load completes
 	onImageLoaded func(path string)
+
+	// Tab width in characters (forwarded to rich.WithMaxTab)
+	maxtabChars int
 }
 
 // NewRichText creates a new RichText component.
@@ -109,6 +112,9 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	}
 	if rt.scrollBg != nil && rt.scrollThumb != nil {
 		frameOpts = append(frameOpts, rich.WithHScrollColors(rt.scrollBg, rt.scrollThumb))
+	}
+	if rt.maxtabChars > 0 {
+		frameOpts = append(frameOpts, rich.WithMaxTab(rt.maxtabChars))
 	}
 
 	// Initialize frame with empty rectangle - will be set on first Render() call
@@ -594,6 +600,14 @@ func WithRichTextOnImageLoaded(fn func(path string)) RichTextOption {
 func WithRichTextSelectionColor(c draw.Image) RichTextOption {
 	return func(rt *RichText) {
 		rt.selectionColor = c
+	}
+}
+
+// WithRichTextMaxTab sets the tab width in characters for the rich text frame.
+// This is forwarded to rich.WithMaxTab during Init.
+func WithRichTextMaxTab(chars int) RichTextOption {
+	return func(rt *RichText) {
+		rt.maxtabChars = chars
 	}
 }
 

@@ -116,3 +116,11 @@ func WithHScrollColors(bg, thumb draw.Image) Option {
 		fi.hscrollThumb = thumb
 	}
 }
+
+// WithMaxTab is an Option that sets the tab width in characters.
+// When unset or zero, the default is 4 characters.
+func WithMaxTab(chars int) Option {
+	return func(fi *frameImpl) {
+		fi.maxtabChars = chars
+	}
+}

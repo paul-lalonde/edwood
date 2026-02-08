@@ -2092,6 +2092,7 @@ func (w *Window) initStyledMode() {
 		WithScrollbarColors(
 			global.textcolors[frame.ColBord],
 			global.textcolors[frame.ColBack]),
+		WithRichTextMaxTab(int(global.maxtab)),
 	}
 	if boldFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
