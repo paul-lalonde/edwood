@@ -1331,12 +1331,26 @@ func (t *Text) ReadC(q int) rune {
 	return t.file.ReadC(q)
 }
 
+func (t *Text) logSelectChange(q0, q1 int) {
+	if t.w != nil && t.w.owner != 0 {
+		c := 's'
+		if t.what == Body {
+			c = 'S'
+		}
+		t.w.Eventf("%c%d %d 0 0 \n", c, q0, q1)
+	}
+}
+
 func (t *Text) SetSelect(q0, q1 int) {
 	// log.Println("Text SetSelect Start", q0, q1)
 	// defer log.Println("Text SetSelect End", q0, q1)
 
+	changed := t.q0 != q0 || t.q1 != q1
 	t.q0 = q0
 	t.q1 = q1
+	if changed {
+		t.logSelectChange(q0, q1)
+	}
 
 	// In styled mode, update the rich.Frame selection instead of the
 	// plain frame's DrawSel. Use Render (not Frame().Redraw()) so that
