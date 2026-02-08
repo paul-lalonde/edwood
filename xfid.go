@@ -780,6 +780,8 @@ forloop:
 			w.filemenu = false
 		case "menu": // enable automatic menu
 			w.filemenu = true
+		case "Plain":
+			plaincmd(&w.body, nil, nil, false, false, "")
 		case "cleartag": // wipe tag right of bar
 			w.ClearTag()
 		case "font":

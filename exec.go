@@ -76,6 +76,7 @@ var globalexectab = []Exectab{
 	{"New", newx, false, true /*unused*/, true /*unused*/},
 	{"Newcol", newcol, false, true /*unused*/, true /*unused*/},
 	{"Paste", paste, true, true, true /*unused*/},
+	{"Plain", plaincmd, false, true /*unused*/, true /*unused*/},
 	{"Markdeep", previewcmd, false, true /*unused*/, true /*unused*/},
 	{"Put", put, false, true /*unused*/, true /*unused*/},
 	{"Putall", putall, false, true /*unused*/, true /*unused*/},
@@ -1362,5 +1363,37 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	w.Draw()
 	if display != nil {
 		display.Flush()
+	}
+}
+
+// plaincmd toggles between styled and plain text rendering for windows
+// with span data. No-op if the window has no spans or is in preview mode.
+func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
+	if et == nil || et.w == nil {
+		return
+	}
+	w := et.w
+
+	if w.IsPreviewMode() {
+		return
+	}
+
+	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
+		return
+	}
+
+	if w.IsStyledMode() {
+		w.exitStyledMode()
+		return
+	}
+
+	w.initStyledMode()
+	if w.styledMode && w.richBody != nil {
+		content := w.buildStyledContent()
+		w.richBody.SetContent(content)
+		w.richBody.Render(w.body.all)
+		if w.display != nil {
+			w.display.Flush()
+		}
 	}
 }
