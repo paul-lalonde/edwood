@@ -44,9 +44,12 @@ const (
 // lexers maps file extensions to tokenizer functions.
 // Each tokenizer takes source text and returns colored regions.
 var lexers = map[string]func(string) []region{
-	".go": tokenizeGo,
-	".py": tokenizePython,
-	".rs": tokenizeRust,
+	".go":  tokenizeGo,
+	".py":  tokenizePython,
+	".rs":  tokenizeRust,
+	".tex": tokenizeLatex,
+	".sty": tokenizeLatex,
+	".cls": tokenizeLatex,
 }
 
 type span struct {
