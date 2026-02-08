@@ -132,12 +132,18 @@ func xfidspanswrite(x *Xfid, w *Window) {
 
     bufLen := w.body.Nc()
 
+    // Reject writes to preview mode windows.
+    if w.IsPreviewMode() {
+        x.respond(&fc, fmt.Errorf("cannot write spans to preview mode window"))
+        return
+    }
+
     // Handle special commands.
     if data == "clear" {
         if w.spanStore != nil {
             w.spanStore.Clear()
         }
-        // Phase 3 will add: exitStyledMode(w) if in styled mode.
+        w.exitStyledMode()
         fc.Count = x.fcall.Count
         x.respond(&fc, nil)
         return
@@ -173,7 +179,20 @@ func xfidspanswrite(x *Xfid, w *Window) {
     // Apply region update.
     w.spanStore.RegionUpdate(regionStart, runs)
 
-    // Phase 3 will add: trigger styled rendering here.
+    // Auto-switch to styled mode on first span write.
+    if !w.styledMode && !w.previewMode {
+        w.initStyledMode()
+    }
+
+    // Build styled content and render.
+    if w.styledMode && w.richBody != nil {
+        content := w.buildStyledContent()
+        w.richBody.SetContent(content)
+        w.richBody.Render(w.body.all)
+        if w.display != nil {
+            w.display.Flush()
+        }
+    }
 
     fc.Count = x.fcall.Count
     x.respond(&fc, nil)

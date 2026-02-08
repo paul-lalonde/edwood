@@ -2085,22 +2085,9 @@ func (w *Window) initStyledMode() {
 
 	rt := NewRichText()
 
-	bgImage, err := display.AllocImage(
-		image.Rect(0, 0, 1, 1),
-		display.ScreenImage().Pix(), true, 0xFFFFFFFF)
-	if err != nil {
-		return
-	}
-	textImage, err := display.AllocImage(
-		image.Rect(0, 0, 1, 1),
-		display.ScreenImage().Pix(), true, 0x000000FF)
-	if err != nil {
-		return
-	}
-
 	rtOpts := []RichTextOption{
-		WithRichTextBackground(bgImage),
-		WithRichTextColor(textImage),
+		WithRichTextBackground(global.textcolors[frame.ColBack]),
+		WithRichTextColor(global.textcolors[frame.ColText]),
 		WithRichTextSelectionColor(global.textcolors[frame.ColHigh]),
 		WithScrollbarColors(
 			global.textcolors[frame.ColBord],
@@ -2128,6 +2115,13 @@ func (w *Window) exitStyledMode() {
 	if !w.styledMode {
 		return
 	}
+
+	// Sync scroll position from rich frame back to the plain body
+	// so the plain frame shows the same region of text.
+	if w.richBody != nil {
+		w.body.org = w.richBody.Origin()
+	}
+
 	w.styledMode = false
 	w.richBody = nil
 
@@ -2188,4 +2182,280 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s.Bold = sa.Bold
 	s.Italic = sa.Italic
 	return s
+}
+
+// HandleStyledMouse handles mouse events when the window is in styled rendering
+// mode. Returns true if the event was handled, false otherwise. This is the
+// styled-mode analog of HandlePreviewMouse, simplified by the identity mapping
+// between rich.Frame positions and body buffer positions.
+func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
+	if !w.styledMode || w.richBody == nil {
+		return false
+	}
+	if !m.Point.In(w.body.all) {
+		return false
+	}
+
+	rt := w.richBody
+
+	// Scroll wheel (buttons 4 and 5).
+	if m.Buttons&8 != 0 || m.Buttons&16 != 0 {
+		up := m.Buttons&8 != 0
+		rt.ScrollWheel(up)
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+		return true
+	}
+
+	// Scrollbar clicks (buttons 1, 2, 3 in scrollbar area).
+	scrRect := rt.ScrollRect()
+	if m.Point.In(scrRect) {
+		button := 0
+		if m.Buttons&1 != 0 {
+			button = 1
+		} else if m.Buttons&2 != 0 {
+			button = 2
+		} else if m.Buttons&4 != 0 {
+			button = 3
+		}
+		if button != 0 && mc != nil {
+			w.previewVScrollLatch(rt, mc, button, scrRect)
+			return true
+		}
+	}
+
+	frameRect := rt.Frame().Rect()
+
+	// B1: selection with chording.
+	if m.Point.In(frameRect) && m.Buttons&1 != 0 && mc != nil {
+		var p0, p1 int
+		var lastButtons int
+
+		selectq := rt.Frame().Charofpt(m.Point)
+		b := m.Buttons
+		fr := rt.Frame()
+
+		// Double-click detection.
+		prevP0, prevP1 := rt.Selection()
+		if w.previewClickRT == rt &&
+			m.Msec-w.previewClickMsec < 500 &&
+			prevP0 == prevP1 && selectq == prevP0 {
+
+			p0, p1 = fr.ExpandAtPos(selectq)
+			rt.SetSelection(p0, p1)
+			fr.Redraw()
+			if w.display != nil {
+				w.display.Flush()
+			}
+			w.previewClickRT = nil
+
+			x, y := m.Point.X, m.Point.Y
+			for {
+				me := <-mc.C
+				lastButtons = me.Buttons
+				if !(me.Buttons == b &&
+					util.Abs(me.Point.X-x) < 3 &&
+					util.Abs(me.Point.Y-y) < 3) {
+					break
+				}
+			}
+		} else {
+			// Normal click/drag selection.
+			anchor := selectq
+			for {
+				me := <-mc.C
+				lastButtons = me.Buttons
+				current := fr.Charofpt(me.Point)
+				if anchor <= current {
+					p0, p1 = anchor, current
+				} else {
+					p0, p1 = current, anchor
+				}
+				rt.SetSelection(p0, p1)
+				fr.Redraw()
+				if w.display != nil {
+					w.display.Flush()
+				}
+				if me.Buttons != b || me.Buttons == 0 {
+					break
+				}
+			}
+
+			if p0 == p1 {
+				w.previewClickRT = rt
+				w.previewClickPos = p0
+				w.previewClickMsec = m.Msec
+			} else {
+				w.previewClickRT = nil
+			}
+		}
+
+		// Sync selection to body (identity map).
+		w.body.q0 = p0
+		w.body.q1 = p1
+		q0 := p0
+
+		// Chord processing loop.
+		const (
+			chordNone = iota
+			chordCut
+			chordPaste
+			chordSnarf
+		)
+		state := chordNone
+		for lastButtons != 0 {
+			if lastButtons == 7 && state == chordNone {
+				cut(&w.body, &w.body, nil, true, false, "")
+				state = chordSnarf
+			} else if (lastButtons&1) != 0 && (lastButtons&6) != 0 && state != chordSnarf {
+				if state == chordNone {
+					w.body.TypeCommit()
+					global.seq++
+					w.body.file.Mark(global.seq)
+				}
+				if lastButtons&2 != 0 {
+					if state == chordPaste {
+						w.Undo(true)
+						w.body.SetSelect(q0, w.body.q1)
+						state = chordNone
+					} else if state != chordCut {
+						cut(&w.body, &w.body, nil, true, true, "")
+						state = chordCut
+					}
+				} else {
+					if state == chordCut {
+						w.Undo(true)
+						w.body.SetSelect(q0, w.body.q1)
+						state = chordNone
+					} else if state != chordPaste {
+						paste(&w.body, &w.body, nil, true, false, "")
+						state = chordPaste
+					}
+				}
+				w.UpdateStyledView()
+				rt.SetSelection(w.body.q0, w.body.q1)
+				clearmouse()
+			}
+			prev := lastButtons
+			for lastButtons == prev {
+				me := <-mc.C
+				lastButtons = me.Buttons
+			}
+			w.previewClickRT = nil
+		}
+
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+		return true
+	}
+
+	// B2: execute.
+	if m.Point.In(frameRect) && m.Buttons&2 != 0 {
+		priorP0, priorP1 := rt.Selection()
+
+		var p0, p1 int
+		if mc != nil {
+			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but2col)
+			rt.SetSelection(p0, p1)
+		} else {
+			charPos := rt.Frame().Charofpt(m.Point)
+			p0, p1 = charPos, charPos
+			rt.SetSelection(charPos, charPos)
+		}
+		if p0 == p1 {
+			q0, q1 := rt.Frame().ExpandAtPos(p0)
+			if q0 != q1 {
+				rt.SetSelection(q0, q1)
+				p0, p1 = q0, q1
+			}
+		}
+		// Sync to body and execute.
+		w.body.q0 = p0
+		w.body.q1 = p1
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+
+		// Get text from rich.Frame selection.
+		var cmdText string
+		if p0 != p1 {
+			buf := make([]rune, p1-p0)
+			w.body.file.Read(p0, buf)
+			cmdText = string(buf)
+		}
+		if cmdText != "" {
+			previewExecute(&w.body, cmdText)
+		}
+
+		rt.SetSelection(priorP0, priorP1)
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+		return true
+	}
+
+	// B3: look.
+	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
+		priorQ0, priorQ1 := rt.Selection()
+
+		var p0, p1 int
+		if mc != nil {
+			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but3col)
+			rt.SetSelection(p0, p1)
+		} else {
+			charPos := rt.Frame().Charofpt(m.Point)
+			p0, p1 = charPos, charPos
+			rt.SetSelection(charPos, charPos)
+		}
+
+		if p0 == p1 {
+			if priorQ0 != priorQ1 && p0 >= priorQ0 && p0 < priorQ1 {
+				p0, p1 = priorQ0, priorQ1
+				rt.SetSelection(priorQ0, priorQ1)
+			} else {
+				q0, q1 := rt.Frame().ExpandWordAtPos(p0)
+				if q0 != q1 {
+					rt.SetSelection(q0, q1)
+					p0, p1 = q0, q1
+				}
+			}
+		}
+
+		// Sync to body for search start position.
+		w.body.q0 = p0
+		w.body.q1 = p1
+
+		var lookText string
+		if p0 != p1 {
+			buf := make([]rune, p1-p0)
+			w.body.file.Read(p0, buf)
+			lookText = string(buf)
+		}
+
+		if len(lookText) > 0 {
+			if search(&w.body, []rune(lookText)) {
+				rt.SetSelection(w.body.q0, w.body.q1)
+				w.scrollPreviewToMatch(rt, w.body.q0)
+				if w.display != nil {
+					warpPt := rt.Frame().Ptofchar(w.body.q0).Add(
+						image.Pt(4, rt.Frame().DefaultFontHeight()-4))
+					w.display.MoveTo(warpPt)
+				}
+			}
+		}
+
+		w.Draw()
+		if w.display != nil {
+			w.display.Flush()
+		}
+		return true
+	}
+
+	return false
 }

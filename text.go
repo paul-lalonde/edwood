@@ -1337,6 +1337,23 @@ func (t *Text) SetSelect(q0, q1 int) {
 
 	t.q0 = q0
 	t.q1 = q1
+
+	// In styled mode, update the rich.Frame selection instead of the
+	// plain frame's DrawSel. Use Render (not Frame().Redraw()) so that
+	// the rich frame uses the current body rectangle — Frame().Redraw()
+	// would use the stale rect from the previous Render, causing an
+	// afterimage at the old position during window moves.
+	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
+		if t.w.richBody != nil {
+			t.w.richBody.SetSelection(q0, q1)
+			t.w.richBody.Render(t.w.body.all)
+			if t.w.display != nil {
+				t.w.display.Flush()
+			}
+		}
+		return
+	}
+
 	// compute desired p0,p1 from q0,q1
 	p0 := q0 - t.org
 	p1 := q1 - t.org

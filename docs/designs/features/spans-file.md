@@ -473,7 +473,21 @@ and undo/redo.
 Add `Plain` keyword to the `ctl` file write handler. Implement toggling between
 styled and plain rendering modes.
 
-### Phase 6: Integration Testing
-Build a minimal external syntax coloring tool (e.g., for Go source) that
+### Phase 6: Integration Testing and gocolor Tool
+Build an external syntax coloring tool for Go source (`cmd/gocolor`) that
 watches `event`, reads `body`, tokenizes, and writes `spans`. Verify the
 end-to-end workflow.
+
+The gocolor tool (`cmd/gocolor/main.go`) is the reference implementation:
+- Uses `go/scanner` to lex Go source and produce contiguous colored spans
+- Connects via `acme.Open` for events and `client.MountService` for spans
+- Stays resident with debounced re-coloring (300ms after last I/D event)
+- Writes back x/X/l/L events so commands and look work normally
+- Calls `win.OpenEvent()` then `win.Ctl("menu")` (in that order) to keep
+  Undo/Redo/Put in the tag despite having the event file open
+
+### Phase 6a: Mouse Handling in Styled Mode
+Route body mouse events through `HandleStyledMouse` when in styled mode,
+analogous to `HandlePreviewMouse` for preview mode. This enables scrolling,
+click-to-position, selection, chords, execute, and look in styled windows.
+See `spans-styled-mouse.md` for details.

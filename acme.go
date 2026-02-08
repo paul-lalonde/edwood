@@ -445,6 +445,13 @@ func MovedMouse(g *globals, m draw.Mouse) {
 		w.Unlock()
 		return
 	}
+	// Handle styled mode: route body mouse events to HandleStyledMouse
+	if w != nil && t.what == Body && w.IsStyledMode() {
+		w.Lock('M')
+		w.HandleStyledMouse(&m, global.mousectl)
+		w.Unlock()
+		return
+	}
 
 	but := 0
 	switch m.Buttons {

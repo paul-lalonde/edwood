@@ -76,22 +76,9 @@ func (w *Window) initStyledMode() {
 
     rt := NewRichText()
 
-    bgImage, err := display.AllocImage(
-        image.Rect(0, 0, 1, 1),
-        display.ScreenImage().Pix(), true, 0xFFFFFFFF)
-    if err != nil {
-        return
-    }
-    textImage, err := display.AllocImage(
-        image.Rect(0, 0, 1, 1),
-        display.ScreenImage().Pix(), true, 0x000000FF)
-    if err != nil {
-        return
-    }
-
     rtOpts := []RichTextOption{
-        WithRichTextBackground(bgImage),
-        WithRichTextColor(textImage),
+        WithRichTextBackground(global.textcolors[frame.ColBack]),
+        WithRichTextColor(global.textcolors[frame.ColText]),
         WithRichTextSelectionColor(global.textcolors[frame.ColHigh]),
         WithScrollbarColors(
             global.textcolors[frame.ColBord],
@@ -119,6 +106,9 @@ func (w *Window) initStyledMode() {
 - No image cache or base path
 - No scaled fonts (headings) or code font — styled mode uses Fg/Bg/Bold/Italic only
 - No file name check (any window can receive spans)
+- Uses `global.textcolors[frame.ColBack]` and `global.textcolors[frame.ColText]` for
+  background/foreground so the styled window matches the default acme color scheme
+  (yellowish background) rather than hardcoded white/black
 
 ---
 
@@ -131,6 +121,13 @@ func (w *Window) exitStyledMode() {
     if !w.styledMode {
         return
     }
+
+    // Sync scroll position from rich frame back to the plain body
+    // so the plain frame shows the same region of text.
+    if w.richBody != nil {
+        w.body.org = w.richBody.Origin()
+    }
+
     w.styledMode = false
     w.richBody = nil
 
@@ -143,7 +140,9 @@ func (w *Window) exitStyledMode() {
 }
 ```
 
-This follows `SetPreviewMode(false)` at `wind.go:892-899`.
+This follows `SetPreviewMode(false)` at `wind.go:892-899`. The scroll position
+sync ensures that toggling back to plain mode shows the same region of text
+the user was viewing in styled mode.
 
 ---
 
@@ -264,6 +263,38 @@ This means:
 
 ---
 
+## Interaction with SetSelect (Cursor Tracking)
+
+In styled mode, `Text.SetSelect` must update the `rich.Frame` selection
+instead of the plain frame's `DrawSel`. The implementation uses
+`richBody.Render(body.all)` rather than `richBody.Frame().Redraw()`:
+
+```go
+if t.what == Body && t.w != nil && t.w.IsStyledMode() {
+    if t.w.richBody != nil {
+        t.w.richBody.SetSelection(q0, q1)
+        t.w.richBody.Render(t.w.body.all)
+        if t.w.display != nil {
+            t.w.display.Flush()
+        }
+    }
+    return
+}
+```
+
+**Why `Render(body.all)` instead of `Frame().Redraw()`**: The rich frame's
+internal rectangle (`f.rect`) is set by the previous `Render` call. During a
+`Window.Resize`, the body rectangle has been updated but the rich frame's
+internal rect is stale. `Frame().Redraw()` would draw at the OLD window
+position and then `Flush()`, causing an afterimage. `Render(body.all)` uses
+the current body rectangle, avoiding this.
+
+Preview mode avoids this issue because `SetSelect` has no special case for
+preview — it falls through to the plain frame's `DrawSel` which is invisible
+behind the rich frame.
+
+---
+
 ## Interaction with Resize
 
 The `Window.Resize` method at `wind.go:353` passes `w.previewMode` as the
@@ -282,6 +313,11 @@ if (w.previewMode || w.styledMode) && w.richBody != nil {
     w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
 }
 ```
+
+Note that `body.Resize` → `Text.Redraw` → `SetSelect` fires during Resize.
+The styled-mode `SetSelect` path (above) uses `Render(body.all)` which
+correctly renders at the new window position. This is critical for avoiding
+afterimages when windows are moved or resized.
 
 ---
 
@@ -382,6 +418,20 @@ Tests go in `wind_styled_test.go`:
 
 8. **styledMode flag tracking**: Verify `IsStyledMode()` returns correct
    value after init/exit.
+
+9. **initStyledMode uses global colors**: Verify `initStyledMode` passes
+   `global.textcolors[frame.ColBack]` and `global.textcolors[frame.ColText]`
+   to `WithRichTextBackground` and `WithRichTextColor` respectively (not
+   hardcoded white/black).
+
+10. **SetSelect in styled mode uses Render not Frame().Redraw()**: After
+    `body.Resize` with a new rectangle, call `SetSelect(q0, q1)`. Verify
+    the rich frame renders at the NEW body rectangle, not the old one.
+    This prevents afterimage artifacts during window moves.
+
+11. **exitStyledMode syncs scroll origin**: Enter styled mode, scroll to
+    a non-zero origin. Call `exitStyledMode()`. Verify `w.body.org` matches
+    the rich frame's origin so the plain frame shows the same text region.
 
 Use existing test patterns from `wind_test.go` and `edwoodtest` package.
 Since `initStyledMode` depends on display/font infrastructure, the unit
