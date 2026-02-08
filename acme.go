@@ -176,6 +176,7 @@ func readfile(c *Column, filename string) {
 	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
 	w.tag.SetSelect(w.tag.file.Nr(), w.tag.file.Nr())
 	xfidlog(w, "new")
+	maybeRunFileHook(w)
 }
 
 var fontCache = make(map[string]draw.Font)

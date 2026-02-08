@@ -785,6 +785,30 @@ func TestUndoRedo(t *testing.T) {
 	}
 }
 
+func TestFileHookTool(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"", ""},
+		{"main.go", "gocolor"},
+		{"main.GO", "gocolor"},
+		{"script.py", "pycolor"},
+		{"script.PY", "pycolor"},
+		{"readme.txt", ""},
+		{"/path/to/file.go", "gocolor"},
+		{"/path/to/file.py", "pycolor"},
+		{"/path/to/file.c", ""},
+		{"noext", ""},
+	}
+	for _, tc := range tests {
+		got := fileHookTool(tc.name)
+		if got != tc.want {
+			t.Errorf("fileHookTool(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestDelegateExecution(t *testing.T) {
 	const hello_世界 = "/Hello, 世界"
 	runic_hello_世界 := []rune(hello_世界)

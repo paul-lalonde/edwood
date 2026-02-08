@@ -267,6 +267,7 @@ func plumbshow(m *plumb.Message) {
 	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
 	w.tag.SetSelect(w.tag.Nc(), w.tag.Nc())
 	xfidlog(w, "new")
+	maybeRunFileHook(w)
 }
 
 func search(ct *Text, r []rune) bool {
@@ -459,6 +460,7 @@ func openfile(t *Text, e *Expand) *Window {
 			w.autoindent = *globalAutoIndent
 		}
 		xfidlog(w, "new")
+		maybeRunFileHook(w)
 	}
 	if e.a1 == e.a0 {
 		eval = false

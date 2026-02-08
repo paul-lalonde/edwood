@@ -1399,3 +1399,42 @@ func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 		}
 	}
 }
+
+// fileHooks maps lowercase file extensions to external tool names
+// that should be automatically run when a file with that extension is opened.
+var fileHooks = map[string]string{
+	".go": "gocolor",
+	".py": "pycolor",
+}
+
+// fileHookTool returns the tool name for the given filename based on its
+// extension, or "" if no hook is configured for that extension.
+func fileHookTool(name string) string {
+	if name == "" {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	tool, ok := fileHooks[ext]
+	if !ok {
+		return ""
+	}
+	return tool
+}
+
+// maybeRunFileHook checks if the window's file has an extension that matches
+// a configured file hook, and if so, runs the corresponding tool.
+func maybeRunFileHook(w *Window) {
+	if w == nil {
+		return
+	}
+	toolName := fileHookTool(w.body.file.Name())
+	if toolName == "" {
+		return
+	}
+	if _, err := exec.LookPath(toolName); err != nil {
+		return
+	}
+	dir := w.body.DirName("")
+	w.ref.Inc()
+	run(w, toolName, dir, true, "", "", false)
+}

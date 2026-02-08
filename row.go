@@ -534,6 +534,7 @@ func (row *Row) loadhelper(win *dumpfile.Window) error {
 
 	// TODO(rjk): Conceivably this should be a zerox xfidlog when reconstituting a zerox?
 	xfidlog(w, "new")
+	maybeRunFileHook(w)
 	return nil
 }
 
