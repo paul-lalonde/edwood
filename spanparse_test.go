@@ -425,27 +425,54 @@ func TestParseSpanDefs_ErrOverlappingSpans(t *testing.T) {
 	}
 }
 
-func TestParseSpanDefs_ErrRegionExceedsBuffer(t *testing.T) {
+func TestParseSpanDefs_RegionExceedsBufferClamped(t *testing.T) {
 	// Span region extends past buffer: offset 0, length 20, but bufLen=10.
-	_, _, err := parseSpanDefs("0 20 #ff0000", 10)
-	if err == nil {
-		t.Fatal("expected error for region exceeding buffer; got nil")
+	// Should clamp rather than error.
+	runs, start, err := parseSpanDefs("0 20 #ff0000", 10)
+	if err != nil {
+		t.Fatalf("expected clamping, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "exceeds buffer") {
-		t.Errorf("error = %q; want to contain %q", err.Error(), "exceeds buffer")
+	if start != 0 {
+		t.Errorf("regionStart = %d; want 0", start)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("len(runs) = %d; want 1", len(runs))
+	}
+	if runs[0].Len != 10 {
+		t.Errorf("runs[0].Len = %d; want 10 (clamped from 20)", runs[0].Len)
 	}
 }
 
-func TestParseSpanDefs_ErrOffsetBeyondBuffer(t *testing.T) {
-	// Offset beyond buffer length.
-	_, _, err := parseSpanDefs("15 5 #ff0000", 10)
-	if err == nil {
-		t.Fatal("expected error for offset beyond buffer; got nil")
+func TestParseSpanDefs_OffsetBeyondBufferDiscarded(t *testing.T) {
+	// Offset beyond buffer length — spans are silently discarded.
+	runs, start, err := parseSpanDefs("15 5 #ff0000", 10)
+	if err != nil {
+		t.Fatalf("expected empty result, got error: %v", err)
 	}
-	// Should get either "offset beyond buffer" or "exceeds buffer"
-	errStr := err.Error()
-	if !strings.Contains(errStr, "beyond buffer") && !strings.Contains(errStr, "exceeds buffer") {
-		t.Errorf("error = %q; want to contain 'beyond buffer' or 'exceeds buffer'", errStr)
+	if len(runs) != 0 {
+		t.Errorf("len(runs) = %d; want 0 (discarded)", len(runs))
+	}
+	_ = start
+}
+
+func TestParseSpanDefs_MultiRunClamp(t *testing.T) {
+	// Two runs totaling 20 runes, but buffer is only 12.
+	// First run (10) fits, second run (10) should be clamped to 2.
+	runs, start, err := parseSpanDefs("0 10 #ff0000\n10 10 #00ff00", 12)
+	if err != nil {
+		t.Fatalf("expected clamping, got error: %v", err)
+	}
+	if start != 0 {
+		t.Errorf("regionStart = %d; want 0", start)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d; want 2", len(runs))
+	}
+	if runs[0].Len != 10 {
+		t.Errorf("runs[0].Len = %d; want 10", runs[0].Len)
+	}
+	if runs[1].Len != 2 {
+		t.Errorf("runs[1].Len = %d; want 2 (clamped from 10)", runs[1].Len)
 	}
 }
 

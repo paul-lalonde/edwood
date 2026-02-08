@@ -66,9 +66,10 @@ func parseSpanDefs(data string, bufLen int) ([]StyleRun, int, error) {
 			return nil, 0, fmt.Errorf("negative span offset or length")
 		}
 
-		// Validate offset within buffer.
-		if offset > bufLen {
-			return nil, 0, fmt.Errorf("span offset beyond buffer")
+		// Silently discard spans that start past the buffer end.
+		// This can happen when the coloring tool read a stale body snapshot.
+		if offset >= bufLen {
+			break
 		}
 
 		// Set region start from first span.
@@ -135,13 +136,30 @@ func parseSpanDefs(data string, bufLen int) ([]StyleRun, int, error) {
 		regionStart = 0
 	}
 
-	// Validate region doesn't exceed buffer.
+	// Clamp region to buffer length. The coloring tool may have read
+	// a stale snapshot of the body; rather than rejecting the entire
+	// write, truncate the trailing run so the spans fit. The tool
+	// will re-color on the next edit event.
 	totalLen := 0
 	for _, r := range runs {
 		totalLen += r.Len
 	}
 	if regionStart+totalLen > bufLen {
-		return nil, 0, fmt.Errorf("span region exceeds buffer length")
+		excess := regionStart + totalLen - bufLen
+		// Walk backwards, trimming runs until the excess is absorbed.
+		for i := len(runs) - 1; i >= 0 && excess > 0; i-- {
+			if runs[i].Len <= excess {
+				excess -= runs[i].Len
+				runs[i].Len = 0
+			} else {
+				runs[i].Len -= excess
+				excess = 0
+			}
+		}
+		// Remove zero-length trailing runs.
+		for len(runs) > 0 && runs[len(runs)-1].Len == 0 {
+			runs = runs[:len(runs)-1]
+		}
 	}
 
 	return runs, regionStart, nil
