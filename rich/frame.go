@@ -1582,6 +1582,12 @@ func (f *frameImpl) drawSelectionTo(target edwooddraw.Image, offset image.Point)
 			boxRunePos = boxEndRune
 		}
 
+		// If the line ends with a selected newline, extend highlight to right margin
+		// so the user can see that the newline is included in the selection.
+		if len(line.Boxes) > 0 && line.Boxes[len(line.Boxes)-1].Box.IsNewline() && p1 >= lineEndRune {
+			selEndX = frameWidth
+		}
+
 		// If selStartX wasn't set, default to 0
 		if selStartX < 0 {
 			selStartX = 0
