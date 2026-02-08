@@ -139,14 +139,13 @@ func TestLexComment(t *testing.T) {
 	}
 }
 
-func TestColorize(t *testing.T) {
+func TestColorizePython(t *testing.T) {
 	src := "def f():\n    pass\n"
-	spans := colorize(src)
+	spans := colorize(src, tokenizePython)
 
 	// Verify spans are contiguous and cover the whole source.
 	totalRunes := 0
-	for _, s := range src {
-		_ = s
+	for range src {
 		totalRunes++
 	}
 
