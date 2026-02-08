@@ -36,3 +36,20 @@ func (lm *LinkMap) URLAt(pos int) string {
 	}
 	return ""
 }
+
+// URLForRange checks if the range [start, end) overlaps exactly one link entry.
+// Returns the URL of that link, or empty string if zero or multiple links overlap.
+func (lm *LinkMap) URLForRange(start, end int) string {
+	var found string
+	for _, e := range lm.entries {
+		// Check if [start, end) and [e.Start, e.End) overlap
+		if start < e.End && end > e.Start {
+			if found != "" {
+				// Multiple links overlap
+				return ""
+			}
+			found = e.URL
+		}
+	}
+	return found
+}

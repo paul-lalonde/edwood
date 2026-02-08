@@ -126,6 +126,85 @@ func TestLinkMapMultipleLinks(t *testing.T) {
 	}
 }
 
+func TestLinkMapURLForRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		links   []LinkEntry
+		start   int
+		end     int
+		wantURL string
+	}{
+		{
+			name:    "no links",
+			links:   nil,
+			start:   0,
+			end:     5,
+			wantURL: "",
+		},
+		{
+			name:    "single link fully contained",
+			links:   []LinkEntry{{Start: 5, End: 10, URL: "https://example.com"}},
+			start:   6,
+			end:     9,
+			wantURL: "https://example.com",
+		},
+		{
+			name:    "single link exactly matching",
+			links:   []LinkEntry{{Start: 5, End: 10, URL: "https://example.com"}},
+			start:   5,
+			end:     10,
+			wantURL: "https://example.com",
+		},
+		{
+			name:    "range partially overlaps link",
+			links:   []LinkEntry{{Start: 5, End: 10, URL: "https://example.com"}},
+			start:   3,
+			end:     7,
+			wantURL: "https://example.com",
+		},
+		{
+			name:    "no overlap",
+			links:   []LinkEntry{{Start: 5, End: 10, URL: "https://example.com"}},
+			start:   0,
+			end:     5,
+			wantURL: "",
+		},
+		{
+			name: "multiple links overlap - returns empty",
+			links: []LinkEntry{
+				{Start: 5, End: 10, URL: "https://first.com"},
+				{Start: 10, End: 15, URL: "https://second.com"},
+			},
+			start:   8,
+			end:     12,
+			wantURL: "",
+		},
+		{
+			name: "range overlaps only one of multiple links",
+			links: []LinkEntry{
+				{Start: 5, End: 10, URL: "https://first.com"},
+				{Start: 20, End: 25, URL: "https://second.com"},
+			},
+			start:   6,
+			end:     9,
+			wantURL: "https://first.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lm := NewLinkMap()
+			for _, le := range tt.links {
+				lm.Add(le.Start, le.End, le.URL)
+			}
+			got := lm.URLForRange(tt.start, tt.end)
+			if got != tt.wantURL {
+				t.Errorf("URLForRange(%d, %d) = %q, want %q", tt.start, tt.end, got, tt.wantURL)
+			}
+		})
+	}
+}
+
 func TestLinkMapAdjacentLinks(t *testing.T) {
 	lm := NewLinkMap()
 

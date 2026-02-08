@@ -9375,3 +9375,184 @@ func TestPreviewTypeUndoGrouping(t *testing.T) {
 		}
 	})
 }
+
+// TestPreviewB3SearchRenderedText verifies that B3 on bold text searches for
+// the rendered text "bold" (not the source markup "**bold**").
+func TestPreviewB3SearchRenderedText(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Source: "Find **bold** text here.\n\nAnother bold word."
+	// Rendered: "Find bold text here.\n\nAnother bold word."
+	sourceMarkdown := "Find **bold** text here.\n\nAnother bold word."
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &TrackingMockFrame{nchars: len(sourceRunes), maxlines: 20},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.w = w
+	w.body.what = Body
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+	w.SetPreviewMode(true)
+
+	// Find "bold" in the rendered text
+	plainText := content.Plain()
+	boldIdx := -1
+	for i := 0; i < len(plainText)-3; i++ {
+		if string(plainText[i:i+4]) == "bold" {
+			boldIdx = i
+			break
+		}
+	}
+	if boldIdx < 0 {
+		t.Fatalf("Could not find 'bold' in rendered text: %q", string(plainText))
+	}
+
+	// Simulate B3 null-click: expand word at the click position
+	q0, q1 := rt.Frame().ExpandWordAtPos(boldIdx + 1) // click inside "bold"
+	if string(plainText[q0:q1]) != "bold" {
+		t.Fatalf("ExpandWordAtPos should expand to 'bold', got %q", string(plainText[q0:q1]))
+	}
+	rt.SetSelection(q0, q1)
+
+	// PreviewLookText should return rendered text "bold" (no markup)
+	lookText := w.PreviewLookText()
+	if lookText != "bold" {
+		t.Errorf("PreviewLookText should return \"bold\", got %q", lookText)
+	}
+
+	// The search should use "bold" (rendered text), which will find a match
+	// in the source body since "bold" appears as plain text in the second paragraph.
+	w.syncSourceSelection()
+	found := search(&w.body, []rune(lookText))
+	if !found {
+		t.Fatal("search() for rendered text 'bold' should find a match in source buffer")
+	}
+
+	// Verify the search result maps to a valid rendered position
+	if w.previewSourceMap != nil {
+		rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+		if rendStart < 0 || rendEnd < 0 {
+			t.Fatalf("ToRendered(%d, %d) could not map search result", w.body.q0, w.body.q1)
+		}
+		if rendEnd-rendStart != 4 {
+			t.Errorf("Rendered match should be 4 runes for 'bold', got %d", rendEnd-rendStart)
+		}
+		if rendStart >= 0 && rendEnd <= len(plainText) {
+			renderedMatch := string(plainText[rendStart:rendEnd])
+			if renderedMatch != "bold" {
+				t.Errorf("Rendered match should be \"bold\", got %q", renderedMatch)
+			}
+		}
+	}
+}
+
+// TestPreviewB3SweepOnLink verifies that sweeping inside a link's text in
+// preview mode plumbs the URL (via URLForRange) instead of searching.
+func TestPreviewB3SweepOnLink(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Source: "Click [here](https://example.com) for info."
+	// Rendered: "Click here for info."
+	sourceMarkdown := "Click [here](https://example.com) for info."
+	sourceRunes := []rune(sourceMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/readme.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(12, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(sourceMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+	w.SetPreviewMode(true)
+
+	// Find "here" in the rendered text
+	plainText := content.Plain()
+	hereIdx := -1
+	for i := 0; i < len(plainText)-3; i++ {
+		if string(plainText[i:i+4]) == "here" {
+			hereIdx = i
+			break
+		}
+	}
+	if hereIdx < 0 {
+		t.Fatalf("Could not find 'here' in rendered text: %q", string(plainText))
+	}
+
+	// Simulate B3 sweep over part of the link text "here" (positions hereIdx to hereIdx+4)
+	p0, p1 := hereIdx, hereIdx+4
+
+	// Point-based check at the click position should find the link
+	url := w.PreviewLookLinkURL(p0)
+	if url != "https://example.com" {
+		t.Logf("PreviewLookLinkURL(%d) = %q (may be empty if click not exactly on link)", p0, url)
+	}
+
+	// Range-based check should find the link even if point-based misses
+	if url == "" && w.previewLinkMap != nil {
+		url = w.previewLinkMap.URLForRange(p0, p1)
+	}
+	if url != "https://example.com" {
+		t.Errorf("URLForRange(%d, %d) should return link URL, got %q", p0, p1, url)
+	}
+}

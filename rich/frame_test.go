@@ -4332,3 +4332,86 @@ func TestHScrollRegionOffsetWithOrigin(t *testing.T) {
 		t.Errorf("SetHScrollOrigin(0, 999) should not affect global index 0 (block A), got hscrollOrigins[0] = %d", fi.hscrollOrigins[0])
 	}
 }
+
+// TestExpandWordAtPos verifies word-level expansion in various contexts.
+func TestExpandWordAtPos(t *testing.T) {
+	tests := []struct {
+		name    string
+		content Content
+		pos     int
+		wantQ0  int
+		wantQ1  int
+	}{
+		{
+			name:    "plain word",
+			content: Content{{Text: "hello world", Style: DefaultStyle()}},
+			pos:     2, // inside "hello"
+			wantQ0:  0,
+			wantQ1:  5,
+		},
+		{
+			name:    "word at start",
+			content: Content{{Text: "foo bar", Style: DefaultStyle()}},
+			pos:     0,
+			wantQ0:  0,
+			wantQ1:  3,
+		},
+		{
+			name:    "word at end",
+			content: Content{{Text: "foo bar", Style: DefaultStyle()}},
+			pos:     5, // inside "bar"
+			wantQ0:  4,
+			wantQ1:  7,
+		},
+		{
+			name: "inside code block - word only, not full block",
+			content: Content{
+				{Text: "before\n", Style: DefaultStyle()},
+				{Text: "line one\nline two\n", Style: Style{Block: true, Code: true}},
+				{Text: "after\n", Style: DefaultStyle()},
+			},
+			pos:    13, // inside "one": before\n=7, line =11, o=12, n=13
+			wantQ0: 12, // "one" starts at rune 12
+			wantQ1: 15, // "one" ends at rune 15
+		},
+		{
+			name: "inside inline code - word only, not full span",
+			content: Content{
+				{Text: "see ", Style: DefaultStyle()},
+				{Text: "foo_bar", Style: Style{Code: true}},
+				{Text: " end", Style: DefaultStyle()},
+			},
+			pos:    5, // inside "foo_bar" (4 + 1)
+			wantQ0: 4,
+			wantQ1: 11, // "foo_bar" is 7 runes starting at 4
+		},
+		{
+			name:    "on punctuation between words - no expansion",
+			content: Content{{Text: "a..b", Style: DefaultStyle()}},
+			pos:     2, // on second '.' between 'a' and 'b'
+			wantQ0:  2,
+			wantQ1:  2,
+		},
+		{
+			name:    "underscore in word",
+			content: Content{{Text: "foo_bar baz", Style: DefaultStyle()}},
+			pos:     3, // on '_'
+			wantQ0:  0,
+			wantQ1:  7,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewFrame()
+			fi := f.(*frameImpl)
+			fi.content = tt.content
+			q0, q1 := fi.ExpandWordAtPos(tt.pos)
+			if q0 != tt.wantQ0 || q1 != tt.wantQ1 {
+				plain := tt.content.Plain()
+				t.Errorf("ExpandWordAtPos(%d) = (%d, %d), want (%d, %d); plain=%q",
+					tt.pos, q0, q1, tt.wantQ0, tt.wantQ1, string(plain))
+			}
+		})
+	}
+}

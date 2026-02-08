@@ -62,6 +62,10 @@ type Frame interface {
 	// code block rune range. Otherwise returns word boundaries.
 	ExpandAtPos(pos int) (q0, q1 int)
 
+	// ExpandWordAtPos returns word boundaries at pos (alphanumeric + underscore).
+	// Unlike ExpandAtPos, it never expands to full code blocks or inline code spans.
+	ExpandWordAtPos(pos int) (q0, q1 int)
+
 	// Font metrics
 	DefaultFontHeight() int // Height of the default font
 
@@ -515,6 +519,20 @@ func (f *frameImpl) ExpandAtPos(pos int) (q0, q1 int) {
 		q0--
 	}
 	q1 = pos
+	for q1 < len(plain) && isExpandWordChar(plain[q1]) {
+		q1++
+	}
+	return q0, q1
+}
+
+// ExpandWordAtPos returns word boundaries at pos (alphanumeric + underscore).
+// Unlike ExpandAtPos, it never expands to full code blocks or inline code spans.
+func (f *frameImpl) ExpandWordAtPos(pos int) (q0, q1 int) {
+	plain := f.content.Plain()
+	q0, q1 = pos, pos
+	for q0 > 0 && isExpandWordChar(plain[q0-1]) {
+		q0--
+	}
 	for q1 < len(plain) && isExpandWordChar(plain[q1]) {
 		q1++
 	}

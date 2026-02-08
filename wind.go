@@ -1197,6 +1197,11 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 	// Handle button 3 (B3/right-click) in frame area for Look action
 	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
+		// Save prior selection before the sweep overwrites it.
+		// Needed so a B3 null-click inside an existing selection uses
+		// that selection rather than expanding to a word.
+		priorQ0, priorQ1 := rt.Selection()
+
 		// First, perform sweep selection (like B1/B2)
 		var p0, p1 int
 		if mc != nil {
@@ -1214,16 +1219,15 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		charPos := p0
 
 		// If null click (no sweep), check for existing selection or expand.
-		// In a code block, expands to the full block; otherwise expands to word.
+		// Use word-level expansion only (not code block expansion).
 		if p0 == p1 {
-			// Check if click is inside an existing selection
-			q0, q1 := rt.Selection()
-			if q0 != q1 && charPos >= q0 && charPos < q1 {
+			// Check if click is inside the prior selection
+			if priorQ0 != priorQ1 && charPos >= priorQ0 && charPos < priorQ1 {
 				// Click inside existing selection - use it as-is
-				p0, p1 = q0, q1
-				rt.SetSelection(q0, q1)
+				p0, p1 = priorQ0, priorQ1
+				rt.SetSelection(priorQ0, priorQ1)
 			} else {
-				q0, q1 := rt.Frame().ExpandAtPos(p0)
+				q0, q1 := rt.Frame().ExpandWordAtPos(p0)
 				if q0 != q1 {
 					rt.SetSelection(q0, q1)
 					p0, p1 = q0, q1
@@ -1233,6 +1237,11 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 		// Check if this position is within a link
 		url := w.PreviewLookLinkURL(charPos)
+
+		// For swept selections, also check if the range overlaps a single link
+		if url == "" && p0 != p1 && w.previewLinkMap != nil {
+			url = w.previewLinkMap.URLForRange(p0, p1)
+		}
 
 		if url != "" {
 			// Plumb the URL using the same mechanism as look3
@@ -1274,18 +1283,16 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			return true
 		}
 
-		// Not a link or image - use selected text for Look (search in body)
+		// Not a link or image - use rendered text for Look (search in body)
+		// Get the rendered (plain) text to search for, not the source markdown
+		lookText := w.PreviewLookText()
+
+		// Still sync the source selection so body.q1 is set as the search start position
 		w.syncSourceSelection()
 
-		// Read source text from body selection (not rendered text)
-		// This ensures we search for the actual markdown source, not stripped text
-		srcLen := w.body.q1 - w.body.q0
-		if srcLen > 0 {
-			srcBuf := make([]rune, srcLen)
-			w.body.file.Read(w.body.q0, srcBuf)
-
-			// Search source buffer for the source text
-			if search(&w.body, srcBuf) {
+		if len(lookText) > 0 {
+			// Search source buffer for the rendered text (no markup)
+			if search(&w.body, []rune(lookText)) {
 				// Map the search result (body.q0/q1) back to rendered positions
 				if w.previewSourceMap != nil {
 					rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
@@ -1762,24 +1769,11 @@ func (w *Window) PreviewExpandWord(pos int) (word string, start, end int) {
 	}
 
 	plainText := content.Plain()
-	n := len(plainText)
-
-	if pos < 0 || pos >= n {
+	if pos < 0 || pos >= len(plainText) {
 		return "", pos, pos
 	}
 
-	// Expand left to find word start
-	start = pos
-	for start > 0 && isWordChar(plainText[start-1]) {
-		start--
-	}
-
-	// Expand right to find word end
-	end = pos
-	for end < n && isWordChar(plainText[end]) {
-		end++
-	}
-
+	start, end = w.richBody.Frame().ExpandWordAtPos(pos)
 	if start >= end {
 		return "", pos, pos
 	}
