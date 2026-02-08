@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 
 	"github.com/rjkroege/edwood/edwoodtest"
@@ -488,5 +490,109 @@ func TestStyledAndPreviewMutuallyExclusive(t *testing.T) {
 
 	if w.styledMode && w.previewMode {
 		t.Error("styledMode and previewMode should never both be true")
+	}
+}
+
+// TestStyledShowSendsSelectionEvent verifies that when Show() is called in
+// styled mode, the 'S' selection event is sent to the event subscriber
+// (e.g., the coloring program). Without this event, external programs
+// don't know the selection changed and won't update the display.
+func TestStyledShowSendsSelectionEvent(t *testing.T) {
+	bodyText := "hello world test acme text"
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 800, 600))
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", []rune(bodyText)),
+		what:    Body,
+	}
+	w.body.w = w
+	w.col = &Column{safe: true}
+	w.body.all = image.Rect(0, 20, 800, 600)
+
+	// Set up styled mode with richBody.
+	w.initStyledMode()
+	content := w.buildStyledContent()
+	w.richBody.SetContent(content)
+	w.richBody.Render(w.body.all)
+
+	// Enable event subscription (simulates external program like edcolor).
+	w.owner = 'T'
+	w.nopen[QWevent]++
+
+	// Clear any events from setup.
+	w.events = nil
+
+	// Call Show with a selection — this is what search() does.
+	w.body.Show(6, 11, true) // select "world"
+
+	// Verify body selection was updated.
+	if w.body.q0 != 6 || w.body.q1 != 11 {
+		t.Errorf("body selection = (%d, %d), want (6, 11)", w.body.q0, w.body.q1)
+	}
+
+	// Verify 'S' event was emitted for the external program.
+	eventStr := string(w.events)
+	if !strings.Contains(eventStr, "S6 11 0 0") {
+		t.Errorf("expected S event for selection (6,11), got events: %q", eventStr)
+	}
+
+	// Verify the rich text selection was set.
+	p0, p1 := w.richBody.Selection()
+	if p0 != 6 || p1 != 11 {
+		t.Errorf("richBody selection = (%d, %d), want (6, 11)", p0, p1)
+	}
+}
+
+// TestStyledShowScrollsRichText verifies that when Show() is called in
+// styled mode for text that is off-screen, the rich text frame scrolls
+// (not just the hidden plain text frame).
+func TestStyledShowScrollsRichText(t *testing.T) {
+	// Build body with enough text that later content is off-screen.
+	var bodyText string
+	for i := 0; i < 50; i++ {
+		bodyText += fmt.Sprintf("Line %d of filler text.\n", i)
+	}
+	bodyText += "target word here.\n"
+	bodyRunes := []rune(bodyText)
+
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 800, 600))
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", bodyRunes),
+		what:    Body,
+	}
+	w.body.w = w
+	w.col = &Column{safe: true}
+	w.body.all = image.Rect(0, 20, 800, 160) // small frame to force scrolling
+
+	// Set up styled mode with richBody.
+	w.initStyledMode()
+	content := w.buildStyledContent()
+	w.richBody.SetContent(content)
+	w.richBody.Render(w.body.all)
+	w.richBody.SetOrigin(0)
+
+	// Find "target" in the body text.
+	targetIdx := strings.Index(bodyText, "target")
+	if targetIdx < 0 {
+		t.Fatal("could not find 'target' in body text")
+	}
+
+	// Show the selection — should scroll the rich text frame.
+	w.body.Show(targetIdx, targetIdx+6, true)
+
+	// Verify the origin changed (target was off-screen from origin=0).
+	if w.richBody.Origin() == 0 && targetIdx > 200 {
+		t.Errorf("rich text origin should have changed after Show to off-screen position %d", targetIdx)
 	}
 }

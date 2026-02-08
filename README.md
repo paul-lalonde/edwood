@@ -5,8 +5,9 @@
 [![Build Status](https://github.com/rjkroege/edwood/actions/workflows/edwood.yml/badge.svg?branch=master)](https://github.com/rjkroege/edwood/actions)
 
 ![Images](images.jpeg)
-
+---
 # About this fork
+---
 This fork has two principal contributions: a Markdown view, and a syntax coloring view.
 For the first, any .md file opens in Markdeep mode; B2 on the "Markdeep" tag toggles to plain text.
 For the second, run the tools "pycolor" or "gocolor" in a window with python or go code respectively,

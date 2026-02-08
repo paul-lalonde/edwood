@@ -1503,6 +1503,22 @@ func (w *Window) ShowInPreview(q0, q1 int) int {
 	return rendStart
 }
 
+// ShowInStyledMode sets the rich text selection and scrolls to make it
+// visible. In styled mode, rune positions are 1:1 with the source text
+// (no source map needed).
+func (w *Window) ShowInStyledMode(q0, q1 int) {
+	if !w.styledMode || w.richBody == nil {
+		return
+	}
+	rt := w.richBody
+	rt.SetSelection(q0, q1)
+	w.scrollPreviewToMatch(rt, q0)
+	w.Draw()
+	if w.display != nil {
+		w.display.Flush()
+	}
+}
+
 // scrollPreviewToMatch scrolls the preview so that the match at rendStart
 // is visible, placing it roughly 1/3 from the top of the frame (matching
 // Acme's Show() scroll behavior). If the match is already visible, no
@@ -1513,17 +1529,18 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 		return
 	}
 
-	// Use pixel coordinates for visibility check.
-	// MaxLines() overestimates for variable-height content (images,
-	// code blocks, paragraph spacing), so use Ptofchar instead.
-	pt := fr.Ptofchar(rendStart)
+	// Check if the match is already visible using the actual rune range
+	// in the viewport. MaxLines() overestimates for rich text with variable-
+	// height content (images, code blocks, paragraph spacing), so instead
+	// we use Charofpt at the frame bottom to find the last visible rune.
 	frameRect := fr.Rect()
-	fontHeight := fr.DefaultFontHeight()
-	if pt.Y >= frameRect.Min.Y && pt.Y+fontHeight <= frameRect.Max.Y {
-		return // Actually visible in the viewport
+	origin := rt.Origin()
+	lastVisible := fr.Charofpt(image.Pt(frameRect.Max.X-1, frameRect.Max.Y-1))
+	if rendStart >= origin && rendStart <= lastVisible && lastVisible > origin {
+		return
 	}
 
-	// Need to scroll. Find line-based coordinates.
+	// Need to scroll. Find line-based coordinates for positioning.
 	lineStarts := fr.LineStartRunes()
 	maxLines := fr.MaxLines()
 	if maxLines <= 0 || len(lineStarts) == 0 {

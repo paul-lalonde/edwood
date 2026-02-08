@@ -162,11 +162,19 @@ func look3(t *Text, q0 int, q1 int, external bool) {
 		r = make([]rune, n)
 		t.file.Read(e.q0, r)
 		if search(ct, r[:n]) && e.jump {
-			if ct.w != nil && ct.w.IsPreviewMode() && ct.w.richBody != nil && ct.w.previewSourceMap != nil {
-				rendStart, _ := ct.w.previewSourceMap.ToRendered(ct.q0, ct.q1)
+			if ct.w != nil && ct.w.richBody != nil && (ct.w.IsPreviewMode() || ct.w.IsStyledMode()) {
+				rendStart := ct.q0 // styled mode: 1:1 mapping
+				if ct.w.IsPreviewMode() && ct.w.previewSourceMap != nil {
+					rendStart, _ = ct.w.previewSourceMap.ToRendered(ct.q0, ct.q1)
+				}
 				if rendStart >= 0 {
-					warpPt := ct.w.richBody.Frame().Ptofchar(rendStart).Add(
-						image.Pt(4, ct.w.richBody.Frame().DefaultFontHeight()-4))
+					fr := ct.w.richBody.Frame()
+					warpPt := fr.Ptofchar(rendStart).Add(
+						image.Pt(4, fr.DefaultFontHeight()-4))
+					// Clamp to frame bounds
+					if frameRect := fr.Rect(); warpPt.Y >= frameRect.Max.Y {
+						warpPt.Y = frameRect.Max.Y - fr.DefaultFontHeight()
+					}
 					global.row.display.MoveTo(warpPt)
 				}
 			} else {
@@ -482,11 +490,19 @@ func openfile(t *Text, e *Expand) *Window {
 	t.Show(r.q0, r.q1, true)
 	global.seltext = t
 	if e.jump {
-		if t.w != nil && t.w.IsPreviewMode() && t.w.richBody != nil && t.w.previewSourceMap != nil {
-			rendStart, _ := t.w.previewSourceMap.ToRendered(r.q0, r.q1)
+		if t.w != nil && t.w.richBody != nil && (t.w.IsPreviewMode() || t.w.IsStyledMode()) {
+			rendStart := r.q0 // styled mode: 1:1 mapping
+			if t.w.IsPreviewMode() && t.w.previewSourceMap != nil {
+				rendStart, _ = t.w.previewSourceMap.ToRendered(r.q0, r.q1)
+			}
 			if rendStart >= 0 {
-				warpPt := t.w.richBody.Frame().Ptofchar(rendStart).Add(
-					image.Pt(4, t.w.richBody.Frame().DefaultFontHeight()-4))
+				fr := t.w.richBody.Frame()
+				warpPt := fr.Ptofchar(rendStart).Add(
+					image.Pt(4, fr.DefaultFontHeight()-4))
+				// Clamp to frame bounds
+				if frameRect := fr.Rect(); warpPt.Y >= frameRect.Max.Y {
+					warpPt.Y = frameRect.Max.Y - fr.DefaultFontHeight()
+				}
 				global.row.display.MoveTo(warpPt)
 			}
 		} else {

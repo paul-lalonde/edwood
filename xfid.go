@@ -582,6 +582,7 @@ func xfidspanswrite(x *Xfid, w *Window) {
 			w.spanStore.Clear()
 		}
 		w.exitStyledMode()
+		w.styledSuppressed = false // spans are gone; reset suppression
 		fc.Count = x.fcall.Count
 		x.respond(&fc, nil)
 		return
@@ -617,8 +618,9 @@ func xfidspanswrite(x *Xfid, w *Window) {
 	// Apply region update.
 	w.spanStore.RegionUpdate(regionStart, runs)
 
-	// Auto-switch to styled mode on first span write.
-	if !w.styledMode && !w.previewMode {
+	// Auto-switch to styled mode on first span write, unless the user
+	// has explicitly chosen plain mode via the Plain button.
+	if !w.styledMode && !w.previewMode && !w.styledSuppressed {
 		w.initStyledMode()
 	}
 
