@@ -455,6 +455,12 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 		return
 	}
 
+	// In styled mode, adjust span positions for the insertion.
+	// Falls through to normal frame update (no early return).
+	if t.what == Body && t.w != nil && t.w.IsStyledMode() && t.w.spanStore != nil {
+		t.w.spanStore.Insert(q0, nr)
+	}
+
 	if q0 < t.org {
 		t.org += nr
 	} else {
@@ -469,6 +475,9 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
 		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+	}
+	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
+		t.w.UpdateStyledView()
 	}
 }
 
@@ -608,6 +617,12 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 		return
 	}
 
+	// In styled mode, adjust span positions for the deletion.
+	// Falls through to normal frame update (no early return).
+	if t.what == Body && t.w != nil && t.w.IsStyledMode() && t.w.spanStore != nil {
+		t.w.spanStore.Delete(q0, q1-q0)
+	}
+
 	if q1 <= t.org {
 		t.org -= n
 	} else if t.fr != nil && q0 < t.org+(t.fr.GetFrameFillStatus().Nchars) {
@@ -631,6 +646,9 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
 		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+	}
+	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
+		t.w.UpdateStyledView()
 	}
 }
 

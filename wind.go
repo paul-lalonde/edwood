@@ -464,6 +464,9 @@ func (w *Window) Undo(isundo bool) {
 	if w.IsPreviewMode() {
 		w.UpdatePreview()
 	}
+	if w.IsStyledMode() {
+		w.UpdateStyledView()
+	}
 }
 
 func (w *Window) SetName(name string) {
@@ -2131,6 +2134,21 @@ func (w *Window) exitStyledMode() {
 	if w.display != nil {
 		w.body.Resize(w.body.all, true, false)
 		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+		w.display.Flush()
+	}
+}
+
+// UpdateStyledView rebuilds and re-renders the styled content.
+// Called after editing operations that modify the body buffer while
+// in styled mode.
+func (w *Window) UpdateStyledView() {
+	if !w.styledMode || w.richBody == nil || w.spanStore == nil {
+		return
+	}
+	content := w.buildStyledContent()
+	w.richBody.SetContent(content)
+	w.richBody.Render(w.body.all)
+	if w.display != nil {
 		w.display.Flush()
 	}
 }
