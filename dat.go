@@ -37,6 +37,7 @@ const (
 	QWwrsel
 	QWtag
 	QWxdata
+	QWspans // window's spans file
 	QMAX
 )
 

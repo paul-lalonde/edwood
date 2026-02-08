@@ -84,6 +84,8 @@ type Window struct {
 	// Incremental preview update state
 	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
 	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
+
+	spanStore *SpanStore // styled text runs (nil when no spans)
 }
 
 var (

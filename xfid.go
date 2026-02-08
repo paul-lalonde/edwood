@@ -153,6 +153,8 @@ func xfidopen(x *Xfid) {
 				return
 			}
 			w.wrselrange = Range{t.q1, t.q1}
+		case QWspans:
+			w.nopen[q]++
 		}
 		w.Unlock()
 	} else {
@@ -233,6 +235,8 @@ func xfidclose(x *Xfid) {
 			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
 		case QWeditout:
 			<-w.editoutlk
+		case QWspans:
+			w.nopen[q]--
 		}
 		w.Close()
 		w.Unlock()
@@ -332,6 +336,8 @@ func xfidread(x *Xfid) {
 		fc.Count = uint32(n)
 		fc.Data = b[:n]
 		x.respond(&fc, nil)
+	case QWspans:
+		x.respond(&fc, ErrPermission)
 	default:
 		x.respond(&fc, fmt.Errorf("unknown qid %d in read", q))
 	}
@@ -380,7 +386,7 @@ func xfidwrite(x *Xfid) {
 	w := x.f.w
 	if w != nil {
 		c := 'F'
-		if qid == QWtag || qid == QWbody {
+		if qid == QWtag || qid == QWbody || qid == QWspans {
 			c = 'E'
 		}
 		w.Lock(int(c))
@@ -541,12 +547,80 @@ func xfidwrite(x *Xfid) {
 	case QWtag:
 		updateText(&w.tag)
 
+	case QWspans:
+		xfidspanswrite(x, w)
+
 	default:
 		x.respond(&fc, fmt.Errorf("unknown qid %d in write", qid))
 	}
 	if w != nil {
 		w.Unlock()
 	}
+}
+
+func xfidspanswrite(x *Xfid, w *Window) {
+	var fc plan9.Fcall
+
+	// Reject writes to preview mode windows.
+	if w.IsPreviewMode() {
+		x.respond(&fc, fmt.Errorf("cannot write spans to preview mode window"))
+		return
+	}
+
+	data := strings.TrimRight(string(x.fcall.Data), "\n")
+	if data == "" {
+		fc.Count = x.fcall.Count
+		x.respond(&fc, nil)
+		return
+	}
+
+	bufLen := w.body.Nc()
+
+	// Handle special commands.
+	if data == "clear" {
+		if w.spanStore != nil {
+			w.spanStore.Clear()
+		}
+		// Phase 3 will add: exitStyledMode(w) if in styled mode.
+		fc.Count = x.fcall.Count
+		x.respond(&fc, nil)
+		return
+	}
+
+	// Parse span definitions.
+	runs, regionStart, err := parseSpanDefs(data, bufLen)
+	if err != nil {
+		x.respond(&fc, err)
+		return
+	}
+
+	// No-op if body is empty.
+	if bufLen == 0 {
+		fc.Count = x.fcall.Count
+		x.respond(&fc, nil)
+		return
+	}
+
+	// Ensure the span store exists.
+	if w.spanStore == nil {
+		w.spanStore = NewSpanStore()
+		// Initialize with a default run covering the full buffer.
+		w.spanStore.Insert(0, bufLen)
+	} else if w.spanStore.TotalLen() != bufLen {
+		// Re-sync: the store length should match the buffer.
+		// This can happen if the store was created but the buffer
+		// changed without edit tracking (Phase 4 will fix this).
+		w.spanStore.Clear()
+		w.spanStore.Insert(0, bufLen)
+	}
+
+	// Apply region update.
+	w.spanStore.RegionUpdate(regionStart, runs)
+
+	// Phase 3 will add: trigger styled rendering here.
+
+	fc.Count = x.fcall.Count
+	x.respond(&fc, nil)
 }
 
 func xfidctlwrite(x *Xfid, w *Window) {
