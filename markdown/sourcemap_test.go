@@ -1894,6 +1894,88 @@ func TestRunePositionsValidGuard(t *testing.T) {
 	})
 }
 
+// TestSourceMapBlockquoteInlineCode tests that inline formatted elements
+// at the start of blockquote lines have correct source mapping for cursor
+// (point) selections. This is a regression test for a bug where the blockquote
+// prefix adjustment destroyed KindSymmetricMarker information, causing the
+// cursor at rendered position 0 to map to the opening marker instead of the
+// content start.
+func TestSourceMapBlockquoteInlineCode(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		renderedPos  int
+		renderedEnd  int
+		wantSrcStart int
+		wantSrcEnd   int
+	}{
+		{
+			name: "code at start of blockquote - point at content start",
+			// Source: "> `code` here" (13 runes)
+			// Prefix "> " (2) + marker "`" (1) = 3 runes before content
+			// Point click at rendered 0 should map to source 3 (the "c")
+			input:        "> `code` here",
+			renderedPos:  0,
+			renderedEnd:  0, // point selection (cursor click)
+			wantSrcStart: 3,
+			wantSrcEnd:   3,
+		},
+		{
+			name: "bold at start of blockquote - point at content start",
+			// Source: "> **bold** here" (15 runes)
+			// Prefix "> " (2) + marker "**" (2) = 4 runes before content
+			// Point click at rendered 0 should map to source 4 (the "b")
+			input:        "> **bold** here",
+			renderedPos:  0,
+			renderedEnd:  0, // point selection (cursor click)
+			wantSrcStart: 4,
+			wantSrcEnd:   4,
+		},
+		{
+			name: "code at start of blockquote - point in middle",
+			// Source: "> `code` here" (13 runes)
+			// Point click at rendered 2 ("d") → source 5
+			input:        "> `code` here",
+			renderedPos:  2,
+			renderedEnd:  2,
+			wantSrcStart: 5,
+			wantSrcEnd:   5,
+		},
+		{
+			name: "code at start of blockquote - range select full code",
+			// Source: "> `code` here" (13 runes)
+			// Selecting all of "code" (rendered 0-4) should include prefix + markers
+			input:        "> `code` here",
+			renderedPos:  0,
+			renderedEnd:  4, // "code"
+			wantSrcStart: 0, // boundary expansion includes "> `"
+			wantSrcEnd:   8, // up to closing "`"
+		},
+		{
+			name: "bold at start of blockquote - range select full bold",
+			// Source: "> **bold** here" (15 runes)
+			// Selecting all of "bold" (rendered 0-4) should include prefix + markers
+			input:        "> **bold** here",
+			renderedPos:  0,
+			renderedEnd:  4, // "bold"
+			wantSrcStart: 0, // boundary expansion includes "> **"
+			wantSrcEnd:   10, // up to closing "**"
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, sm, _ := ParseWithSourceMap(tt.input)
+			srcStart, srcEnd := sm.ToSource(tt.renderedPos, tt.renderedEnd)
+			if srcStart != tt.wantSrcStart || srcEnd != tt.wantSrcEnd {
+				t.Errorf("ToSource(%d, %d) = (%d, %d), want (%d, %d)",
+					tt.renderedPos, tt.renderedEnd, srcStart, srcEnd,
+					tt.wantSrcStart, tt.wantSrcEnd)
+			}
+		})
+	}
+}
+
 // byteToRunePos converts a byte position in a string to a rune position.
 func byteToRunePos(s string, bytePos int) int {
 	if bytePos <= 0 {

@@ -14,7 +14,11 @@ Check out [Edwood](https://github.com/rjkroege/edwood) and [Plan 9](https://9fan
 
 ## Links with Other Formatting
 
-This has **bold** and a [link](https://example.com) together.
+This has **bold** and a [**link**](https://example.com) together.
+
+Here is an image in-place: ![Images](images.jpeg)
+
+This link has an image: [![Images](images.jpeg)](https://example.com)
 
 This has *italic* text and [another link](https://example.org) mixed in.
 

@@ -382,8 +382,14 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 
 					if tracking {
 						if len(bqEntries) > 0 {
+							originalOpening := 0
+							if bqEntries[0].Kind == KindSymmetricMarker {
+								extra := (bqEntries[0].SourceEnd - bqEntries[0].SourceStart) -
+									(bqEntries[0].RenderedEnd - bqEntries[0].RenderedStart)
+								originalOpening = extra / 2
+							}
 							bqEntries[0].SourceStart = sourcePos
-							bqEntries[0].PrefixLen = listIndentBytes + bqContentStart
+							bqEntries[0].PrefixLen = listIndentBytes + bqContentStart + originalOpening
 							bqEntries[0].Kind = KindPrefix
 						}
 						sm.entries = append(sm.entries, bqEntries...)
@@ -703,8 +709,14 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 
 			if tracking {
 				if len(bqEntries) > 0 {
+					originalOpening := 0
+					if bqEntries[0].Kind == KindSymmetricMarker {
+						extra := (bqEntries[0].SourceEnd - bqEntries[0].SourceStart) -
+							(bqEntries[0].RenderedEnd - bqEntries[0].RenderedStart)
+						originalOpening = extra / 2
+					}
 					bqEntries[0].SourceStart = sourcePos
-					bqEntries[0].PrefixLen = contentStart
+					bqEntries[0].PrefixLen = contentStart + originalOpening
 					bqEntries[0].Kind = KindPrefix
 				}
 				sm.entries = append(sm.entries, bqEntries...)
