@@ -87,7 +87,7 @@ func main() {
 	}
 
 	// Read the tag to determine the filename and extension.
-	tokenize := lexerForWindow(win)
+	tokenize, ext := lexerForWindow(win)
 	if tokenize == nil {
 		// No lexer for this file type — exit silently.
 		return
@@ -107,15 +107,16 @@ func main() {
 	}
 
 	lastBody := recolor(win, fsys, id, tokenize, nil)
-	eventLoop(win, fsys, id, tokenize, lastBody)
+	eventLoop(win, fsys, id, tokenize, lastBody, ext)
 }
 
 // lexerForWindow reads the window tag and returns the appropriate
 // tokenizer for the file extension, or nil if none matches.
-func lexerForWindow(win *acme.Win) func(string) []region {
+// It also returns the lowercased file extension.
+func lexerForWindow(win *acme.Win) (func(string) []region, string) {
 	tag, err := win.ReadAll("tag")
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	// The tag starts with the filename, followed by a space and
 	// the rest of the tag line.
@@ -124,7 +125,7 @@ func lexerForWindow(win *acme.Win) func(string) []region {
 		name = name[:i]
 	}
 	ext := strings.ToLower(filepath.Ext(name))
-	return lexers[ext]
+	return lexers[ext], ext
 }
 
 // recolor reads the body, tokenizes it, and writes span definitions.
@@ -156,15 +157,22 @@ func recolor(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []r
 	return src
 }
 
+// indentExts lists file extensions that support brace-aware auto-indent.
+var indentExts = map[string]bool{
+	".go": true,
+	".rs": true,
+}
+
 // eventLoop watches for edit and selection events, re-coloring with debouncing.
 // It exits when the window is closed (event channel closed).
-func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []region, lastBody string) {
+func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []region, lastBody string, ext string) {
 	events := win.EventChan()
 	var editTimer <-chan time.Time
 	var selTimer <-chan time.Time
 	var lastSel string
 	var lastSelQ0, lastSelQ1 int
 	var highlights [][2]int
+	autoIndent := indentExts[ext]
 
 	for {
 		select {
@@ -173,7 +181,16 @@ func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) [
 				return
 			}
 			switch e.C2 {
-			case 'I', 'D':
+			case 'I':
+				if autoIndent && e.C1 == 'K' {
+					handleAutoIndent(win, e)
+				}
+				// Body edit — clear cached state and schedule re-coloring.
+				lastBody = ""
+				lastSel = ""
+				highlights = nil
+				editTimer = time.After(300 * time.Millisecond)
+			case 'D':
 				// Body edit — clear cached state and schedule re-coloring.
 				lastBody = ""
 				lastSel = ""
@@ -204,7 +221,14 @@ func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) [
 					highlights = nil
 					selTimer = time.After(100 * time.Millisecond)
 				}
-			case 'x', 'X', 'l', 'L':
+			case 'x', 'X':
+				// Intercept "Indent" for file types that support auto-indent.
+				if indentExts[ext] && strings.TrimRight(string(e.Text), "\n") == "Indent" {
+					autoIndent = !autoIndent
+					break
+				}
+				win.WriteEvent(e)
+			case 'l', 'L':
 				win.WriteEvent(e)
 			}
 		case <-editTimer:
@@ -215,6 +239,98 @@ func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) [
 			recolor(win, fsys, id, tokenize, highlights)
 		}
 	}
+}
+
+// handleAutoIndent processes keyboard insert events for brace-aware
+// auto-indentation. On newline, it inserts the previous line's
+// indentation (plus one tab after '{'). On '}', it removes one tab
+// of indentation from the current line.
+func handleAutoIndent(win *acme.Win, e *acme.Event) {
+	text := string(e.Text)
+
+	if !strings.HasSuffix(text, "\n") && text != "}" {
+		return
+	}
+
+	body, err := win.ReadAll("body")
+	if err != nil {
+		return
+	}
+	runes := []rune(string(body))
+
+	if strings.HasSuffix(text, "\n") {
+		// Newline: insert indentation after the newline.
+		// e.Q0 is where the newline was inserted, e.Q1 is after it.
+		insertPos := e.Q1
+		level, afterBrace := computeIndent(runes, e.Q0)
+		if afterBrace {
+			level++
+		}
+		if level > 0 {
+			indent := strings.Repeat("\t", level)
+			win.Addr("#%d", insertPos)
+			win.Write("data", []byte(indent))
+		}
+	} else if text == "}" {
+		// Close brace: remove one tab of indentation before the '}'.
+		// e.Q1 is after the '}', so '}' is at e.Q1-1.
+		bracePos := e.Q1 - 1
+		// Walk backward from bracePos to find start of line.
+		lineStart := bracePos
+		for lineStart > 0 && runes[lineStart-1] != '\n' {
+			lineStart--
+		}
+		// Check if everything between lineStart and bracePos is whitespace
+		// and contains at least one tab.
+		allWhitespace := true
+		tabPos := -1
+		for i := lineStart; i < bracePos; i++ {
+			if runes[i] == '\t' {
+				tabPos = i
+			} else if runes[i] != ' ' {
+				allWhitespace = false
+				break
+			}
+		}
+		if allWhitespace && tabPos >= 0 {
+			// Delete the last tab before the brace.
+			win.Addr("#%d,#%d", tabPos, tabPos+1)
+			win.Write("data", nil)
+		}
+	}
+}
+
+// computeIndent examines the line ending at pos (the position where a
+// newline was inserted) and returns the indentation level (number of
+// leading tabs) and whether the last non-whitespace character is '{'.
+func computeIndent(body []rune, pos int) (level int, afterBrace bool) {
+	// Find start of the line containing pos.
+	lineStart := pos
+	for lineStart > 0 && body[lineStart-1] != '\n' {
+		lineStart--
+	}
+
+	// Count leading tabs.
+	i := lineStart
+	for i < pos && body[i] == '\t' {
+		level++
+		i++
+	}
+	// Also skip spaces (mixed indent).
+	for i < pos && body[i] == ' ' {
+		i++
+	}
+
+	// Find last non-whitespace character on the line.
+	last := pos - 1
+	for last >= lineStart && (body[last] == ' ' || body[last] == '\t' || body[last] == '\r') {
+		last--
+	}
+	if last >= lineStart && body[last] == '{' {
+		afterBrace = true
+	}
+
+	return
 }
 
 // findMatches finds all rune-offset occurrences of sel in body,
