@@ -324,11 +324,8 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 		return 0
 	}
 
-	// Compute total pixel height and frame height
-	totalPixelHeight := 0
-	for _, h := range lineHeights {
-		totalPixelHeight += h
-	}
+	// Total document height includes all inter-line gaps (paragraphs, headings, scrollbars)
+	totalPixelHeight := rt.frame.TotalDocumentHeight()
 	frameHeight := rt.frame.Rect().Dy()
 
 	// If all content fits, no scrolling needed
@@ -439,11 +436,8 @@ func (rt *RichText) scrThumbRectAt(scrollRect image.Rectangle) image.Rectangle {
 		return scrollRect
 	}
 
-	// Compute total pixel height of all content
-	totalPixelHeight := 0
-	for _, h := range lineHeights {
-		totalPixelHeight += h
-	}
+	// Total document height includes all inter-line gaps (paragraphs, headings, scrollbars)
+	totalPixelHeight := rt.frame.TotalDocumentHeight()
 
 	frameHeight := rt.frame.Rect().Dy()
 	scrollHeight := scrollRect.Dy()
@@ -676,11 +670,8 @@ func (rt *RichText) ScrollToPixelY(pixelY int) int {
 		return 0
 	}
 
-	// Clamp to valid range
-	totalPixelHeight := 0
-	for _, h := range lineHeights {
-		totalPixelHeight += h
-	}
+	// Clamp to valid range (total includes all inter-line gaps)
+	totalPixelHeight := rt.frame.TotalDocumentHeight()
 	frameHeight := rt.frame.Rect().Dy()
 
 	maxPixelY := totalPixelHeight - frameHeight
@@ -729,11 +720,8 @@ func (rt *RichText) ScrollWheel(up bool) int {
 		return 0
 	}
 
-	// Compute total pixel height
-	totalPixelHeight := 0
-	for _, h := range lineHeights {
-		totalPixelHeight += h
-	}
+	// Total document height includes all inter-line gaps (paragraphs, headings, scrollbars)
+	totalPixelHeight := rt.frame.TotalDocumentHeight()
 	frameHeight := rt.frame.Rect().Dy()
 
 	// If all content fits, no scrolling needed

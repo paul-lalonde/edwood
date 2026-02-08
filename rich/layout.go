@@ -571,7 +571,19 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 					width = tabBoxWidth(box, xPos, 0, maxtab)
 				}
 			} else {
-				// Box is wider than frame, need to split it
+				// Box is wider than frame, need to split it.
+				// First, wrap to a new line so the split doesn't overlay
+				// existing content on the current line.
+				if actualLineHeight > 0 {
+					currentLine.Height = actualLineHeight
+				}
+				lines = append(lines, currentLine)
+				currentLine = Line{
+					Y:      currentLine.Y + currentLine.Height,
+					Height: defaultFontHeight,
+				}
+				xPos = currentIndent
+				actualLineHeight = 0
 				lines, currentLine, xPos = splitBoxAcrossLinesWithIndent(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight, getFontForStyle, currentIndent)
 				continue
 			}

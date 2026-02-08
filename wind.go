@@ -1833,10 +1833,7 @@ func (w *Window) HandlePreviewKey(key rune) bool {
 		return false
 	}
 
-	totalPixelHeight := 0
-	for _, h := range lineHeights {
-		totalPixelHeight += h
-	}
+	totalPixelHeight := frame.TotalDocumentHeight()
 	frameHeight := frame.Rect().Dy()
 	fontH := frame.DefaultFontHeight()
 	if fontH <= 0 {

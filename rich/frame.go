@@ -51,7 +51,8 @@ type Frame interface {
 	VisibleLines() int
 	TotalLines() int         // Total number of layout lines in the content
 	LineStartRunes() []int   // Rune offset at the start of each visual line
-	LinePixelHeights() []int // Pixel height of each visual line (accounts for images)
+	LinePixelHeights() []int   // Pixel height of each visual line (accounts for images)
+	TotalDocumentHeight() int  // Total rendered height including all inter-line gaps (paragraph, heading, scrollbar)
 
 	// Rendering
 	Redraw()
@@ -788,6 +789,8 @@ func (f *frameImpl) LineStartRunes() []int {
 
 // LinePixelHeights returns the pixel height of each visual line.
 // For lines containing images, the height will be larger than the default font height.
+// Note: these are raw line heights without inter-line gaps (paragraph spacing,
+// heading spacing, scrollbar space). Use TotalDocumentHeight() for the full height.
 func (f *frameImpl) LinePixelHeights() []int {
 	if f.font == nil || f.content == nil {
 		return nil
@@ -807,6 +810,38 @@ func (f *frameImpl) LinePixelHeights() []int {
 		heights[i] = line.Height
 	}
 	return heights
+}
+
+// TotalDocumentHeight returns the total rendered pixel height of the document,
+// including all inter-line gaps from paragraph breaks, heading spacing, and
+// horizontal scrollbar space. This is computed from the last line's Y position
+// plus its height after all layout adjustments, so it matches what
+// layoutFromOrigin produces for rendering.
+func (f *frameImpl) TotalDocumentHeight() int {
+	if f.font == nil || f.content == nil {
+		return 0
+	}
+
+	boxes := contentToBoxes(f.content)
+	if len(boxes) == 0 {
+		return 0
+	}
+
+	frameWidth := f.rect.Dx()
+	maxtab := f.maxtabPixels()
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	if len(lines) == 0 {
+		return 0
+	}
+
+	// Apply the same scrollbar adjustments that layoutFromOrigin uses,
+	// so the total height accounts for horizontal scrollbar space.
+	scrollbarHeight := 12 // Scrollwid
+	regions := findBlockRegions(lines)
+	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	last := lines[len(lines)-1]
+	return last.Y + last.Height
 }
 
 // Redraw redraws the frame.
