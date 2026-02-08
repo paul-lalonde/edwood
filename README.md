@@ -6,6 +6,16 @@
 
 ![Images](images.jpeg)
 
+# About this fork
+This fork has two principal contributions: a Markdown view, and a syntax coloring view.
+For the first, any .md file opens in Markdeep mode; B2 on the "Markdeep" tag toggles to plain text.
+For the second, run the tools "pycolor" or "gocolor" in a window with python or go code respectively,
+and your code will be colored. B2 on "Plain" to toggle back to uncolored mode.
+
+These implementations are unabashedly LLM-generated.  The specs are largely in docs/* with the 
+goal of making the code generation repeatable.  The tooling is absolutely not there yet to be
+fully repeatable, but it's close.  You need not find this useful, but I do.
+
 # Overview
 Go port of Rob Pike's Acme editor. Derived from
 [ProjectSerenity](https://github.com/ProjectSerenity/acme) but now
