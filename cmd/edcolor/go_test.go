@@ -55,7 +55,7 @@ func greet(name string) {
 
 func TestColorizeGo(t *testing.T) {
 	src := "package main\n\nfunc f() int { return 42 }\n"
-	spans := colorize(src, tokenizeGo)
+	spans := colorize(src, tokenizeGo, 0, 0)
 
 	// Verify spans are contiguous and cover the whole source.
 	totalRunes := 0
@@ -72,6 +72,63 @@ func TestColorizeGo(t *testing.T) {
 	}
 	if covered != totalRunes {
 		t.Errorf("spans cover %d runes, source has %d", covered, totalRunes)
+	}
+}
+
+func TestColorizeGoViewport(t *testing.T) {
+	// Source with multiple lines to test viewport filtering.
+	src := "package main\n\nimport \"fmt\"\n\nfunc f() { fmt.Println(42) }\n"
+	totalRunes := 0
+	for range src {
+		totalRunes++
+	}
+
+	// Full file (viewOrg=0, viewEnd=0) should cover everything.
+	full := colorize(src, tokenizeGo, 0, 0)
+	fullCovered := 0
+	for _, s := range full {
+		fullCovered += s.length
+	}
+	if fullCovered != totalRunes {
+		t.Errorf("full colorize covers %d runes, want %d", fullCovered, totalRunes)
+	}
+
+	// Viewport in the middle: only covers a subset (plus margin).
+	// viewOrg=14, viewEnd=26 covers "import \"fmt\"\n" (12 runes visible).
+	// With 1x margin (12 runes above, 12 below), clip = [2, 38].
+	spans := colorize(src, tokenizeGo, 14, 26)
+	if len(spans) == 0 {
+		t.Fatal("viewport colorize returned no spans")
+	}
+
+	// First span should start at clipStart (max(14-12, 0) = 2).
+	if spans[0].offset != 2 {
+		t.Errorf("first span offset = %d, want 2", spans[0].offset)
+	}
+
+	// Last span should end at clipEnd (min(26+12, totalRunes) = 38).
+	last := spans[len(spans)-1]
+	lastEnd := last.offset + last.length
+	if lastEnd != 38 {
+		t.Errorf("last span ends at %d, want 38", lastEnd)
+	}
+
+	// Spans must be contiguous within the clip range.
+	cursor := spans[0].offset
+	for i, s := range spans {
+		if s.offset != cursor {
+			t.Errorf("span %d: offset=%d, expected %d (gap)", i, s.offset, cursor)
+		}
+		cursor += s.length
+	}
+
+	// Total runes covered should be less than full file.
+	viewCovered := 0
+	for _, s := range spans {
+		viewCovered += s.length
+	}
+	if viewCovered >= totalRunes {
+		t.Errorf("viewport colorize covers %d runes, should be less than full %d", viewCovered, totalRunes)
 	}
 }
 

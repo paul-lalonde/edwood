@@ -89,6 +89,28 @@ func TestWindowClampAddr(t *testing.T) {
 	}
 }
 
+func TestWindowVisibleRange(t *testing.T) {
+	// Non-styled mode: VisibleRange uses body.org + frame Nchars.
+	w := &Window{
+		body: Text{
+			file: file.MakeObservableEditableBuffer("", []rune("Hello, world!\n")),
+			fr:   &MockFrame{},
+		},
+	}
+	// MockFrame returns Nchars=0, so end = org + 0 = 0.
+	org, end := w.VisibleRange()
+	if org != 0 || end != 0 {
+		t.Errorf("VisibleRange() = (%d, %d), want (0, 0)", org, end)
+	}
+
+	// With body.org set, org should reflect it.
+	w.body.org = 5
+	org, end = w.VisibleRange()
+	if org != 5 || end != 5 {
+		t.Errorf("VisibleRange() = (%d, %d), want (5, 5)", org, end)
+	}
+}
+
 func TestWindowParseTag(t *testing.T) {
 	for _, tc := range []struct {
 		tag      string

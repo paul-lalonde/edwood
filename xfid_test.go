@@ -1309,7 +1309,7 @@ func TestXfidreadQWaddr(t *testing.T) {
 
 func TestXfidreadQWctl(t *testing.T) {
 	const prewant = "          1          32          14           0           0           0 "
-	const postwant = "           0 "
+	const postwant = "           0           0           0 "
 	want := prewant + edwoodtest.Plan9FontPath(edwoodtest.MockFontName) + postwant
 	if len(want) > 128 {
 		want = want[:128]

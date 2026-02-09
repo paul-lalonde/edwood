@@ -233,7 +233,7 @@ func TestLexRustLifetimes(t *testing.T) {
 
 func TestColorizeRust(t *testing.T) {
 	src := "fn main() {\n    let x = 42;\n}\n"
-	spans := colorize(src, tokenizeRust)
+	spans := colorize(src, tokenizeRust, 0, 0)
 
 	// Verify spans are contiguous and cover the whole source.
 	totalRunes := 0

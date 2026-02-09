@@ -106,7 +106,7 @@ func main() {
 		fatal(fmt.Errorf("mount acme: %w", err))
 	}
 
-	lastBody := recolor(win, fsys, id, tokenize, nil)
+	lastBody := recolor(win, fsys, id, tokenize, nil, 0, 0)
 	eventLoop(win, fsys, id, tokenize, lastBody, ext)
 }
 
@@ -130,8 +130,11 @@ func lexerForWindow(win *acme.Win) (func(string) []region, string) {
 
 // recolor reads the body, tokenizes it, and writes span definitions.
 // If highlights is non-empty, match backgrounds are merged into the
-// syntax spans. Returns the body text for caching.
-func recolor(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []region, highlights [][2]int) string {
+// syntax spans. viewOrg and viewEnd specify the visible viewport in
+// rune offsets; spans are generated only for this region plus a margin.
+// When viewOrg == 0 && viewEnd == 0, the full file is colored.
+// Returns the body text for caching.
+func recolor(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []region, highlights [][2]int, viewOrg, viewEnd int) string {
 	body, err := win.ReadAll("body")
 	if err != nil {
 		warn(fmt.Errorf("read body: %w", err))
@@ -142,7 +145,7 @@ func recolor(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) []r
 	}
 
 	src := string(body)
-	spans := colorize(src, tokenize)
+	spans := colorize(src, tokenize, viewOrg, viewEnd)
 	if len(spans) == 0 {
 		return src
 	}
@@ -233,10 +236,18 @@ func eventLoop(win *acme.Win, fsys *client.Fsys, id int, tokenize func(string) [
 			}
 		case <-editTimer:
 			editTimer = nil
-			lastBody = recolor(win, fsys, id, tokenize, nil)
+			org, end, err := readViewport(win)
+			if err != nil {
+				org, end = 0, 0
+			}
+			lastBody = recolor(win, fsys, id, tokenize, nil, org, end)
 		case <-selTimer:
 			selTimer = nil
-			recolor(win, fsys, id, tokenize, highlights)
+			org, end, err := readViewport(win)
+			if err != nil {
+				org, end = 0, 0
+			}
+			recolor(win, fsys, id, tokenize, highlights, org, end)
 		}
 	}
 }
@@ -416,6 +427,30 @@ func getWinID() (int, error) {
 	return strconv.Atoi(s)
 }
 
+// readViewport reads the viewport range from the ctl file.
+// Returns (0, 0) if the viewport fields are missing or unparseable.
+func readViewport(win *acme.Win) (org, end int, err error) {
+	data, err := win.ReadAll("ctl")
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(string(data))
+	// Viewport fields are at indices 8 and 9 (after the 8 standard fields:
+	// id, tag-nc, body-nc, isdir, dirty, width, font, maxtab).
+	if len(fields) < 10 {
+		return 0, 0, fmt.Errorf("ctl missing viewport fields")
+	}
+	org, err = strconv.Atoi(fields[8])
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err = strconv.Atoi(fields[9])
+	if err != nil {
+		return 0, 0, err
+	}
+	return org, end, nil
+}
+
 // writeSpans writes span definitions to the window's spans file,
 // chunking to stay within 9P message size limits. Each chunk is a
 // self-contained set of contiguous span definitions.
@@ -464,24 +499,61 @@ func writeSpans(fsys *client.Fsys, id int, spans []span) error {
 }
 
 // colorize tokenizes src using the given tokenizer and returns
-// contiguous spans covering the entire text, with colors for
+// contiguous spans covering the visible region, with colors for
 // syntactic elements and default color ("-") for everything else.
-func colorize(src string, tokenize func(string) []region) []span {
+// When viewOrg == 0 && viewEnd == 0, spans cover the entire file
+// (used for the initial full-file coloring). Otherwise, spans are
+// generated only for the viewport region plus a margin of 1x the
+// viewport size above and below.
+func colorize(src string, tokenize func(string) []region, viewOrg, viewEnd int) []span {
 	totalRunes := utf8.RuneCountInString(src)
 	regions := tokenize(src)
 
-	// Build contiguous spans covering the entire source.
-	var spans []span
-	cursor := 0
-	for _, r := range regions {
-		if r.runeStart > cursor {
-			spans = append(spans, span{cursor, r.runeStart - cursor, "-", "", false})
+	// Determine the clip range.
+	clipStart := 0
+	clipEnd := totalRunes
+	if viewOrg != 0 || viewEnd != 0 {
+		// Apply margin: 1x viewport size above and below.
+		margin := viewEnd - viewOrg
+		clipStart = viewOrg - margin
+		clipEnd = viewEnd + margin
+		if clipStart < 0 {
+			clipStart = 0
 		}
-		spans = append(spans, span{r.runeStart, r.runeEnd - r.runeStart, r.color, "", r.bold})
-		cursor = r.runeEnd
+		if clipEnd > totalRunes {
+			clipEnd = totalRunes
+		}
 	}
-	if cursor < totalRunes {
-		spans = append(spans, span{cursor, totalRunes - cursor, "-", "", false})
+
+	// Build contiguous spans covering the clip range.
+	var spans []span
+	cursor := clipStart
+	for _, r := range regions {
+		if r.runeEnd <= clipStart {
+			continue
+		}
+		if r.runeStart >= clipEnd {
+			break
+		}
+
+		// Clamp region to clip range.
+		rs := r.runeStart
+		re := r.runeEnd
+		if rs < clipStart {
+			rs = clipStart
+		}
+		if re > clipEnd {
+			re = clipEnd
+		}
+
+		if rs > cursor {
+			spans = append(spans, span{cursor, rs - cursor, "-", "", false})
+		}
+		spans = append(spans, span{rs, re - rs, r.color, "", r.bold})
+		cursor = re
+	}
+	if cursor < clipEnd {
+		spans = append(spans, span{cursor, clipEnd - cursor, "-", "", false})
 	}
 
 	return spans

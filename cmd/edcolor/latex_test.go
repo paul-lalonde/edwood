@@ -196,7 +196,7 @@ func TestLexLatexEnvironments(t *testing.T) {
 
 func TestColorizeLatex(t *testing.T) {
 	src := "\\section{Hello}\n% comment\n$x^2$\n"
-	spans := colorize(src, tokenizeLatex)
+	spans := colorize(src, tokenizeLatex, 0, 0)
 
 	totalRunes := 0
 	for range src {

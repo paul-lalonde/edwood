@@ -574,6 +574,36 @@ func (w *Window) Clean(conservative bool) bool {
 	return true
 }
 
+// VisibleRange returns the rune range [org, end) currently visible in the
+// window body. In styled/preview mode it queries the rich.Frame; otherwise
+// it uses the plain text frame.
+func (w *Window) VisibleRange() (org, end int) {
+	if w.styledMode && w.richBody != nil && w.richBody.Frame() != nil {
+		org = w.richBody.Origin()
+		lineStarts := w.richBody.Frame().LineStartRunes()
+		visLines := w.richBody.Frame().VisibleLines()
+		// Find the origin line.
+		originLine := 0
+		for i, start := range lineStarts {
+			if start > org {
+				break
+			}
+			originLine = i
+		}
+		endLine := originLine + visLines
+		if endLine >= len(lineStarts) {
+			end = w.body.Nc()
+		} else {
+			end = lineStarts[endLine]
+		}
+	} else {
+		org = w.body.org
+		nchars := w.body.fr.GetFrameFillStatus().Nchars
+		end = org + nchars
+	}
+	return
+}
+
 // CtlPrint generates the contents of the fsys's acme/<id>/ctl pseduo-file if fonts is true.
 // Otherwise, it emits a portion of the per-window dump file contents.
 func (w *Window) CtlPrint(fonts bool) string {
@@ -591,6 +621,9 @@ func (w *Window) CtlPrint(fonts bool) string {
 		// fsys exposes the actual physical font name.
 		buf = fmt.Sprintf("%s%11d %s %11d ", buf, w.body.fr.Rect().Dx(),
 			quote(fontget(w.body.font, w.display).Name()), w.body.fr.GetMaxtab())
+		// Append viewport range for edcolor and other span-aware clients.
+		org, end := w.VisibleRange()
+		buf = fmt.Sprintf("%s%11d %11d ", buf, org, end)
 	}
 	return buf
 }
