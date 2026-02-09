@@ -227,6 +227,92 @@ type AdjustedBlockRegion struct {
 	LeftIndent   int  // X pixel offset where block content starts (scrollbar left edge)
 }
 
+// SlideRegion represents a slide break (two consecutive HRules).
+// When both HRules are visible in the viewport (Y >= 0), fill space is added
+// between them to push the second HRule to the bottom of the viewport.
+type SlideRegion struct {
+	FirstHRuleLineIdx  int // Index of first HRule line in []Line
+	SecondHRuleLineIdx int // Index of second HRule line (has SlideBreak=true)
+}
+
+// findSlideRegions scans layout lines for consecutive HRule pairs.
+// Returns regions where the first line has HRule=true (without SlideBreak)
+// and a subsequent line has HRule=true && SlideBreak=true.
+func findSlideRegions(lines []Line) []SlideRegion {
+	var regions []SlideRegion
+
+	for i := 0; i < len(lines); i++ {
+		// Check if this line contains an HRule (without SlideBreak)
+		hasFirstHRule := false
+		for _, pb := range lines[i].Boxes {
+			if pb.Box.Style.HRule && !pb.Box.Style.SlideBreak {
+				hasFirstHRule = true
+				break
+			}
+		}
+		if !hasFirstHRule {
+			continue
+		}
+
+		// Look ahead for the second HRule (with SlideBreak).
+		// Skip intervening newline-only lines (blank lines between HRules).
+		for j := i + 1; j < len(lines); j++ {
+			// Check if this is a pure newline line
+			if len(lines[j].Boxes) == 1 && lines[j].Boxes[0].Box.IsNewline() {
+				continue
+			}
+
+			// Check if this line has a SlideBreak HRule
+			for _, pb := range lines[j].Boxes {
+				if pb.Box.Style.HRule && pb.Box.Style.SlideBreak {
+					regions = append(regions, SlideRegion{
+						FirstHRuleLineIdx:  i,
+						SecondHRuleLineIdx: j,
+					})
+					break
+				}
+			}
+			break // Stop looking after first non-newline line
+		}
+	}
+
+	return regions
+}
+
+// adjustLayoutForSlides applies viewport-aware fill spacing for slide breaks.
+// When both HRules in a pair are visible (Y >= 0), adds fill space to push
+// the second HRule to the bottom of the viewport.
+// Regions are processed in reverse order to avoid index shifting issues.
+func adjustLayoutForSlides(lines []Line, regions []SlideRegion, frameHeight int) {
+	for i := len(regions) - 1; i >= 0; i-- {
+		region := regions[i]
+
+		if region.SecondHRuleLineIdx >= len(lines) {
+			continue
+		}
+
+		firstY := lines[region.FirstHRuleLineIdx].Y
+		secondY := lines[region.SecondHRuleLineIdx].Y
+		secondHeight := lines[region.SecondHRuleLineIdx].Height
+
+		// Only apply fill if both HRules are visible in viewport
+		if firstY >= 0 && secondY >= 0 {
+			// Target Y pushes second HRule to bottom of viewport
+			targetY := frameHeight - secondHeight
+
+			// Only expand if we need to move the second HRule down
+			if targetY > secondY {
+				fillSpace := targetY - secondY
+
+				// Shift the second HRule and all subsequent lines down
+				for j := region.SecondHRuleLineIdx; j < len(lines); j++ {
+					lines[j].Y += fillSpace
+				}
+			}
+		}
+	}
+}
+
 // blockLeftIndent returns the X position of the first block-styled box on the
 // given line, which is the left indent of the block content area.
 func blockLeftIndent(line *Line) int {

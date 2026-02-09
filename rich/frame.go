@@ -93,6 +93,11 @@ type Frame interface {
 	// The resulting offset is clamped to [0, maxScrollable].
 	HScrollWheel(delta int, regionIndex int)
 
+	// SnapOriginToSlideStart takes a target origin (rune position) and returns
+	// an adjusted origin that aligns to the start of the slide if the target
+	// falls within a slide region. Returns the original origin if not in a slide.
+	SnapOriginToSlideStart(targetOrigin int) int
+
 	// Status
 	Full() bool // True if frame is at capacity
 }
@@ -812,6 +817,79 @@ func (f *frameImpl) LinePixelHeights() []int {
 	return heights
 }
 
+// SnapOriginToSlideStart takes a target origin (rune position) and returns
+// an adjusted origin that aligns to the start of the slide if the target
+// falls within a slide region. A slide region spans from the line after
+// the second HRule (SlideBreak) to the line before the next first HRule
+// (or end of document). Returns the original origin if not in a slide.
+func (f *frameImpl) SnapOriginToSlideStart(targetOrigin int) int {
+	if f.font == nil || f.content == nil {
+		return targetOrigin
+	}
+
+	boxes := contentToBoxes(f.content)
+	if len(boxes) == 0 {
+		return targetOrigin
+	}
+
+	frameWidth := f.rect.Dx()
+	maxtab := f.maxtabPixels()
+	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	if len(lines) == 0 {
+		return targetOrigin
+	}
+
+	// Find slide regions
+	slideRegions := findSlideRegions(lines)
+	if len(slideRegions) == 0 {
+		return targetOrigin
+	}
+
+	// Build rune offset at start of each line
+	lineStarts := make([]int, len(lines))
+	runeCount := 0
+	for i, line := range lines {
+		lineStarts[i] = runeCount
+		for _, pb := range line.Boxes {
+			if pb.Box.IsNewline() || pb.Box.IsTab() {
+				runeCount++
+			} else {
+				runeCount += pb.Box.Nrune
+			}
+		}
+	}
+
+	// For each slide region, check if targetOrigin falls within it.
+	// A slide's content starts at the line after SecondHRuleLineIdx
+	// and ends at the line before the next region's FirstHRuleLineIdx
+	// (or end of document).
+	for i, region := range slideRegions {
+		slideStartLine := region.SecondHRuleLineIdx + 1
+		if slideStartLine >= len(lineStarts) {
+			continue
+		}
+		slideStartRune := lineStarts[slideStartLine]
+
+		var slideEndRune int
+		if i+1 < len(slideRegions) {
+			slideEndLine := slideRegions[i+1].FirstHRuleLineIdx
+			if slideEndLine < len(lineStarts) {
+				slideEndRune = lineStarts[slideEndLine]
+			} else {
+				slideEndRune = runeCount
+			}
+		} else {
+			slideEndRune = runeCount
+		}
+
+		if targetOrigin >= slideStartRune && targetOrigin < slideEndRune {
+			return slideStartRune
+		}
+	}
+
+	return targetOrigin
+}
+
 // TotalDocumentHeight returns the total rendered pixel height of the document,
 // including all inter-line gaps from paragraph breaks, heading spacing, and
 // horizontal scrollbar space. This is computed from the last line's Y position
@@ -839,6 +917,10 @@ func (f *frameImpl) TotalDocumentHeight() int {
 	scrollbarHeight := 12 // Scrollwid
 	regions := findBlockRegions(lines)
 	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	// Apply slide fill adjustments so scrollbar range accounts for expanded slides.
+	slideRegions := findSlideRegions(lines)
+	adjustLayoutForSlides(lines, slideRegions, f.rect.Dy())
 
 	last := lines[len(lines)-1]
 	return last.Y + last.Height
@@ -1388,6 +1470,9 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		// Apply scrollbar height adjustments so all callers get correct Y.
 		scrollbarHeight := 12 // Scrollwid
 		adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+		// Apply slide fill adjustments.
+		slideRegions := findSlideRegions(lines)
+		adjustLayoutForSlides(lines, slideRegions, f.rect.Dy())
 		return lines, 0
 	}
 
@@ -1479,6 +1564,11 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		}
 		visibleLines = append(visibleLines, adjustedLine)
 	}
+
+	// Apply slide fill adjustments (viewport-aware: only expands
+	// when both HRules of a pair have Y >= 0).
+	slideRegions := findSlideRegions(visibleLines)
+	adjustLayoutForSlides(visibleLines, slideRegions, f.rect.Dy())
 
 	return visibleLines, f.origin
 }

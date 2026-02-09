@@ -1221,6 +1221,10 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 			w.imageCache.Clear()
 			w.imageCache = nil
 		}
+		// Sync preview selection to source before exiting, so the source view
+		// shows the position the user was looking at in the preview.
+		// This avoids stale body.q0/q1 from link navigation or search operations.
+		w.syncSourceSelection()
 		w.SetPreviewMode(false)
 		// Scroll the source view to make the current selection visible.
 		// Show() handles ScrDraw + SetSelect + scrolling if off-screen.

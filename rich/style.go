@@ -17,7 +17,8 @@ type Style struct {
 	HRule  bool // Horizontal rule marker (draw line instead of text)
 
 	// Layout hints
-	ParaBreak bool // Paragraph break - adds extra vertical spacing
+	ParaBreak  bool // Paragraph break - adds extra vertical spacing
+	SlideBreak bool // Second HRule in a pair (slide boundary marker)
 
 	// List formatting
 	ListItem    bool // This span is a list item

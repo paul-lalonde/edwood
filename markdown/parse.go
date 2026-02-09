@@ -62,6 +62,9 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 	sourcePos := 0
 	renderedPos := 0
 
+	// Track consecutive horizontal rules for slide breaks
+	prevWasHRule := false
+
 	// Track fenced code block state
 	inFencedBlock := false
 	var codeBlockContent strings.Builder
@@ -430,6 +433,11 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 		}
 
 	normalDispatch:
+		// Reset prevWasHRule for non-blank, non-HRule lines.
+		// Blank lines and HRules update this flag in their own handlers below.
+		savedPrevWasHRule := prevWasHRule
+		prevWasHRule = false
+
 		// Check for fenced code block delimiter
 		if isFenceDelimiter(line) {
 			if inIndentedBlock {
@@ -550,6 +558,9 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 				}
 			}
 			inParagraph = false
+			// Blank lines preserve prevWasHRule so that
+			// ---\n\n--- is still detected as a slide break.
+			prevWasHRule = savedPrevWasHRule
 			if tracking {
 				sourcePos += len(line)
 			}
@@ -792,6 +803,18 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 		}
 		spans := parseLineInternal(lineToPass, sourcePos, renderedPos, smEntriesPtr, lmEntriesPtr)
 
+		// Detect consecutive HRules (slide break): if previous line was
+		// an HRule and this line is also an HRule, mark this one as a
+		// SlideBreak so the layout engine can fill the viewport.
+		isHR := isHorizontalRule(line)
+		if isHR && savedPrevWasHRule {
+			for si := range spans {
+				if spans[si].Style.HRule {
+					spans[si].Style.SlideBreak = true
+				}
+			}
+		}
+
 		if tracking {
 			sm.entries = append(sm.entries, lineEntries...)
 			for _, le := range lineLinkEntries {
@@ -812,6 +835,10 @@ func parseInternal(text string, sm *SourceMap, lm *LinkMap) rich.Content {
 				result = append(result, span)
 			}
 		}
+
+		// Track consecutive HRules for slide break detection.
+		// Blank lines (handled earlier with continue) don't reset this flag.
+		prevWasHRule = isHR
 
 		if isListItem {
 			if isUL {
