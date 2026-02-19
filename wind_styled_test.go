@@ -937,3 +937,71 @@ func TestFontTableCache_ClearedOnClose(t *testing.T) {
 		t.Error("fontTables should be nil after Close()")
 	}
 }
+
+// =========================================================================
+// initStyledMode body font tests (Phase 2.1)
+// =========================================================================
+
+func TestInitStyledMode_UsesBodyFont_Fixed(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	fixedFontPath := "/mnt/font/GoMono/16a/font"
+	w.body.font = fixedFontPath
+
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Error("styledMode = false after initStyledMode()")
+	}
+	if w.richBody == nil {
+		t.Error("richBody is nil after initStyledMode()")
+	}
+	// Verify that initStyledMode used w.body.font via getOrBuildFontTable:
+	// the font table cache should have an entry keyed by the body font path.
+	if w.fontTables == nil {
+		t.Fatal("fontTables is nil — initStyledMode did not use getOrBuildFontTable")
+	}
+	if _, ok := w.fontTables[fixedFontPath]; !ok {
+		t.Errorf("fontTables has no entry for body font %q", fixedFontPath)
+	}
+}
+
+func TestInitStyledMode_UsesBodyFont_Variable(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	varFontPath := "/mnt/font/GoRegular/16a/font"
+	w.body.font = varFontPath
+
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Error("styledMode = false after initStyledMode()")
+	}
+	if w.richBody == nil {
+		t.Error("richBody is nil after initStyledMode()")
+	}
+	// Verify the font table cache has an entry for the variable font path.
+	if w.fontTables == nil {
+		t.Fatal("fontTables is nil — initStyledMode did not use getOrBuildFontTable")
+	}
+	if _, ok := w.fontTables[varFontPath]; !ok {
+		t.Errorf("fontTables has no entry for body font %q", varFontPath)
+	}
+}
+
+func TestInitStyledMode_FontTableMatchesBodyFont(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	fixedFontPath := "/mnt/font/GoMono/16a/font"
+	w.body.font = fixedFontPath
+
+	w.initStyledMode()
+
+	if w.fontTables == nil {
+		t.Fatal("fontTables is nil after initStyledMode")
+	}
+	ft, ok := w.fontTables[fixedFontPath]
+	if !ok {
+		t.Fatalf("fontTables has no entry for body font %q", fixedFontPath)
+	}
+	if ft.basePath != fixedFontPath {
+		t.Errorf("font table basePath = %q, want %q", ft.basePath, fixedFontPath)
+	}
+}

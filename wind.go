@@ -2409,10 +2409,18 @@ func (w *Window) initStyledMode() {
 		return
 	}
 
-	font := fontget(global.tagfont, display)
-	boldFont := tryLoadFontVariant(display, global.tagfont, "bold")
-	italicFont := tryLoadFontVariant(display, global.tagfont, "italic")
-	boldItalicFont := tryLoadFontVariant(display, global.tagfont, "bolditalic")
+	fontPath := w.body.font
+	if fontPath == "" {
+		fontPath = global.tagfont
+	}
+	ft := w.getOrBuildFontTable(fontPath)
+	if ft == nil {
+		return
+	}
+	font := ft.base
+	boldFont := ft.bold
+	italicFont := ft.italic
+	boldItalicFont := ft.boldItalic
 
 	rt := NewRichText()
 
