@@ -2480,6 +2480,38 @@ func (w *Window) exitStyledMode() {
 	}
 }
 
+// rebuildStyledFont tears down and rebuilds richBody with the current
+// w.body.font, preserving scroll position and content. Called when the
+// user changes the font while in styled mode.
+func (w *Window) rebuildStyledFont() {
+	if !w.styledMode || w.richBody == nil {
+		return
+	}
+
+	// Save scroll position.
+	savedOrigin := w.richBody.Origin()
+	savedYOffset := w.richBody.GetOriginYOffset()
+
+	// Tear down.
+	w.styledMode = false
+	w.richBody = nil
+
+	// Rebuild with current w.body.font.
+	w.initStyledMode()
+
+	if w.styledMode && w.richBody != nil {
+		// Rebuild content and restore scroll.
+		content := w.buildStyledContent()
+		w.richBody.SetContent(content)
+		w.richBody.SetOrigin(savedOrigin)
+		w.richBody.SetOriginYOffset(savedYOffset)
+		w.richBody.Render(w.body.all)
+		if w.display != nil {
+			w.display.Flush()
+		}
+	}
+}
+
 // UpdateStyledView rebuilds and re-renders the styled content.
 // Called after editing operations that modify the body buffer while
 // in styled mode.

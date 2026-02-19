@@ -1005,3 +1005,127 @@ func TestInitStyledMode_FontTableMatchesBodyFont(t *testing.T) {
 		t.Errorf("font table basePath = %q, want %q", ft.basePath, fixedFontPath)
 	}
 }
+
+// =========================================================================
+// rebuildStyledFont tests (Phase 3.1)
+// =========================================================================
+
+func TestRebuildStyledFont_RebuildInStyledMode(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.body.font = "/mnt/font/GoRegular/16a/font"
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Fatal("precondition: should be in styled mode")
+	}
+	firstRichBody := w.richBody
+	if firstRichBody == nil {
+		t.Fatal("precondition: richBody should be non-nil")
+	}
+
+	w.rebuildStyledFont()
+
+	if !w.styledMode {
+		t.Error("styledMode should still be true after rebuildStyledFont()")
+	}
+	if w.richBody == nil {
+		t.Error("richBody should be non-nil after rebuildStyledFont()")
+	}
+	// richBody should be a new instance (teardown + rebuild).
+	if w.richBody == firstRichBody {
+		t.Error("richBody should be a new instance after rebuild")
+	}
+}
+
+func TestRebuildStyledFont_NopWhenNotStyled(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	// Window is NOT in styled mode — rebuildStyledFont should be a no-op.
+	w.rebuildStyledFont()
+
+	if w.styledMode {
+		t.Error("styledMode should remain false")
+	}
+	if w.richBody != nil {
+		t.Error("richBody should remain nil")
+	}
+}
+
+func TestRebuildStyledFont_NopWhenRichBodyNil(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	// Edge case: styledMode is true but richBody is nil.
+	w.styledMode = true
+	w.richBody = nil
+
+	// Should not panic or change state.
+	w.rebuildStyledFont()
+
+	// styledMode remains true (the guard returns early).
+	if w.richBody != nil {
+		t.Error("richBody should remain nil when guard triggers")
+	}
+}
+
+func TestRebuildStyledFont_ScrollPreservation(t *testing.T) {
+	// Build body with enough text for meaningful scroll position.
+	var bodyText string
+	for i := 0; i < 50; i++ {
+		bodyText += fmt.Sprintf("Line %d of filler text.\n", i)
+	}
+	bodyRunes := []rune(bodyText)
+
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 800, 600))
+	global.configureGlobals(display)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", bodyRunes),
+	}
+	w.body.w = w
+	w.body.font = "/mnt/font/GoRegular/16a/font"
+	w.body.all = image.Rect(0, 20, 800, 160)
+
+	// Enter styled mode.
+	w.initStyledMode()
+	if !w.styledMode || w.richBody == nil {
+		t.Fatal("precondition: should be in styled mode with richBody")
+	}
+
+	// Set content and render so the frame has something to scroll.
+	content := w.buildStyledContent()
+	w.richBody.SetContent(content)
+	w.richBody.Render(w.body.all)
+
+	// Scroll to a non-zero position.
+	desiredOrigin := 200
+	desiredYOffset := 5
+	w.richBody.SetOrigin(desiredOrigin)
+	w.richBody.SetOriginYOffset(desiredYOffset)
+
+	// Verify the origin was actually set (sanity check).
+	if w.richBody.Origin() != desiredOrigin {
+		t.Fatalf("precondition: origin = %d, want %d", w.richBody.Origin(), desiredOrigin)
+	}
+	if w.richBody.GetOriginYOffset() != desiredYOffset {
+		t.Fatalf("precondition: yOffset = %d, want %d", w.richBody.GetOriginYOffset(), desiredYOffset)
+	}
+
+	// Rebuild with the same font — scroll position should be preserved.
+	w.rebuildStyledFont()
+
+	if !w.styledMode || w.richBody == nil {
+		t.Fatal("richBody should be rebuilt after rebuildStyledFont()")
+	}
+
+	// Verify scroll position was restored.
+	if w.richBody.Origin() != desiredOrigin {
+		t.Errorf("origin after rebuild = %d, want %d", w.richBody.Origin(), desiredOrigin)
+	}
+	if w.richBody.GetOriginYOffset() != desiredYOffset {
+		t.Errorf("yOffset after rebuild = %d, want %d", w.richBody.GetOriginYOffset(), desiredYOffset)
+	}
+}
