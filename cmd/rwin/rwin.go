@@ -311,6 +311,9 @@ func events(win *winWin) {
 				/* just send it back */
 				win.W.WriteEvent(e)
 
+			case 's', 'S':
+				// Selection change events from styled/preview mode; ignore.
+
 			case 'd', 'i':
 
 			default:
@@ -483,9 +486,7 @@ func (w *winWin) stdoutproc() {
 			// OSC titles are handled inside the parser (replaces label()).
 			clean, runs := w.parser.Process(input)
 
-			clean = dropcrnl(clean)
-			clean = dropcr(clean)
-			clean = squashnulls(clean)
+			clean, runs = applyTextTransforms(clean, runs)
 
 			w.password = false
 			istring := string(clean)

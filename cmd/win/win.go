@@ -307,6 +307,9 @@ func events(win *winWin) {
 				/* just send it back */
 				win.W.WriteEvent(e)
 
+			case 's', 'S':
+				// Selection change events from styled/preview mode; ignore.
+
 			case 'd', 'i':
 
 			default:
