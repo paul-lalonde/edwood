@@ -2817,54 +2817,25 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 	// B3: look.
 	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
-		priorQ0, priorQ1 := rt.Selection()
-
 		var p0, p1 int
 		if mc != nil {
 			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but3col)
-			rt.SetSelection(p0, p1)
 		} else {
 			charPos := rt.Frame().Charofpt(m.Point)
 			p0, p1 = charPos, charPos
-			rt.SetSelection(charPos, charPos)
 		}
 
-		if p0 == p1 {
-			if priorQ0 != priorQ1 && p0 >= priorQ0 && p0 < priorQ1 {
-				p0, p1 = priorQ0, priorQ1
-				rt.SetSelection(priorQ0, priorQ1)
-			} else {
-				q0, q1 := rt.Frame().ExpandWordAtPos(p0)
-				if q0 != q1 {
-					rt.SetSelection(q0, q1)
-					p0, p1 = q0, q1
-				}
-			}
-		}
-
-		// Sync to body for search start position.
+		// Sync click position to body so expand()'s inSelection()
+		// and search()'s start position work correctly.
 		w.body.q0 = p0
 		w.body.q1 = p1
 
-		var lookText string
-		if p0 != p1 {
-			buf := make([]rune, p1-p0)
-			w.body.file.Read(p0, buf)
-			lookText = string(buf)
-		}
+		// Delegate to full look3 handler: expand, file open,
+		// address eval, plumbing, search fallback.
+		look3(&w.body, p0, p1, false)
 
-		if len(lookText) > 0 {
-			if search(&w.body, []rune(lookText)) {
-				rt.SetSelection(w.body.q0, w.body.q1)
-				w.scrollPreviewToMatch(rt, w.body.q0)
-				if w.display != nil {
-					warpPt := rt.Frame().Ptofchar(w.body.q0).Add(
-						image.Pt(4, rt.Frame().DefaultFontHeight()-4))
-					w.display.MoveTo(warpPt)
-				}
-			}
-		}
-
+		// Sync rich text selection from whatever look3 set.
+		rt.SetSelection(w.body.q0, w.body.q1)
 		w.Draw()
 		if w.display != nil {
 			w.display.Flush()
