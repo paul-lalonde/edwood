@@ -338,8 +338,14 @@ func clampByte(v int) uint8 {
 	return uint8(v)
 }
 
-// dispatchOSC is a no-op stub for Phase 2.1.
-// OSC dispatch is implemented in Phase 2.2.
+// dispatchOSC handles completed OSC sequences. OSC 0/1/2 invoke the
+// titleFunc callback; all other OSC numbers are silently consumed.
 func (p *ansiParser) dispatchOSC() {
-	// OSC sequences are consumed and discarded for now.
+	switch p.oscNum {
+	case 0, 1, 2:
+		title := string(p.oscBuf)
+		if p.titleFunc != nil {
+			p.titleFunc(title)
+		}
+	}
 }

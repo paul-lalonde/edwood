@@ -898,6 +898,220 @@ func TestInterleavedTextAndSGR(t *testing.T) {
 	}
 }
 
+// --- (12) OSC title callback (Phase 2.2) ---
+
+func TestOSCTitle0BEL(t *testing.T) {
+	// OSC 0 with BEL terminator invokes titleFunc.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	clean, _ := p.Process([]rune("\x1b]0;My Title\x07hello"))
+	if runeStr(clean) != "hello" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "hello")
+	}
+	if got != "My Title" {
+		t.Errorf("titleFunc got %q, want %q", got, "My Title")
+	}
+}
+
+func TestOSCTitle1BEL(t *testing.T) {
+	// OSC 1 (icon name) with BEL terminator invokes titleFunc.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]1;Icon Name\x07"))
+	if got != "Icon Name" {
+		t.Errorf("titleFunc got %q, want %q", got, "Icon Name")
+	}
+}
+
+func TestOSCTitle2BEL(t *testing.T) {
+	// OSC 2 (window title) with BEL terminator invokes titleFunc.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]2;Window Title\x07"))
+	if got != "Window Title" {
+		t.Errorf("titleFunc got %q, want %q", got, "Window Title")
+	}
+}
+
+func TestOSCTitleSTTerminator(t *testing.T) {
+	// OSC with ST terminator (ESC \) works identically to BEL.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	clean, _ := p.Process([]rune("\x1b]0;ST Title\x1b\\hello"))
+	if runeStr(clean) != "hello" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "hello")
+	}
+	if got != "ST Title" {
+		t.Errorf("titleFunc got %q, want %q", got, "ST Title")
+	}
+}
+
+func TestOSCTitle2STTerminator(t *testing.T) {
+	// OSC 2 with ST terminator.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]2;Another Title\x1b\\"))
+	if got != "Another Title" {
+		t.Errorf("titleFunc got %q, want %q", got, "Another Title")
+	}
+}
+
+func TestOSCTitleCallbackPayload(t *testing.T) {
+	// Verify exact payload string passed to callback, including special chars.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]0;user@host: ~/dir\x07"))
+	if got != "user@host: ~/dir" {
+		t.Errorf("titleFunc got %q, want %q", got, "user@host: ~/dir")
+	}
+}
+
+func TestOSCTitleNilCallback(t *testing.T) {
+	// Nil titleFunc should not panic.
+	p := NewAnsiParser(nil)
+	clean, _ := p.Process([]rune("\x1b]0;title\x07hello"))
+	if runeStr(clean) != "hello" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "hello")
+	}
+}
+
+func TestOSCUnknownNumbersStrippedSilently(t *testing.T) {
+	// Unknown OSC numbers should not invoke titleFunc.
+	called := false
+	p := NewAnsiParser(func(title string) { called = true })
+	for _, num := range []string{"7", "8", "52", "133", "999"} {
+		called = false
+		clean, _ := p.Process([]rune("\x1b]" + num + ";payload\x07visible"))
+		if runeStr(clean) != "visible" {
+			t.Errorf("OSC %s: clean = %q, want %q", num, runeStr(clean), "visible")
+		}
+		if called {
+			t.Errorf("OSC %s: titleFunc should not be called", num)
+		}
+	}
+}
+
+func TestOSCSplitInNumericParam(t *testing.T) {
+	// Split OSC in the numeric parameter: "\x1b]" then "0;title\x07"
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	clean1, _ := p.Process([]rune("\x1b]"))
+	if len(clean1) != 0 {
+		t.Errorf("clean1 should be empty, got %q", runeStr(clean1))
+	}
+	clean2, _ := p.Process([]rune("0;title\x07hello"))
+	if runeStr(clean2) != "hello" {
+		t.Errorf("clean2 = %q, want %q", runeStr(clean2), "hello")
+	}
+	if got != "title" {
+		t.Errorf("titleFunc got %q, want %q", got, "title")
+	}
+}
+
+func TestOSCSplitInPayload(t *testing.T) {
+	// Split OSC in the payload: "\x1b]0;my ti" then "tle\x07"
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]0;my ti"))
+	p.Process([]rune("tle\x07"))
+	if got != "my title" {
+		t.Errorf("titleFunc got %q, want %q", got, "my title")
+	}
+}
+
+func TestOSCSplitAtESCofST(t *testing.T) {
+	// Split at the ESC of ST terminator: "\x1b]0;title\x1b" then "\\"
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]0;title\x1b"))
+	if got != "" {
+		t.Errorf("titleFunc should not be called yet, got %q", got)
+	}
+	clean, _ := p.Process([]rune("\\hello"))
+	if runeStr(clean) != "hello" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "hello")
+	}
+	if got != "title" {
+		t.Errorf("titleFunc got %q, want %q", got, "title")
+	}
+}
+
+func TestOSCInterleavedWithStyledText(t *testing.T) {
+	// OSC between styled runs should not affect style state.
+	// Since the style doesn't change across the OSC, "red text" and
+	// "more red text" merge into a single run.
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	clean, runs := p.Process([]rune("\x1b[1;31mred text\x1b]0;My Title\x07more red text\x1b[0mnormal"))
+	if runeStr(clean) != "red textmore red textnormal" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "red textmore red textnormal")
+	}
+	if got != "My Title" {
+		t.Errorf("titleFunc got %q, want %q", got, "My Title")
+	}
+	// Should have 2 runs: bold+red "red textmore red text", default "normal"
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(runs))
+	}
+	// First run should be bold+red, merging text from both sides of the OSC
+	if runeStr(runs[0].text) != "red textmore red text" {
+		t.Errorf("runs[0].text = %q, want %q", runeStr(runs[0].text), "red textmore red text")
+	}
+	if !runs[0].style.bold {
+		t.Error("runs[0] should be bold")
+	}
+	c := ansiPalette[1]
+	wantFg := ansiColor{set: true, r: c[0], g: c[1], b: c[2]}
+	if runs[0].style.fg != wantFg {
+		t.Errorf("runs[0].fg = %+v, want red", runs[0].style.fg)
+	}
+	// Second run should be default "normal"
+	if runeStr(runs[1].text) != "normal" {
+		t.Errorf("runs[1].text = %q, want %q", runeStr(runs[1].text), "normal")
+	}
+	if !isDefaultStyle(runs[1].style) {
+		t.Errorf("runs[1] should be default after reset, got %+v", runs[1].style)
+	}
+}
+
+func TestOSCEmptyPayloadWithSemicolon(t *testing.T) {
+	// ESC]0;BEL — empty payload after semicolon.
+	var got string
+	called := false
+	p := NewAnsiParser(func(title string) { got = title; called = true })
+	p.Process([]rune("\x1b]0;\x07"))
+	if !called {
+		t.Error("titleFunc should be called for empty payload")
+	}
+	if got != "" {
+		t.Errorf("titleFunc got %q, want %q", got, "")
+	}
+}
+
+func TestOSCEmptyPayloadNoSemicolon(t *testing.T) {
+	// ESC]0BEL — no semicolon, BEL terminates in stateOSC.
+	var got string
+	called := false
+	p := NewAnsiParser(func(title string) { got = title; called = true })
+	p.Process([]rune("\x1b]0\x07"))
+	if !called {
+		t.Error("titleFunc should be called for no-semicolon OSC 0")
+	}
+	if got != "" {
+		t.Errorf("titleFunc got %q, want %q", got, "")
+	}
+}
+
+func TestOSCMultipleTitlesLastWins(t *testing.T) {
+	// Multiple OSC title sequences — last one wins (matches terminal behavior).
+	var got string
+	p := NewAnsiParser(func(title string) { got = title })
+	p.Process([]rune("\x1b]0;First\x07\x1b]0;Second\x07\x1b]0;Third\x07"))
+	if got != "Third" {
+		t.Errorf("titleFunc got %q, want %q (last one wins)", got, "Third")
+	}
+}
+
 // --- itoa helper for tests (avoids strconv import) ---
 
 func itoa(n int) string {
