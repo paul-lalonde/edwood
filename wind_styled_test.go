@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/edwoodtest"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/rich"
@@ -779,5 +780,135 @@ func TestStyledShowScrollsRichText(t *testing.T) {
 	// Verify the origin changed (target was off-screen from origin=0).
 	if w.richBody.Origin() == 0 && targetIdx > 200 {
 		t.Errorf("rich text origin should have changed after Show to off-screen position %d", targetIdx)
+	}
+}
+
+// =========================================================================
+// richFontTable and caching tests (Phase 1.1)
+// =========================================================================
+
+func TestBuildRichFontTable_ReturnsNonNil(t *testing.T) {
+	display := edwoodtest.NewDisplay(image.Rectangle{})
+	global.configureGlobals(display)
+
+	fontPath := "/mnt/font/GoRegular/16a/font"
+	ft := buildRichFontTable(display, fontPath)
+
+	if ft == nil {
+		t.Fatal("buildRichFontTable returned nil for valid font path")
+	}
+	if ft.basePath != fontPath {
+		t.Errorf("basePath = %q, want %q", ft.basePath, fontPath)
+	}
+	if ft.base == nil {
+		t.Error("base font is nil")
+	}
+}
+
+func TestBuildRichFontTable_GoRegularVariants(t *testing.T) {
+	display := edwoodtest.NewDisplay(image.Rectangle{})
+	global.configureGlobals(display)
+
+	fontPath := "/mnt/font/GoRegular/16a/font"
+	ft := buildRichFontTable(display, fontPath)
+
+	if ft == nil {
+		t.Fatal("buildRichFontTable returned nil")
+	}
+	// The mock display's OpenFont always succeeds, so all variants
+	// should be populated for GoRegular (which has variant mappings).
+	if ft.bold == nil {
+		t.Error("bold variant is nil for GoRegular family")
+	}
+	if ft.italic == nil {
+		t.Error("italic variant is nil for GoRegular family")
+	}
+	if ft.boldItalic == nil {
+		t.Error("boldItalic variant is nil for GoRegular family")
+	}
+}
+
+func TestBuildRichFontTable_GoMonoVariants(t *testing.T) {
+	display := edwoodtest.NewDisplay(image.Rectangle{})
+	global.configureGlobals(display)
+
+	fontPath := "/mnt/font/GoMono/16a/font"
+	ft := buildRichFontTable(display, fontPath)
+
+	if ft == nil {
+		t.Fatal("buildRichFontTable returned nil")
+	}
+	// GoMono also has variant mappings in tryLoadFontVariant.
+	if ft.bold == nil {
+		t.Error("bold variant is nil for GoMono family")
+	}
+	if ft.italic == nil {
+		t.Error("italic variant is nil for GoMono family")
+	}
+	if ft.boldItalic == nil {
+		t.Error("boldItalic variant is nil for GoMono family")
+	}
+}
+
+// failingFontDisplay is a minimal draw.Display that always fails OpenFont.
+// Used to test the nil-return guard in buildRichFontTable.
+type failingFontDisplay struct {
+	draw.Display // embed interface to satisfy all methods; only OpenFont is overridden
+}
+
+func (d *failingFontDisplay) OpenFont(name string) (draw.Font, error) {
+	return nil, fmt.Errorf("font not found: %s", name)
+}
+
+func TestBuildRichFontTable_NilWhenFontgetFails(t *testing.T) {
+	// Use a display that always fails OpenFont and a unique path that
+	// won't be in the global fontCache.
+	display := &failingFontDisplay{}
+	uniquePath := "/nonexistent/font/path/for/test"
+
+	// Ensure path is not in fontCache from a previous test.
+	delete(fontCache, uniquePath)
+
+	ft := buildRichFontTable(display, uniquePath)
+
+	if ft != nil {
+		t.Error("buildRichFontTable should return nil when fontget fails")
+	}
+}
+
+func TestGetOrBuildFontTable_CacheHit(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	fontPath := "/mnt/font/GoRegular/16a/font"
+	ft1 := w.getOrBuildFontTable(fontPath)
+	ft2 := w.getOrBuildFontTable(fontPath)
+
+	if ft1 == nil {
+		t.Fatal("first call returned nil")
+	}
+	if ft1 != ft2 {
+		t.Error("second call returned different pointer (cache miss)")
+	}
+}
+
+func TestGetOrBuildFontTable_LazyInitMap(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	// Before any call, fontTables should be nil (zero value).
+	if w.fontTables != nil {
+		t.Fatal("fontTables should be nil before first getOrBuildFontTable call")
+	}
+
+	fontPath := "/mnt/font/GoRegular/16a/font"
+	ft := w.getOrBuildFontTable(fontPath)
+
+	if ft == nil {
+		t.Fatal("getOrBuildFontTable returned nil")
+	}
+	if w.fontTables == nil {
+		t.Error("fontTables map was not initialized after getOrBuildFontTable call")
+	}
+	if _, ok := w.fontTables[fontPath]; !ok {
+		t.Error("fontTables map does not contain entry for the requested font path")
 	}
 }

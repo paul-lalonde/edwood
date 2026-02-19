@@ -94,6 +94,8 @@ type Window struct {
 	spanStore        *SpanStore // styled text runs (nil when no spans)
 	styledMode       bool       // true when showing span-styled text via rich.Frame
 	styledSuppressed bool       // true when user explicitly chose Plain; suppresses auto-enable
+
+	fontTables map[string]*richFontTable // cached font tables, keyed by font path
 }
 
 var (
@@ -2341,6 +2343,53 @@ func resolveImagePath(basePath, imgPath string) string {
 // IsStyledMode returns true if the window is in styled rendering mode.
 func (w *Window) IsStyledMode() bool {
 	return w.styledMode
+}
+
+// richFontTable groups a base font with its styling variants (bold, italic,
+// bold-italic). Each table is built from a single font path and holds
+// everything needed to initialize a rich.Frame.
+type richFontTable struct {
+	basePath   string    // font path this table was built from
+	base       draw.Font // regular/base font
+	bold       draw.Font // bold variant (nil if unavailable)
+	italic     draw.Font // italic variant (nil if unavailable)
+	boldItalic draw.Font // bold+italic variant (nil if unavailable)
+}
+
+// buildRichFontTable builds a richFontTable from the given font path.
+// Returns nil if the base font cannot be loaded.
+func buildRichFontTable(display draw.Display, fontPath string) *richFontTable {
+	base := fontget(fontPath, display)
+	if base == nil {
+		return nil
+	}
+	return &richFontTable{
+		basePath:   fontPath,
+		base:       base,
+		bold:       tryLoadFontVariant(display, fontPath, "bold"),
+		italic:     tryLoadFontVariant(display, fontPath, "italic"),
+		boldItalic: tryLoadFontVariant(display, fontPath, "bolditalic"),
+	}
+}
+
+// getOrBuildFontTable returns a cached richFontTable for the given font path,
+// building and caching it on first access.
+func (w *Window) getOrBuildFontTable(fontPath string) *richFontTable {
+	if w.fontTables == nil {
+		w.fontTables = make(map[string]*richFontTable)
+	}
+	if ft, ok := w.fontTables[fontPath]; ok {
+		return ft
+	}
+	display := w.display
+	if display == nil {
+		display = global.row.display
+	}
+	ft := buildRichFontTable(display, fontPath)
+	if ft != nil {
+		w.fontTables[fontPath] = ft
+	}
+	return ft
 }
 
 // initStyledMode switches the window from plain text to styled rendering mode.
