@@ -1282,3 +1282,45 @@ func TestFontx_PlainMode_FrameReinit(t *testing.T) {
 		t.Errorf("body font = %q, want %q", w.body.font, *fixedfontflag)
 	}
 }
+
+// =========================================================================
+// Edge case hardening tests (Phase 4.1)
+// =========================================================================
+
+func TestFontToggleBeforeStyledMode(t *testing.T) {
+	// Edge case: user toggles font to fixed-width BEFORE any spans arrive.
+	// When the first span write triggers initStyledMode(), it should pick
+	// up the fixed font via w.body.font (not global.tagfont).
+	w := makeStyledWindow(t, "hello")
+	fixedFontPath := "/mnt/font/GoMono/16a/font"
+
+	// Simulate the user toggling font before styled mode is entered.
+	w.body.font = fixedFontPath
+
+	// Precondition: not in styled mode yet.
+	if w.styledMode {
+		t.Fatal("precondition: should not be in styled mode")
+	}
+	if w.fontTables != nil {
+		t.Fatal("precondition: fontTables should be nil before initStyledMode")
+	}
+
+	// First span write triggers initStyledMode.
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Error("styledMode = false after initStyledMode()")
+	}
+	if w.richBody == nil {
+		t.Error("richBody is nil after initStyledMode()")
+	}
+
+	// The font table should have been built for the fixed font path,
+	// NOT for global.tagfont.
+	if w.fontTables == nil {
+		t.Fatal("fontTables is nil — initStyledMode did not use getOrBuildFontTable")
+	}
+	if _, ok := w.fontTables[fixedFontPath]; !ok {
+		t.Errorf("fontTables has no entry for fixed font %q; initStyledMode ignored w.body.font", fixedFontPath)
+	}
+}
