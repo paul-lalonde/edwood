@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // ansiState represents the parser's current state.
 type ansiState int
 
@@ -336,6 +338,16 @@ func clampByte(v int) uint8 {
 		return 255
 	}
 	return uint8(v)
+}
+
+// formatWindowTitle produces an acme window name from an OSC title.
+// If the title already contains "-", it is used as-is.
+// Otherwise, "/-" and sysname are appended.
+func formatWindowTitle(title, sysname string) string {
+	if strings.Contains(title, "-") {
+		return title
+	}
+	return title + "/-" + sysname
 }
 
 // dispatchOSC handles completed OSC sequences. OSC 0/1/2 invoke the

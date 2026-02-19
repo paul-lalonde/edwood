@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -1109,6 +1110,338 @@ func TestOSCMultipleTitlesLastWins(t *testing.T) {
 	p.Process([]rune("\x1b]0;First\x07\x1b]0;Second\x07\x1b]0;Third\x07"))
 	if got != "Third" {
 		t.Errorf("titleFunc got %q, want %q (last one wins)", got, "Third")
+	}
+}
+
+// =============================================================
+// Integration Tests (Phase 4.1)
+// =============================================================
+
+// --- (13) End-to-end Process → buildSpanWrite pipeline ---
+
+func TestEndToEndPipelineRedText(t *testing.T) {
+	// ANSI input: red "hello" followed by reset and " world"
+	// Expected: clean text is "hello world", spans cover the styled portion.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[31mhello\x1b[0m world")
+	clean, runs := p.Process(input)
+
+	if runeStr(clean) != "hello world" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "hello world")
+	}
+
+	spanData := buildSpanWrite(0, runs)
+	// runs: [red "hello", default " world"]
+	// Since there's a non-default run, all runs emit.
+	if spanData == "" {
+		t.Fatal("expected non-empty span data for colored input")
+	}
+
+	lines := strings.Split(strings.TrimRight(spanData, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d span lines, want 2:\n%s", len(lines), spanData)
+	}
+	// Red foreground: palette[1] = {0xaa, 0x00, 0x00}
+	if lines[0] != "s 0 5 #aa0000" {
+		t.Errorf("span line 0: got %q, want %q", lines[0], "s 0 5 #aa0000")
+	}
+	// Default style for " world"
+	if lines[1] != "s 5 6 -" {
+		t.Errorf("span line 1: got %q, want %q", lines[1], "s 5 6 -")
+	}
+}
+
+func TestEndToEndPipelineBoldGreenWithBg(t *testing.T) {
+	// Bold green fg on blue bg, then reset.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[1;32;44mABC\x1b[0mDEF")
+	clean, runs := p.Process(input)
+
+	if runeStr(clean) != "ABCDEF" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "ABCDEF")
+	}
+
+	spanData := buildSpanWrite(100, runs)
+	lines := strings.Split(strings.TrimRight(spanData, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d span lines, want 2:\n%s", len(lines), spanData)
+	}
+	// Green fg (#00aa00), blue bg (#0000aa), bold flag
+	if lines[0] != "s 100 3 #00aa00 #0000aa bold" {
+		t.Errorf("span line 0: got %q, want %q", lines[0], "s 100 3 #00aa00 #0000aa bold")
+	}
+	// Default "DEF"
+	if lines[1] != "s 103 3 -" {
+		t.Errorf("span line 1: got %q, want %q", lines[1], "s 103 3 -")
+	}
+}
+
+func TestEndToEndPipelineAllDefault(t *testing.T) {
+	// No ANSI escapes — all default styling. buildSpanWrite returns "".
+	p := NewAnsiParser(nil)
+	clean, runs := p.Process([]rune("plain text"))
+
+	if runeStr(clean) != "plain text" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "plain text")
+	}
+
+	spanData := buildSpanWrite(0, runs)
+	if spanData != "" {
+		t.Errorf("expected empty span data for plain text, got %q", spanData)
+	}
+}
+
+func TestEndToEndPipelineTruecolor(t *testing.T) {
+	// Truecolor (24-bit) foreground.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[38;2;128;64;32mHI")
+	clean, runs := p.Process(input)
+
+	if runeStr(clean) != "HI" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "HI")
+	}
+
+	spanData := buildSpanWrite(50, runs)
+	want := "s 50 2 #804020\n"
+	if spanData != want {
+		t.Errorf("spanData = %q, want %q", spanData, want)
+	}
+}
+
+func TestEndToEndPipelineSplitAcrossReads(t *testing.T) {
+	// Simulate a split ANSI sequence across two PTY reads,
+	// followed by building spans from each read's output.
+	p := NewAnsiParser(nil)
+
+	// First read: partial escape sequence + some text before it
+	clean1, runs1 := p.Process([]rune("pre\x1b[1;3"))
+	if runeStr(clean1) != "pre" {
+		t.Errorf("clean1 = %q, want %q", runeStr(clean1), "pre")
+	}
+	span1 := buildSpanWrite(0, runs1)
+	// "pre" is default, so no spans
+	if span1 != "" {
+		t.Errorf("span1 should be empty for default text, got %q", span1)
+	}
+
+	// Second read: rest of escape + colored text
+	// The full sequence was \x1b[1;31m which sets bold AND red.
+	clean2, runs2 := p.Process([]rune("1mred\x1b[0m"))
+	if runeStr(clean2) != "red" {
+		t.Errorf("clean2 = %q, want %q", runeStr(clean2), "red")
+	}
+	span2 := buildSpanWrite(3, runs2) // baseOffset = len("pre") = 3
+	want := "s 3 3 #aa0000 - bold\n"  // bold + red fg
+	if span2 != want {
+		t.Errorf("span2 = %q, want %q", span2, want)
+	}
+}
+
+func TestEndToEndPipelineWithOSCTitle(t *testing.T) {
+	// ANSI input with OSC title + colored text.
+	var title string
+	p := NewAnsiParser(func(t string) { title = t })
+	input := []rune("\x1b]0;My Window\x07\x1b[31mcolored\x1b[0m")
+	clean, runs := p.Process(input)
+
+	if runeStr(clean) != "colored" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "colored")
+	}
+	if title != "My Window" {
+		t.Errorf("title = %q, want %q", title, "My Window")
+	}
+
+	spanData := buildSpanWrite(0, runs)
+	want := "s 0 7 #aa0000\n"
+	if spanData != want {
+		t.Errorf("spanData = %q, want %q", spanData, want)
+	}
+}
+
+func TestEndToEndPipelineMultipleStyleChanges(t *testing.T) {
+	// Multiple style changes in one read: red, green, blue.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[31mR\x1b[32mG\x1b[34mB")
+	clean, runs := p.Process(input)
+
+	if runeStr(clean) != "RGB" {
+		t.Errorf("clean = %q, want %q", runeStr(clean), "RGB")
+	}
+
+	spanData := buildSpanWrite(0, runs)
+	lines := strings.Split(strings.TrimRight(spanData, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("got %d span lines, want 3:\n%s", len(lines), spanData)
+	}
+	if lines[0] != "s 0 1 #aa0000" {
+		t.Errorf("line 0: got %q, want %q", lines[0], "s 0 1 #aa0000")
+	}
+	if lines[1] != "s 1 1 #00aa00" {
+		t.Errorf("line 1: got %q, want %q", lines[1], "s 1 1 #00aa00")
+	}
+	if lines[2] != "s 2 1 #0000aa" {
+		t.Errorf("line 2: got %q, want %q", lines[2], "s 2 1 #0000aa")
+	}
+}
+
+// --- (14) setWindowTitle formatting (via formatWindowTitle) ---
+
+func TestFormatWindowTitleWithDash(t *testing.T) {
+	// Title already contains "-", should be used as-is.
+	got := formatWindowTitle("/home/user/project/-rc", "win")
+	if got != "/home/user/project/-rc" {
+		t.Errorf("got %q, want %q", got, "/home/user/project/-rc")
+	}
+}
+
+func TestFormatWindowTitleWithoutDash(t *testing.T) {
+	// Title without "-" gets "/-" + sysname appended.
+	got := formatWindowTitle("/home/user/project/", "win")
+	want := "/home/user/project//-win"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatWindowTitleEmptyTitle(t *testing.T) {
+	// Empty title without "-" gets "/-" + sysname.
+	got := formatWindowTitle("", "win")
+	want := "/-win"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatWindowTitleDashInMiddle(t *testing.T) {
+	// Dash in the middle of the title — use as-is.
+	got := formatWindowTitle("my-project", "win")
+	if got != "my-project" {
+		t.Errorf("got %q, want %q", got, "my-project")
+	}
+}
+
+func TestFormatWindowTitleDifferentSysname(t *testing.T) {
+	got := formatWindowTitle("/tmp/", "myhost")
+	want := "/tmp//-myhost"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// --- (15) Pipeline ordering: ANSI before dropcrnl/dropcr ---
+
+func TestPipelineOrderingANSIBeforeDropcrnl(t *testing.T) {
+	// Verify that ANSI stripping happens before dropcrnl.
+	// Input: ANSI escape followed by \r\n. The escape must be stripped first,
+	// then dropcrnl converts \r\n to \n.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[31mhello\r\n\x1b[0mworld")
+	clean, _ := p.Process(input)
+
+	// After ANSI stripping: "hello\r\nworld"
+	if runeStr(clean) != "hello\r\nworld" {
+		t.Errorf("after Process, clean = %q, want %q", runeStr(clean), "hello\r\nworld")
+	}
+
+	// Then dropcrnl converts \r\n → \n
+	clean = dropcrnl(clean)
+	if runeStr(clean) != "hello\nworld" {
+		t.Errorf("after dropcrnl, clean = %q, want %q", runeStr(clean), "hello\nworld")
+	}
+}
+
+func TestPipelineOrderingANSIBeforeDropcr(t *testing.T) {
+	// ANSI escape mixed with \r (carriage return).
+	// Process strips escapes first, then dropcr handles \r.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[31mold text\rNEW")
+	clean, _ := p.Process(input)
+
+	// After ANSI stripping: "old text\rNEW"
+	if runeStr(clean) != "old text\rNEW" {
+		t.Errorf("after Process, clean = %q, want %q", runeStr(clean), "old text\rNEW")
+	}
+
+	// dropcr handles \r: on the first line (no prior \n), \r becomes \n.
+	clean = dropcr(clean)
+	got := runeStr(clean)
+	if got != "old text\nNEW" {
+		t.Errorf("after dropcr, clean = %q, want %q", got, "old text\nNEW")
+	}
+}
+
+func TestPipelineOrderingANSIInsideNewline(t *testing.T) {
+	// Escape sequence straddling text with \r\n.
+	// ESC[31m before \r\n, ESC[0m after.
+	p := NewAnsiParser(nil)
+	input := []rune("line1\x1b[31m\r\n\x1b[0mline2")
+	clean, runs := p.Process(input)
+
+	// ANSI stripped: "line1\r\nline2"
+	if runeStr(clean) != "line1\r\nline2" {
+		t.Errorf("after Process, clean = %q, want %q", runeStr(clean), "line1\r\nline2")
+	}
+
+	// After dropcrnl: "line1\nline2"
+	postDrop := dropcrnl(clean)
+	if runeStr(postDrop) != "line1\nline2" {
+		t.Errorf("after dropcrnl = %q, want %q", runeStr(postDrop), "line1\nline2")
+	}
+
+	// Verify runs are correct: "line1" default, "\r\n" red, "line2" default
+	// (The \r\n is part of the styled text; dropcrnl happens after.)
+	totalRunes := 0
+	for _, r := range runs {
+		totalRunes += len(r.text)
+	}
+	if totalRunes != len(clean) {
+		t.Errorf("total run runes = %d, want %d (len of clean)", totalRunes, len(clean))
+	}
+}
+
+func TestPipelineOrderingSquashnullsAfterANSI(t *testing.T) {
+	// Null bytes in styled output: ANSI stripping preserves them,
+	// squashnulls removes them afterward.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[31mhel\x00lo\x1b[0m")
+	clean, _ := p.Process(input)
+
+	if runeStr(clean) != "hel\x00lo" {
+		t.Errorf("after Process, clean = %q, want %q", runeStr(clean), "hel\x00lo")
+	}
+
+	clean = squashnulls(clean)
+	if runeStr(clean) != "hello" {
+		t.Errorf("after squashnulls, clean = %q, want %q", runeStr(clean), "hello")
+	}
+}
+
+func TestPipelineFullChain(t *testing.T) {
+	// Full pipeline: Process → dropcrnl → dropcr → squashnulls
+	// Mimics the exact pipeline order from the integration design.
+	p := NewAnsiParser(nil)
+	input := []rune("\x1b[1;33mwarning:\x1b[0m file not found\r\n")
+	clean, runs := p.Process(input)
+
+	// After ANSI stripping
+	if runeStr(clean) != "warning: file not found\r\n" {
+		t.Errorf("after Process, clean = %q", runeStr(clean))
+	}
+
+	// Apply pipeline stages
+	clean = dropcrnl(clean)
+	clean = dropcr(clean)
+	clean = squashnulls(clean)
+
+	expected := "warning: file not found\n"
+	if runeStr(clean) != expected {
+		t.Errorf("after full pipeline, clean = %q, want %q", runeStr(clean), expected)
+	}
+
+	// Spans should have non-default content (bold+yellow "warning:")
+	spanData := buildSpanWrite(0, runs)
+	if spanData == "" {
+		t.Error("expected non-empty span data for styled input")
 	}
 }
 
