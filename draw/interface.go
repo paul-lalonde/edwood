@@ -103,6 +103,18 @@ func (dst *imageImpl) Load(r image.Rectangle, data []byte) (int, error) {
 	return dst.drawImage.Load(r, data)
 }
 
+// Free releases the server resources for the image.
+// This overrides the promoted (*draw.Image).Free to guard against nil Display.
+// The 9fans library's internal free() sets Display = nil after freeing
+// (to make GC-finalizer double-frees safe), but the public Free() method
+// dereferences Display without a nil check, causing a panic on double-free.
+func (dst *imageImpl) Free() error {
+	if dst.drawImage == nil || dst.drawImage.Display == nil {
+		return nil
+	}
+	return dst.drawImage.Free()
+}
+
 func toDrawImage(i Image) *drawImage {
 	if i == nil {
 		return nil
