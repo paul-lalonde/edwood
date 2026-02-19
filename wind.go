@@ -2433,6 +2433,7 @@ func (w *Window) initStyledMode() {
 			global.textcolors[frame.ColBord],
 			global.textcolors[frame.ColBack]),
 		WithRichTextMaxTab(int(global.maxtab)),
+		WithRichTextSnapBottomLine(true),
 	}
 	if boldFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))

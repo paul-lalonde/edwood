@@ -174,6 +174,10 @@ type frameImpl struct {
 	// Tab width in characters (default 4 when zero)
 	maxtabChars int
 
+	// Shift content up so the last visible line is fully visible.
+	// The top line absorbs the clipping instead of the bottom line.
+	snapBottomLine bool
+
 	// Layout cache: stores the result of contentToBoxes + layoutBoxes so
 	// repeated Redraw/TotalLines/etc. calls reuse expensive line-breaking
 	// computation when content and frame width are unchanged.
@@ -1448,6 +1452,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		// Apply slide fill adjustments.
 		slideRegions := findSlideRegions(lines)
 		adjustLayoutForSlides(lines, slideRegions, f.rect.Dy())
+		f.applySnapBottomLine(lines)
 		return lines, 0
 	}
 
@@ -1544,8 +1549,38 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// when both HRules of a pair have Y >= 0).
 	slideRegions := findSlideRegions(visibleLines)
 	adjustLayoutForSlides(visibleLines, slideRegions, f.rect.Dy())
+	f.applySnapBottomLine(visibleLines)
 
 	return visibleLines, f.origin
+}
+
+// applySnapBottomLine shifts all line Y values up so that the last
+// visible line ends exactly at the frame bottom. This makes the top
+// line absorb the partial-line clipping instead of the bottom line.
+// No-op when snapBottomLine is false or lines is empty.
+func (f *frameImpl) applySnapBottomLine(lines []Line) {
+	if !f.snapBottomLine || len(lines) == 0 {
+		return
+	}
+	frameHeight := f.rect.Dy()
+	// Find the last line that starts within the viewport.
+	lastIdx := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i].Y < frameHeight {
+			lastIdx = i
+			break
+		}
+	}
+	if lastIdx < 0 {
+		return
+	}
+	overflow := lines[lastIdx].Y + lines[lastIdx].Height - frameHeight
+	if overflow <= 0 {
+		return
+	}
+	for i := range lines {
+		lines[i].Y -= overflow
+	}
 }
 
 // drawSelectionTo renders the selection highlight rectangles.

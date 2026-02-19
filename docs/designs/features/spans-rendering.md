@@ -518,3 +518,50 @@ Since `initStyledMode` depends on display/font infrastructure, the unit
 tests for `buildStyledContent` and `styleAttrsToRichStyle` should test
 those functions in isolation (they don't require display). Integration tests
 for mode switching may use headless windows.
+
+---
+
+## Interaction with Bottom-Line Snap (snapBottomLine)
+
+### Problem
+
+The rich frame height is not always an exact multiple of line heights. When
+scrolling up and back down, the origin snaps to a line start and the remaining
+pixels at the bottom clip the last visible line, leaving it partially hidden
+under the window edge.
+
+The plain frame avoids this by shrinking `rect.Max.Y` to the nearest
+line-height multiple (`frame.go:315`: `f.rect.Max.Y -= ... % height`),
+wasting the extra pixels. For the rich frame, line heights vary (headings,
+images, paragraph gaps), so a single-height trim is not sufficient.
+
+### Fix
+
+A `snapBottomLine` flag on `frameImpl` enables a layout-level Y adjustment.
+After all other layout adjustments in `layoutFromOrigin()` (scrollbar heights,
+slide fills), `applySnapBottomLine()` shifts all line Y values up by the
+overflow of the last visible line:
+
+```
+overflow = lastLine.Y + lastLine.Height - frameHeight
+if overflow > 0:
+    for each line: line.Y -= overflow
+```
+
+This makes the last line end exactly at `frameHeight`, with the first line's
+top absorbing the clipping (hidden behind the scratch image boundary).
+
+### Cascade proof
+
+Line N+1 starts at `>= line[N].Y + line[N].Height`. After shifting by
+`line[N].Y + line[N].Height - frameHeight`, line N+1's Y becomes
+`>= frameHeight`. The `line.Y >= frameHeight` early-exit in drawing phases
+correctly skips it. All consumers of `layoutFromOrigin()` output
+(`drawTextTo`, `Charofpt`, `drawSelectionTo`) automatically get the shifted
+coordinates with no per-consumer fixups.
+
+### Enablement
+
+Enabled only in styled mode via `WithRichTextSnapBottomLine(true)` in
+`initStyledMode()`. Preview mode (markdown preview) is not affected.
+The flag is forwarded through `RichText.Init()` to `rich.WithSnapBottomLine`.

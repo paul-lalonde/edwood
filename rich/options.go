@@ -124,3 +124,12 @@ func WithMaxTab(chars int) Option {
 		fi.maxtabChars = chars
 	}
 }
+
+// WithSnapBottomLine is an Option that shifts content up so the last
+// visible line ends exactly at the frame bottom. The top line absorbs
+// the clipping instead of the bottom line being cut off.
+func WithSnapBottomLine(snap bool) Option {
+	return func(fi *frameImpl) {
+		fi.snapBottomLine = snap
+	}
+}

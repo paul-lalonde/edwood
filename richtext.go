@@ -51,6 +51,9 @@ type RichText struct {
 
 	// Tab width in characters (forwarded to rich.WithMaxTab)
 	maxtabChars int
+
+	// Shift content up so last visible line is fully visible
+	snapBottomLine bool
 }
 
 // NewRichText creates a new RichText component.
@@ -115,6 +118,9 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	}
 	if rt.maxtabChars > 0 {
 		frameOpts = append(frameOpts, rich.WithMaxTab(rt.maxtabChars))
+	}
+	if rt.snapBottomLine {
+		frameOpts = append(frameOpts, rich.WithSnapBottomLine(true))
 	}
 
 	// Initialize frame with empty rectangle - will be set on first Render() call
@@ -602,6 +608,14 @@ func WithRichTextSelectionColor(c draw.Image) RichTextOption {
 func WithRichTextMaxTab(chars int) RichTextOption {
 	return func(rt *RichText) {
 		rt.maxtabChars = chars
+	}
+}
+
+// WithRichTextSnapBottomLine shifts content up so the last visible line
+// ends exactly at the frame bottom, avoiding bottom-line clipping after scroll.
+func WithRichTextSnapBottomLine(snap bool) RichTextOption {
+	return func(rt *RichText) {
+		rt.snapBottomLine = snap
 	}
 }
 
