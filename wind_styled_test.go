@@ -1324,3 +1324,52 @@ func TestFontToggleBeforeStyledMode(t *testing.T) {
 		t.Errorf("fontTables has no entry for fixed font %q; initStyledMode ignored w.body.font", fixedFontPath)
 	}
 }
+
+// =========================================================================
+// Edge case hardening tests (Phase 4.2)
+// =========================================================================
+
+func TestZeroxFontInheritance(t *testing.T) {
+	// Zerox (window clone) inherits w.body.font from the parent window.
+	// When initStyledMode() is called on the clone, it should use the
+	// inherited font. The font table cache must be per-window (not shared).
+	fixedFontPath := "/mnt/font/GoMono/16a/font"
+
+	// Create "parent" window with fixed font.
+	parent := makeStyledWindow(t, "hello")
+	parent.body.font = fixedFontPath
+
+	// Create "clone" window, simulating what Zerox does:
+	// wind.go Init() sets clone.body.font = parent.body.font.
+	clone := makeStyledWindow(t, "hello")
+	clone.body.font = parent.body.font
+
+	// Precondition: clone has no font tables yet.
+	if clone.fontTables != nil {
+		t.Fatal("precondition: clone fontTables should be nil")
+	}
+
+	// Enter styled mode on the clone (as first span write would trigger).
+	clone.initStyledMode()
+
+	if !clone.styledMode {
+		t.Error("clone styledMode = false after initStyledMode()")
+	}
+	if clone.richBody == nil {
+		t.Error("clone richBody is nil after initStyledMode()")
+	}
+
+	// Verify the clone built a font table for the inherited fixed font.
+	if clone.fontTables == nil {
+		t.Fatal("clone fontTables is nil — initStyledMode did not use getOrBuildFontTable")
+	}
+	if _, ok := clone.fontTables[fixedFontPath]; !ok {
+		t.Errorf("clone fontTables has no entry for inherited font %q", fixedFontPath)
+	}
+
+	// Font table caches must be independent (per-window, not shared).
+	// The parent has no font tables (never entered styled mode).
+	if parent.fontTables != nil {
+		t.Error("parent fontTables should be nil — cache must not be shared")
+	}
+}
