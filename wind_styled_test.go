@@ -1129,3 +1129,156 @@ func TestRebuildStyledFont_ScrollPreservation(t *testing.T) {
 		t.Errorf("yOffset after rebuild = %d, want %d", w.richBody.GetOriginYOffset(), desiredYOffset)
 	}
 }
+
+// =========================================================================
+// fontx + styled mode tests (Phase 3.2)
+// =========================================================================
+
+// makeFontxTestWindow creates a window wired into a Column suitable for
+// calling fontx(). The window has a body with bodyText, a tag with a
+// MockFrame, a display, textcolors initialized, and the Column.w slice
+// contains the window so that col.Grow works.
+func makeFontxTestWindow(t *testing.T, bodyText string) *Window {
+	t.Helper()
+
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 800, 600))
+	global.configureGlobals(display)
+	global.iconinit(display)
+
+	// Set font flags so fontx toggle logic has real paths.
+	varFont := "/mnt/font/GoRegular/16a/font"
+	fixedFont := "/mnt/font/GoMono/16a/font"
+	*varfontflag = varFont
+	*fixedfontflag = fixedFont
+	global.tagfont = varFont
+
+	// Set up the global row display.
+	global.row.display = display
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.r = image.Rect(0, 0, 800, 600)
+
+	// Set up tag with display and frame.
+	w.tag.display = display
+	w.tag.fr = &MockFrame{}
+	w.tag.all = image.Rect(0, 0, 800, 20)
+
+	// Set up body.
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", []rune(bodyText)),
+		what:    Body,
+	}
+	w.body.w = w
+	w.body.font = varFont
+	w.body.all = image.Rect(0, 20, 800, 600)
+
+	// Create a Column that contains the window so col.Grow works.
+	col := &Column{
+		safe:    true,
+		fortest: true,
+		display: display,
+		r:       image.Rect(0, 0, 800, 600),
+		w:       []*Window{w},
+	}
+	col.tag.fr = &MockFrame{}
+	w.col = col
+
+	return w
+}
+
+func TestFontx_StyledMode_Toggle(t *testing.T) {
+	w := makeFontxTestWindow(t, "hello world")
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Fatal("precondition: should be in styled mode")
+	}
+	if w.richBody == nil {
+		t.Fatal("precondition: richBody should be non-nil")
+	}
+
+	// Body starts with var font.
+	if w.body.font != *varfontflag {
+		t.Fatalf("precondition: body font = %q, want %q", w.body.font, *varfontflag)
+	}
+
+	firstRichBody := w.richBody
+
+	// Call fontx with no args — toggles from var to fix.
+	et := &w.body
+	fontx(et, nil, nil, false, false, "")
+
+	// After fontx, body font should have changed to fixed.
+	if w.body.font != *fixedfontflag {
+		t.Errorf("body font = %q, want %q", w.body.font, *fixedfontflag)
+	}
+
+	// Window should still be in styled mode with a rebuilt richBody.
+	if !w.styledMode {
+		t.Error("styledMode should still be true after fontx toggle")
+	}
+	if w.richBody == nil {
+		t.Error("richBody should be non-nil after fontx toggle")
+	}
+	if w.richBody == firstRichBody {
+		t.Error("richBody should be a new instance after fontx rebuild")
+	}
+}
+
+func TestFontx_StyledMode_ExplicitPath(t *testing.T) {
+	w := makeFontxTestWindow(t, "hello world")
+	w.initStyledMode()
+
+	if !w.styledMode {
+		t.Fatal("precondition: should be in styled mode")
+	}
+
+	// Call fontx with an explicit font path.
+	customFont := "/mnt/font/DejaVuSans/14a/font"
+	et := &w.body
+	fontx(et, nil, nil, false, false, customFont)
+
+	// Body font should now be the custom path.
+	if w.body.font != customFont {
+		t.Errorf("body font = %q, want %q", w.body.font, customFont)
+	}
+
+	// Font table cache should have an entry for the custom path.
+	if w.fontTables == nil {
+		t.Fatal("fontTables is nil after fontx with explicit path")
+	}
+	if _, ok := w.fontTables[customFont]; !ok {
+		t.Errorf("fontTables has no entry for %q", customFont)
+	}
+
+	// Should still be in styled mode.
+	if !w.styledMode {
+		t.Error("styledMode should still be true after fontx with explicit path")
+	}
+}
+
+func TestFontx_PlainMode_FrameReinit(t *testing.T) {
+	w := makeFontxTestWindow(t, "hello world")
+
+	// Window is NOT in styled mode (default).
+	if w.styledMode {
+		t.Fatal("precondition: should not be in styled mode")
+	}
+
+	// Call fontx with toggle — should work as plain frame reinit.
+	et := &w.body
+	fontx(et, nil, nil, false, false, "")
+
+	// Should not be in styled mode.
+	if w.styledMode {
+		t.Error("styledMode should remain false in plain mode")
+	}
+
+	// Body font should have toggled.
+	if w.body.font != *fixedfontflag {
+		t.Errorf("body font = %q, want %q", w.body.font, *fixedfontflag)
+	}
+}

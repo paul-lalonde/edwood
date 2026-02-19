@@ -875,12 +875,17 @@ func fontx(et *Text, _ *Text, argt *Text, _, _ bool, arg string) {
 		// TODO(rjk): maybe Frame should know how to clear itself on init?
 		global.row.display.ScreenImage().Draw(t.w.r, global.textcolors[frame.ColBack], nil, image.Point{})
 		t.font = file
-		t.fr.Init(t.w.r, frame.OptFont(newfont), frame.OptBackground(global.row.display.ScreenImage()))
 
-		if t.w.body.file.IsDir() {
-			t.all.Min.X++ // force recolumnation; disgusting!
-			for i, dir := range t.w.dirnames {
-				t.w.widths[i] = newfont.StringWidth(dir)
+		if t.w.styledMode {
+			t.w.rebuildStyledFont()
+		} else {
+			t.fr.Init(t.w.r, frame.OptFont(newfont), frame.OptBackground(global.row.display.ScreenImage()))
+
+			if t.w.body.file.IsDir() {
+				t.all.Min.X++ // force recolumnation; disgusting!
+				for i, dir := range t.w.dirnames {
+					t.w.widths[i] = newfont.StringWidth(dir)
+				}
 			}
 		}
 		// avoid shrinking of window due to quantization
