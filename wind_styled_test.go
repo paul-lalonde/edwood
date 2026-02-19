@@ -912,3 +912,28 @@ func TestGetOrBuildFontTable_LazyInitMap(t *testing.T) {
 		t.Error("fontTables map does not contain entry for the requested font path")
 	}
 }
+
+func TestFontTableCache_ClearedOnClose(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	// Build a font table so the cache is populated.
+	fontPath := "/mnt/font/GoRegular/16a/font"
+	ft := w.getOrBuildFontTable(fontPath)
+	if ft == nil {
+		t.Fatal("getOrBuildFontTable returned nil")
+	}
+	if w.fontTables == nil {
+		t.Fatal("fontTables should be non-nil after building a font table")
+	}
+
+	// Set up tag frame so Close() doesn't panic on w.tag.Close().
+	w.tag.fr = &MockFrame{}
+	// Register w.body as observer on its file so Text.Close() succeeds.
+	w.body.file.AddObserver(&w.body)
+
+	w.Close()
+
+	if w.fontTables != nil {
+		t.Error("fontTables should be nil after Close()")
+	}
+}

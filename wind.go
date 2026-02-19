@@ -431,6 +431,7 @@ func (w *Window) Close() {
 		w.styledMode = false
 		w.styledSuppressed = false
 		w.richBody = nil
+		w.fontTables = nil
 		xfidlog(w, "del")
 		w.tag.file.DelObserver(w)
 		w.body.file.DelTagStatusObserver(w)
