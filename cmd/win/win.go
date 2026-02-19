@@ -157,7 +157,15 @@ lineloop:
 				}
 				n := i + 1
 				if !raw {
-					w.echo.Echoed(w.typing)
+					// Don't include ^D in the echo buffer: the terminal
+					// line discipline consumes it without echoing.
+					end := i + 1
+					if r == 0x04 {
+						end = i
+					}
+					if end > 0 {
+						w.echo.Echoed(w.typing[0:end])
+					}
 				}
 				n, err := w.rcpty.Write([]byte(string(w.typing[0:n])))
 				if n != i+1 || err != nil {
