@@ -85,6 +85,11 @@ type Window struct {
 	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
 	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
 
+	// Preview render debounce state
+	previewLastRender    time.Time   // timestamp of last preview render
+	previewRenderPending bool        // a render was skipped due to throttle
+	previewDebounceTimer *time.Timer // trailing-edge timer for deferred render
+
 	spanStore        *SpanStore // styled text runs (nil when no spans)
 	styledMode       bool       // true when showing span-styled text via rich.Frame
 	styledSuppressed bool       // true when user explicitly chose Plain; suppresses auto-enable
@@ -417,6 +422,8 @@ func (w *Window) MouseBut() {
 
 func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
+		w.cancelPreviewDebounce()
+		w.previewRenderPending = false
 		w.previewMode = false
 		w.styledMode = false
 		w.styledSuppressed = false
@@ -927,9 +934,12 @@ func (w *Window) SetPreviewMode(enabled bool) {
 	wasPreview := w.previewMode
 	w.previewMode = enabled
 
-	// When exiting preview mode, refresh the body.
+	// When exiting preview mode, cancel any pending debounce render
+	// and refresh the body.
 	// Keep the image cache alive so re-entering preview is fast.
 	if wasPreview && !enabled {
+		w.cancelPreviewDebounce()
+		w.previewRenderPending = false
 		// Force a full redraw of the body by resizing it
 		if w.display != nil {
 			w.body.Resize(w.body.all, true, false)
@@ -1773,13 +1783,10 @@ func (w *Window) recordEdit(e markdown.EditRecord) {
 	w.pendingEdits = append(w.pendingEdits, e)
 }
 
-// UpdatePreview updates the preview content from the body buffer.
-// This should be called when the body buffer changes and the window is in preview mode.
-// It re-parses the markdown and updates the richBody, preserving the scroll position.
-// When edit position information is available (from pendingEdits), it attempts an
-// incremental re-parse of only the affected blocks. Falls back to full re-parse
-// when the incremental path cannot determine the affected region.
-func (w *Window) UpdatePreview() {
+// updatePreviewModel performs the model-only portion of a preview update:
+// incremental/full markdown parse, updating content + sourceMap + linkMap +
+// blockIdx, and restoring the scroll position. It does NOT render or flush.
+func (w *Window) updatePreviewModel() {
 	if !w.previewMode || w.richBody == nil {
 		return
 	}
@@ -1787,6 +1794,14 @@ func (w *Window) UpdatePreview() {
 	// Get the current scroll position to preserve it
 	currentOrigin := w.richBody.Origin()
 	currentYOffset := w.richBody.GetOriginYOffset()
+
+	// Determine if the user was scrolled near the end of the content.
+	// If so, we'll follow the tail after updating (like a terminal).
+	oldLen := 0
+	if oldContent := w.richBody.Content(); oldContent != nil {
+		oldLen = oldContent.Len()
+	}
+	followTail := isNearEnd(currentOrigin, oldLen)
 
 	// Read the current body content
 	bodyContent := w.body.file.String()
@@ -1827,14 +1842,65 @@ func (w *Window) UpdatePreview() {
 	w.previewLinkMap = linkMap
 	w.prevBlockIndex = blockIdx
 
-	// Try to restore the scroll position
-	// Clamp to the new content length if necessary
 	newLen := content.Len()
-	if currentOrigin > newLen {
-		currentOrigin = newLen
+
+	if followTail {
+		// Scroll to the end of the new content so the latest output is visible.
+		w.richBody.SetOrigin(newLen)
+		w.richBody.SetOriginYOffset(0)
+	} else {
+		// Restore the previous scroll position, clamped to new content length.
+		if currentOrigin > newLen {
+			currentOrigin = newLen
+		}
+		w.richBody.SetOrigin(currentOrigin)
+		w.richBody.SetOriginYOffset(currentYOffset)
 	}
-	w.richBody.SetOrigin(currentOrigin)
-	w.richBody.SetOriginYOffset(currentYOffset)
+}
+
+// isNearEnd reports whether the scroll origin is close enough to the end of
+// the rendered content to be considered "following the tail". This is used
+// to auto-scroll win windows when new shell output is appended.
+func isNearEnd(origin, contentLen int) bool {
+	// Empty or brand-new content — treat as following.
+	if contentLen == 0 {
+		return true
+	}
+	// "Near the end" means the content after the origin fits in roughly
+	// one screen worth of text. 500 runes is a generous approximation
+	// (typical 80-col terminal × 6 lines ≈ 480 chars).
+	const tailThreshold = 500
+	return contentLen-origin <= tailThreshold
+}
+
+// UpdatePreview updates the preview content from the body buffer.
+// This should be called when the body buffer changes and the window is in preview mode.
+// It re-parses the markdown and updates the richBody, preserving the scroll position.
+// When edit position information is available (from pendingEdits), it attempts an
+// incremental re-parse of only the affected blocks. Falls back to full re-parse
+// when the incremental path cannot determine the affected region.
+func (w *Window) UpdatePreview() {
+	if !w.previewMode || w.richBody == nil {
+		return
+	}
+
+	// Cancel any pending debounce render since we're doing a full update.
+	w.cancelPreviewDebounce()
+
+	w.updatePreviewModel()
+
+	// Map the body's source selection to a rendered position so the
+	// insertion point follows external writes (e.g. shell output via
+	// the data pseudo-file).
+	if w.previewSourceMap != nil {
+		rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+		if rendStart >= 0 {
+			w.richBody.SetSelection(rendStart, rendEnd)
+		} else {
+			contentLen := w.richBody.Content().Len()
+			w.richBody.SetSelection(contentLen, contentLen)
+		}
+	}
 
 	// Render the preview using body.all as the canonical geometry
 	w.richBody.Render(w.body.all)
@@ -2007,10 +2073,6 @@ func (w *Window) HandlePreviewKey(key rune) bool {
 	lineHeights := frame.LinePixelHeights()
 	lineStarts := frame.LineStartRunes()
 	if len(lineHeights) == 0 || len(lineStarts) == 0 {
-		if key == 0x1B {
-			w.SetPreviewMode(false)
-			return true
-		}
 		return false
 	}
 
@@ -2072,11 +2134,6 @@ func (w *Window) HandlePreviewKey(key rune) bool {
 		// Scroll to end
 		rt.ScrollToPixelY(maxPixelY)
 		rt.Redraw()
-		return true
-
-	case 0x1B: // Escape
-		// Exit preview mode
-		w.SetPreviewMode(false)
 		return true
 
 	default:
@@ -2193,11 +2250,16 @@ func (w *Window) HandlePreviewType(t *Text, r rune) {
 	w.previewTypeFinish(t)
 }
 
-// previewTypeFinish completes a preview-mode edit by doing an immediate
-// re-render and remapping the cursor position.
+// previewRenderInterval is the minimum time between preview renders during
+// typing. Renders are throttled to this interval; a trailing timer ensures
+// the final keystroke in a burst always triggers a render.
+const previewRenderInterval = 80 * time.Millisecond
+
+// previewTypeFinish completes a preview-mode edit by updating the model
+// synchronously and throttling the render.
 func (w *Window) previewTypeFinish(t *Text) {
-	// Immediate re-render (uses incremental path via pendingEdits).
-	w.UpdatePreview()
+	// Always update the model synchronously (cheap).
+	w.updatePreviewModel()
 
 	// Remap source cursor to rendered position and update selection.
 	if w.previewSourceMap != nil {
@@ -2212,9 +2274,49 @@ func (w *Window) previewTypeFinish(t *Text) {
 		}
 	}
 
+	// Throttle rendering.
+	w.cancelPreviewDebounce()
+	now := time.Now()
+	if now.Sub(w.previewLastRender) >= previewRenderInterval {
+		w.renderPreview()
+	} else {
+		w.previewRenderPending = true
+		w.previewDebounceTimer = time.AfterFunc(previewRenderInterval, func() {
+			global.previewRenderCh <- func() {
+				global.row.lk.Lock()
+				defer global.row.lk.Unlock()
+				if w.previewRenderPending && w.previewMode {
+					w.renderPreview()
+				}
+			}
+		})
+	}
+}
+
+// renderPreview performs the actual render+flush for preview mode.
+func (w *Window) renderPreview() {
 	w.Draw()
 	if w.display != nil {
 		w.display.Flush()
+	}
+	w.previewLastRender = time.Now()
+	w.previewRenderPending = false
+}
+
+// cancelPreviewDebounce stops any pending debounce timer.
+func (w *Window) cancelPreviewDebounce() {
+	if w.previewDebounceTimer != nil {
+		w.previewDebounceTimer.Stop()
+		w.previewDebounceTimer = nil
+	}
+}
+
+// flushPreviewDebounce cancels any pending timer and immediately renders
+// if a render was deferred. Used by tests to synchronize.
+func (w *Window) flushPreviewDebounce() {
+	w.cancelPreviewDebounce()
+	if w.previewRenderPending && w.previewMode {
+		w.renderPreview()
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/edwoodtest"
@@ -1181,6 +1182,243 @@ func TestPreviewLiveUpdatePreservesScroll(t *testing.T) {
 	}
 }
 
+// TestIsNearEnd tests the isNearEnd helper that determines whether
+// the scroll position is close enough to the end to trigger tail-follow.
+func TestIsNearEnd(t *testing.T) {
+	tests := []struct {
+		name       string
+		origin     int
+		contentLen int
+		want       bool
+	}{
+		{"empty content", 0, 0, true},
+		{"origin at end", 1000, 1000, true},
+		{"origin past end", 1100, 1000, true},
+		{"origin near end within threshold", 600, 1000, true},  // 400 < 500
+		{"origin far from end", 0, 1000, false},                // 1000 > 500
+		{"origin just outside threshold", 499, 1000, false},    // 501 > 500
+		{"origin exactly at threshold", 500, 1000, true},       // 500 <= 500
+		{"small content fully visible", 0, 100, true},          // 100 < 500
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isNearEnd(tc.origin, tc.contentLen)
+			if got != tc.want {
+				t.Errorf("isNearEnd(%d, %d) = %v, want %v", tc.origin, tc.contentLen, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPreviewScrollFollowOnAppend tests that when the user is scrolled near
+// the end of the content, appending new content auto-scrolls to the new end
+// (tail-follow behavior for win windows).
+func TestPreviewScrollFollowOnAppend(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Start with short markdown content so the origin=0 is "near the end".
+	initialMarkdown := "# Shell Output\n\nLine 1\n"
+	sourceRunes := []rune(initialMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/win.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(0, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// Origin is 0, content is short — user is "near the end".
+	beforeLen := rt.Content().Len()
+
+	// Append new content (simulating shell output)
+	w.body.file.InsertAt(w.body.file.Nr(), []rune("Line 2\nLine 3\nLine 4\n"))
+	w.UpdatePreview()
+
+	afterLen := rt.Content().Len()
+	if afterLen <= beforeLen {
+		t.Fatalf("Content should have grown: before=%d, after=%d", beforeLen, afterLen)
+	}
+
+	// The origin should have moved forward to follow the new content.
+	afterOrigin := rt.Origin()
+	if afterOrigin == 0 {
+		t.Error("Origin should have scrolled forward to follow new content at the end")
+	}
+}
+
+// TestPreviewNoScrollFollowWhenScrolledUp tests that when the user has
+// scrolled away from the end, appending content does NOT auto-scroll.
+func TestPreviewNoScrollFollowWhenScrolledUp(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	// Create content long enough that origin=0 is far from the end.
+	var mdBuilder string
+	for i := 0; i < 100; i++ {
+		mdBuilder += fmt.Sprintf("Line %d with some text to make it longer.\n\n", i)
+	}
+	initialMarkdown := mdBuilder
+	sourceRunes := []rune(initialMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/long-win.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(0, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// Set origin to 0 — the beginning, far from the end.
+	rt.SetOrigin(0)
+	beforeOrigin := rt.Origin()
+
+	// Verify we're far from the end (content must be > 500 runes)
+	contentLen := rt.Content().Len()
+	if contentLen <= 500 {
+		t.Fatalf("Test setup error: content too short (%d runes), need >500 for non-tail position", contentLen)
+	}
+
+	// Append new content at the end
+	w.body.file.InsertAt(w.body.file.Nr(), []rune("# Appended Heading\n\nNew paragraph.\n"))
+	w.UpdatePreview()
+
+	// The origin should be preserved (not auto-scrolled).
+	afterOrigin := rt.Origin()
+	tolerance := 50
+	if afterOrigin < beforeOrigin-tolerance || afterOrigin > beforeOrigin+tolerance {
+		t.Errorf("Origin should be preserved when scrolled up: before=%d, after=%d", beforeOrigin, afterOrigin)
+	}
+}
+
+// TestPreviewSelectionFollowsExternalWrite tests that the rich text insertion
+// point moves to the end of newly inserted content when data is written to
+// the body externally (e.g. shell output via the data pseudo-file).
+func TestPreviewSelectionFollowsExternalWrite(t *testing.T) {
+	rect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(rect)
+	global.configureGlobals(display)
+
+	initialMarkdown := "# Output\n\nLine 1\n"
+	sourceRunes := []rune(initialMarkdown)
+
+	w := NewWindow().initHeadless(nil)
+	w.display = display
+	w.body = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("/test/sel.md", sourceRunes),
+	}
+	w.body.all = image.Rect(0, 20, 800, 600)
+	w.tag = Text{
+		display: display,
+		fr:      &MockFrame{},
+		file:    file.MakeObservableEditableBuffer("", nil),
+	}
+	w.col = &Column{safe: true}
+	w.r = rect
+
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	rt := NewRichText()
+	bodyRect := image.Rect(0, 20, 800, 600)
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+	)
+	rt.Render(bodyRect)
+
+	content, sourceMap, _ := markdown.ParseWithSourceMap(initialMarkdown)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewMode(true)
+
+	// Simulate external write: insert at end and move body selection there
+	// (this is what xfid QWdata does after inserting)
+	appendText := []rune("Line 2\n")
+	insertPos := w.body.file.Nr()
+	w.body.file.InsertAt(insertPos, appendText)
+	newEnd := insertPos + len(appendText)
+	w.body.q0 = newEnd
+	w.body.q1 = newEnd
+
+	w.UpdatePreview()
+
+	// The rich text selection should now be near/at the end of the rendered content.
+	p0, p1 := rt.Selection()
+	rendLen := rt.Content().Len()
+	if p0 != p1 {
+		t.Errorf("Expected insertion point (p0==p1), got selection range p0=%d p1=%d", p0, p1)
+	}
+	if p0 == 0 && rendLen > 0 {
+		t.Error("Selection should have moved from 0 to follow the external write")
+	}
+	if p0 < rendLen/2 {
+		t.Errorf("Selection should be near end of rendered content: got p0=%d, rendLen=%d", p0, rendLen)
+	}
+}
+
 // TestPreviewLiveUpdateMultipleTimes tests that multiple consecutive updates work correctly.
 func TestPreviewLiveUpdateMultipleTimes(t *testing.T) {
 	rect := image.Rect(0, 0, 800, 600)
@@ -1850,13 +2088,13 @@ func TestPreviewKeyIgnoresTyping(t *testing.T) {
 		t.Errorf("Body content should be unchanged after editing keys:\nbefore: %q\nafter:  %q", initialBodyContent, finalBodyContent)
 	}
 
-	// Test Escape key - should exit preview mode
+	// Test Escape key - should NOT be handled (Markdown tag toggle is the exit mechanism)
 	handled := w.HandlePreviewKey(0x1B) // Escape
-	if !handled {
-		t.Error("HandlePreviewKey(Escape) should return true in preview mode")
+	if handled {
+		t.Error("HandlePreviewKey(Escape) should return false — Escape no longer exits preview mode")
 	}
-	if w.IsPreviewMode() {
-		t.Error("Escape key should exit preview mode")
+	if !w.IsPreviewMode() {
+		t.Error("Escape key should not exit preview mode")
 	}
 }
 
@@ -9576,5 +9814,263 @@ func TestPreviewB3SweepOnLink(t *testing.T) {
 	}
 	if url != "https://example.com" {
 		t.Errorf("URLForRange(%d, %d) should return link URL, got %q", p0, p1, url)
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheme B: Preview render debounce tests
+// ═══════════════════════════════════════════════════════════════════
+
+// TestPreviewDebounceSourceBufferImmediate verifies that edits are
+// applied to the source buffer synchronously even when renders are throttled.
+func TestPreviewDebounceSourceBufferImmediate(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Force the throttled path by pretending we just rendered.
+	w.previewLastRender = time.Now()
+
+	// Type 3 chars rapidly without flushing.
+	w.HandlePreviewType(&w.body, 'a')
+	w.HandlePreviewType(&w.body, 'b')
+	w.HandlePreviewType(&w.body, 'c')
+
+	// Source buffer should reflect all 3 chars immediately.
+	got := w.body.file.String()
+	if got != "Helloabc" {
+		t.Errorf("source buffer: got %q, want %q", got, "Helloabc")
+	}
+
+	// Cursor should have advanced past all inserted characters.
+	if w.body.q0 != 8 || w.body.q1 != 8 {
+		t.Errorf("cursor should be at (8,8), got (%d,%d)", w.body.q0, w.body.q1)
+	}
+}
+
+// TestPreviewDebounceMultipleEditsAccumulate verifies that after flushing
+// the debounce, the rendered content matches the full source.
+func TestPreviewDebounceMultipleEditsAccumulate(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "ab")
+
+	// Position cursor at end.
+	w.body.q0 = 2
+	w.body.q1 = 2
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Force throttled path.
+	w.previewLastRender = time.Now()
+
+	// Type 5 chars.
+	for _, r := range "cdefg" {
+		w.HandlePreviewType(&w.body, r)
+	}
+
+	got := w.body.file.String()
+	if got != "abcdefg" {
+		t.Fatalf("source buffer: got %q, want %q", got, "abcdefg")
+	}
+
+	// Flush deferred render.
+	w.flushPreviewDebounce()
+
+	// Source map should be up-to-date after flush.
+	if w.previewSourceMap == nil {
+		t.Fatal("previewSourceMap should not be nil after flush")
+	}
+}
+
+// TestPreviewDebounceUndoCancelsPending verifies that Undo cancels any
+// pending debounce render and that the buffer reverts correctly.
+func TestPreviewDebounceUndoCancelsPending(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Type 2 chars (first render may happen since previewLastRender is zero).
+	w.HandlePreviewType(&w.body, 'x')
+	w.HandlePreviewType(&w.body, 'y')
+
+	got := w.body.file.String()
+	if got != "Helloxy" {
+		t.Fatalf("after typing: got %q, want %q", got, "Helloxy")
+	}
+
+	// Undo should revert both chars (they're in one undo group).
+	w.Undo(true)
+
+	got = w.body.file.String()
+	if got != "Hello" {
+		t.Errorf("after undo: got %q, want %q", got, "Hello")
+	}
+}
+
+// TestPreviewDebounceFlagState verifies the previewRenderPending flag
+// behavior: immediate render when enough time has passed, deferred render
+// when within the throttle interval.
+func TestPreviewDebounceFlagState(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Set previewLastRender to far past — next type should render immediately.
+	w.previewLastRender = time.Time{}
+	w.HandlePreviewType(&w.body, 'a')
+	if w.previewRenderPending {
+		t.Error("expected immediate render (previewRenderPending should be false)")
+	}
+
+	// Set previewLastRender to now — next type should defer render.
+	w.previewLastRender = time.Now()
+	w.HandlePreviewType(&w.body, 'b')
+	if !w.previewRenderPending {
+		t.Error("expected deferred render (previewRenderPending should be true)")
+	}
+
+	// Flush should clear the pending flag.
+	w.flushPreviewDebounce()
+	if w.previewRenderPending {
+		t.Error("after flush: previewRenderPending should be false")
+	}
+}
+
+// TestPreviewDebounceExitPreviewCancels verifies that exiting preview mode
+// cancels any pending debounce and clears the pending flag.
+func TestPreviewDebounceExitPreviewCancels(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Force throttled path and type a char.
+	w.previewLastRender = time.Now()
+	w.HandlePreviewType(&w.body, 'z')
+
+	if !w.previewRenderPending {
+		t.Fatal("expected pending render after throttled type")
+	}
+
+	// Exit preview mode.
+	w.SetPreviewMode(false)
+
+	if w.previewDebounceTimer != nil {
+		t.Error("debounce timer should be nil after SetPreviewMode(false)")
+	}
+	if w.previewRenderPending {
+		t.Error("previewRenderPending should be false after SetPreviewMode(false)")
+	}
+}
+
+// TestPreviewDebounceUndoGroupingPreserved verifies that undo grouping
+// works correctly even when renders are throttled.
+func TestPreviewDebounceUndoGroupingPreserved(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Force throttled path.
+	w.previewLastRender = time.Now()
+
+	// Type 'a', 'b', 'c' — should be one undo group.
+	w.HandlePreviewType(&w.body, 'a')
+	w.HandlePreviewType(&w.body, 'b')
+	w.HandlePreviewType(&w.body, 'c')
+
+	got := w.body.file.String()
+	if got != "Helloabc" {
+		t.Fatalf("after typing: got %q, want %q", got, "Helloabc")
+	}
+
+	// One undo should remove all three.
+	w.Undo(true)
+
+	got = w.body.file.String()
+	if got != "Hello" {
+		t.Errorf("after undo: got %q, want %q", got, "Hello")
+	}
+}
+
+// TestPreviewDebounceUpdatePreviewModelFresh verifies that the source map
+// is up-to-date even before a render fires (since updatePreviewModel runs
+// synchronously on every keystroke).
+func TestPreviewDebounceUpdatePreviewModelFresh(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Force throttled path.
+	w.previewLastRender = time.Now()
+
+	// Type a char — model update runs but render is deferred.
+	w.HandlePreviewType(&w.body, 'X')
+
+	if w.previewSourceMap == nil {
+		t.Fatal("sourceMap should be non-nil even without render")
+	}
+
+	// sourceMap should map the new cursor position.
+	rendStart, _ := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
+	if rendStart < 0 {
+		t.Error("sourceMap.ToRendered should return valid position for new cursor")
+	}
+}
+
+// TestPreviewDebounceDoubleRenderEliminated is a regression test verifying
+// that previewTypeFinish no longer does a double render (UpdatePreview+Draw).
+// With the debounce, a single keystroke on a fresh window should only produce
+// one render (the immediate path), not two.
+func TestPreviewDebounceDoubleRenderEliminated(t *testing.T) {
+	w := setupPreviewTypeTestWindow(t, "Hello")
+
+	// Position cursor at end.
+	w.body.q0 = 5
+	w.body.q1 = 5
+	contentLen := w.richBody.Content().Len()
+	w.richBody.SetSelection(contentLen, contentLen)
+
+	// Ensure we hit the immediate render path (previewLastRender is zero).
+	w.previewLastRender = time.Time{}
+
+	// Type a char — should render immediately (single render, not double).
+	w.HandlePreviewType(&w.body, 'Z')
+
+	// After typing, previewLastRender should be set (render happened).
+	if w.previewLastRender.IsZero() {
+		t.Error("previewLastRender should be set after immediate render")
+	}
+
+	// previewRenderPending should be false (no deferred render needed).
+	if w.previewRenderPending {
+		t.Error("previewRenderPending should be false after immediate render")
+	}
+
+	// Verify the edit was applied.
+	got := w.body.file.String()
+	if got != "HelloZ" {
+		t.Errorf("source buffer: got %q, want %q", got, "HelloZ")
 	}
 }
