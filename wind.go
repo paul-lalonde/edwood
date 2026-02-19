@@ -1688,6 +1688,7 @@ func (w *Window) ShowInStyledMode(q0, q1 int) {
 	rt := w.richBody
 	rt.SetSelection(q0, q1)
 	w.scrollPreviewToMatch(rt, q0)
+	w.body.org = rt.Origin() // Keep plain frame origin in sync
 	w.Draw()
 	if w.display != nil {
 		w.display.Flush()

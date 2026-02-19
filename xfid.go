@@ -347,6 +347,10 @@ func shouldscroll(t *Text, q0 int, qid uint64) bool {
 	if qid == Qcons {
 		return true
 	}
+	if t.w != nil && t.w.IsStyledMode() && t.w.richBody != nil {
+		org, end := t.w.VisibleRange()
+		return org <= q0 && q0 <= end
+	}
 	return t.org <= q0 && q0 <= t.org+(t.fr.GetFrameFillStatus().Nchars)
 }
 

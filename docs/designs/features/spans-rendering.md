@@ -50,6 +50,27 @@ func (w *Window) IsStyledMode() bool {
 
 ---
 
+## Font Management
+
+Styled mode must respect the user's font choice. The window's current body
+font (`w.body.font`) determines which font family is used for rendering, and
+the Font toggle must work on styled windows just as it does on plain windows.
+
+See **`docs/designs/features/rich-font-toggle.md`** for the full design of
+the `richFontTable` type, lazy building, caching, and `fontx()` integration.
+
+### Summary
+
+- A `richFontTable` holds the base font and all its variants (bold, italic,
+  bold-italic) for a given font path.
+- Font tables are built lazily on first use and cached on the `Window` struct.
+- `initStyledMode()` uses `w.body.font` (not `global.tagfont`) to select the
+  correct font table.
+- `fontx()` tears down and rebuilds `richBody` when a styled window's font
+  changes, using the same save/restore scroll logic as `exitStyledMode`.
+
+---
+
 ## initStyledMode
 
 Called when the first span write arrives on a plain-mode window. Follows the
@@ -69,10 +90,8 @@ func (w *Window) initStyledMode() {
         return
     }
 
-    font := fontget(global.tagfont, display)
-    boldFont := tryLoadFontVariant(display, global.tagfont, "bold")
-    italicFont := tryLoadFontVariant(display, global.tagfont, "italic")
-    boldItalicFont := tryLoadFontVariant(display, global.tagfont, "bolditalic")
+    // Use the window's current body font, not global.tagfont.
+    ft := w.getOrBuildFontTable(w.body.font)
 
     rt := NewRichText()
 
@@ -83,32 +102,40 @@ func (w *Window) initStyledMode() {
         WithScrollbarColors(
             global.textcolors[frame.ColBord],
             global.textcolors[frame.ColBack]),
+        WithRichTextMaxTab(int(global.maxtab)),
     }
-    if boldFont != nil {
-        rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
+    if ft.bold != nil {
+        rtOpts = append(rtOpts, WithRichTextBoldFont(ft.bold))
     }
-    if italicFont != nil {
-        rtOpts = append(rtOpts, WithRichTextItalicFont(italicFont))
+    if ft.italic != nil {
+        rtOpts = append(rtOpts, WithRichTextItalicFont(ft.italic))
     }
-    if boldItalicFont != nil {
-        rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
+    if ft.boldItalic != nil {
+        rtOpts = append(rtOpts, WithRichTextBoldItalicFont(ft.boldItalic))
     }
 
-    rt.Init(display, font, rtOpts...)
+    // Create an image cache for box elements that reference images.
+    if w.imageCache == nil {
+        w.imageCache = rich.NewImageCache(0)
+    }
+    rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+
+    rt.Init(display, ft.base, rtOpts...)
 
     w.richBody = rt
     w.styledMode = true
+    w.styledSuppressed = false
 }
 ```
 
 **Key differences from `previewcmd`**:
 - No markdown parsing, source map, or link map
-- No image cache or base path
 - No scaled fonts (headings) or code font — styled mode uses Fg/Bg/Bold/Italic only
 - No file name check (any window can receive spans)
 - Uses `global.textcolors[frame.ColBack]` and `global.textcolors[frame.ColText]` for
   background/foreground so the styled window matches the default acme color scheme
   (yellowish background) rather than hardcoded white/black
+- Uses `w.body.font` via `getOrBuildFontTable()` instead of hardcoded `global.tagfont`
 
 ---
 
@@ -292,6 +319,59 @@ the current body rectangle, avoiding this.
 Preview mode avoids this issue because `SetSelect` has no special case for
 preview — it falls through to the plain frame's `DrawSel` which is invisible
 behind the rich frame.
+
+---
+
+## Interaction with Auto-Scroll (shouldscroll)
+
+The `shouldscroll()` function in `xfid.go` determines whether the window
+should auto-scroll to keep newly written content visible. It returns `true`
+when the write position falls within the currently visible range.
+
+**Problem**: In styled mode, the plain frame (`t.fr`) is not rendered, so
+`t.org` and `t.fr.GetFrameFillStatus().Nchars` are stale. As the body grows,
+the write position exceeds the stale visible range, `shouldscroll()` returns
+`false`, and `t.Show()` is never called — the rich frame never auto-scrolls.
+
+**Fix**: `shouldscroll()` checks for styled mode and queries
+`w.VisibleRange()`, which reads from the rich frame's actual origin and
+visible line count:
+
+```go
+func shouldscroll(t *Text, q0 int, qid uint64) bool {
+    if qid == Qcons {
+        return true
+    }
+    if t.w != nil && t.w.IsStyledMode() && t.w.richBody != nil {
+        org, end := t.w.VisibleRange()
+        return org <= q0 && q0 <= end
+    }
+    return t.org <= q0 && q0 <= t.org+(t.fr.GetFrameFillStatus().Nchars)
+}
+```
+
+This mirrors the plain-mode logic — scroll if the write position is within
+what's currently visible — but queries the correct frame.
+
+**Origin sync**: `ShowInStyledMode()` syncs `w.body.org` to the rich frame's
+origin after scrolling, so that `t.org` stays approximately correct for any
+code that reads it in styled mode:
+
+```go
+func (w *Window) ShowInStyledMode(q0, q1 int) {
+    ...
+    w.scrollPreviewToMatch(rt, q0)
+    w.body.org = rt.Origin()  // Keep plain frame origin in sync
+    ...
+}
+```
+
+This ensures:
+- New output auto-scrolls to remain visible (shouldscroll returns true when
+  the write position is within the visible range of the rich frame)
+- Manual scrolling UP is preserved — new output at the end of the buffer is
+  outside the visible range, so shouldscroll returns false and the view stays
+  where the user scrolled
 
 ---
 
