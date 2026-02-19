@@ -1201,18 +1201,8 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	w := et.w
 	t := &w.body
 
-	// Get the file name
+	// Get the file name (may be empty for scratch buffers)
 	name := t.file.Name()
-	if name == "" {
-		warning(nil, "Markdown: no file name\n")
-		return
-	}
-
-	// Check if it's a markdown file
-	if !strings.HasSuffix(strings.ToLower(name), ".md") {
-		warning(nil, "Markdown: %s is not a markdown file\n", name)
-		return
-	}
 
 	// If already in preview mode, toggle it off
 	if w.IsPreviewMode() {

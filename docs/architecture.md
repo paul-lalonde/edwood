@@ -247,19 +247,28 @@ User types ──► keyboardthread ──► row.Type()
                                       ▼
                                  text.Type()
                                       │
-                                      ▼
-                              text.file.Insert()
-                                      │
-                          ┌───────────┴───────────┐
-                          ▼                       ▼
-                   Update buffer           Notify observers
-                          │                       │
-                          ▼                       ▼
-                   file.Buffer.Insert     Text.Inserted() callback
-                                                  │
-                                                  ▼
-                                          frame.Insert()
+                              ┌───────┴────────┐
+                              ▼                 ▼
+                     Control char?         Regular char
+                     (^C,^X,^V,^Z,DEL)         │
+                              │                 ▼
+                     ┌────────┴────────┐  text.file.Insert()
+                     ▼                 ▼        │
+              Program window?    Editor cmd  ┌──┴──────────┐
+              (nopen[QWevent]>0) (copy/cut/  ▼             ▼
+                     │           paste/    Update       Notify
+                     ▼           undo/     buffer      observers
+              text.file.Insert() del-right)  │             │
+              (ordinary insertion             ▼             ▼
+               → KI event)            Buffer.Insert  Text.Inserted()
+                                                           │
+                                                           ▼
+                                                     frame.Insert()
 ```
+
+Note: Cmd+C/X/V/Z always execute editor commands regardless of window type.
+Only the raw control characters (0x03, 0x18, 0x16, 0x1a, 0x7F) are passed
+through in program-controlled windows.
 
 ---
 

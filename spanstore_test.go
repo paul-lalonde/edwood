@@ -604,3 +604,122 @@ func TestStyleAttrs_DifferentBoolFlags(t *testing.T) {
 		t.Error("#47c: expected not equal for different Hidden")
 	}
 }
+
+// =========================================================================
+// Box Invalidation (tests 48–51)
+// =========================================================================
+
+var styleBox = StyleAttrs{
+	IsBox:      true,
+	BoxWidth:   200,
+	BoxHeight:  150,
+	BoxPayload: "image:/tmp/test.png",
+}
+
+func TestInsertInvalidatesBox(t *testing.T) {
+	// Inserting into a box run should invalidate it (convert to default text run).
+	s := buildStore([]StyleRun{
+		{Len: 5, Style: styleA},
+		{Len: 8, Style: styleBox},
+		{Len: 5, Style: styleC},
+	})
+
+	// Insert in the middle of the box run.
+	s.Insert(8, 3) // offset 8 is inside the box run [5,13)
+
+	// The box run should now be a default text run, extended by 3.
+	runs := s.Runs()
+	for _, r := range runs {
+		if r.Style.IsBox {
+			t.Error("box run should have been invalidated after insert")
+		}
+	}
+	expectTotalLen(t, "InsertInvalidatesBox", s, 21)
+}
+
+func TestDeleteInvalidatesPartialBox(t *testing.T) {
+	// Deleting part of a box run should invalidate it.
+	s := buildStore([]StyleRun{
+		{Len: 5, Style: styleA},
+		{Len: 8, Style: styleBox},
+		{Len: 5, Style: styleC},
+	})
+
+	// Delete 3 runes from the middle of the box run.
+	s.Delete(7, 3) // offset 7 is inside the box [5,13)
+
+	runs := s.Runs()
+	for _, r := range runs {
+		if r.Style.IsBox {
+			t.Error("box run should have been invalidated after partial delete")
+		}
+	}
+	expectTotalLen(t, "DeleteInvalidatesPartialBox", s, 15)
+}
+
+func TestDeleteRemovesFullBox(t *testing.T) {
+	// Deleting the entire box run should remove it entirely.
+	s := buildStore([]StyleRun{
+		{Len: 5, Style: styleA},
+		{Len: 8, Style: styleBox},
+		{Len: 5, Style: styleC},
+	})
+
+	// Delete the entire box run [5, 13).
+	s.Delete(5, 8)
+
+	runs := s.Runs()
+	for _, r := range runs {
+		if r.Style.IsBox {
+			t.Error("box run should have been removed after full delete")
+		}
+	}
+	expectTotalLen(t, "DeleteRemovesFullBox", s, 10)
+}
+
+func TestMergeAdjacentNeverMergesBoxWithText(t *testing.T) {
+	// Two adjacent runs: one default text, one box — should never merge
+	// even though they'd otherwise be "default" style.
+	s := NewSpanStore()
+	s.Insert(0, 10)
+	s.RegionUpdate(0, []StyleRun{
+		{Len: 5, Style: styleDefault},
+		{Len: 5, Style: styleBox},
+	})
+
+	expectNumRuns(t, "BoxNotMerged", s, 2)
+
+	runs := s.Runs()
+	if runs[0].Style.IsBox {
+		t.Error("run[0] should not be a box")
+	}
+	if !runs[1].Style.IsBox {
+		t.Error("run[1] should be a box")
+	}
+}
+
+func TestStyleAttrs_BoxEqualFields(t *testing.T) {
+	a := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50, BoxPayload: "test"}
+	b := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50, BoxPayload: "test"}
+	if !a.Equal(b) {
+		t.Error("identical box attrs should be equal")
+	}
+
+	c := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50, BoxPayload: "test"}
+	d := StyleAttrs{IsBox: true, BoxWidth: 200, BoxHeight: 50, BoxPayload: "test"}
+	if c.Equal(d) {
+		t.Error("box attrs with different widths should not be equal")
+	}
+
+	e := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50, BoxPayload: "foo"}
+	f := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50, BoxPayload: "bar"}
+	if e.Equal(f) {
+		t.Error("box attrs with different payloads should not be equal")
+	}
+
+	g := StyleAttrs{IsBox: false}
+	h := StyleAttrs{IsBox: true, BoxWidth: 100, BoxHeight: 50}
+	if g.Equal(h) {
+		t.Error("non-box and box should not be equal")
+	}
+}

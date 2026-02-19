@@ -598,3 +598,288 @@ func TestParseSpanDefs_SpanAtBufferStart(t *testing.T) {
 		t.Errorf("run[0].Len = %d; want 3", runs[0].Len)
 	}
 }
+
+// =========================================================================
+// parseSpanMessage tests (prefixed format)
+// =========================================================================
+
+func TestParseSpanMessage_Clear(t *testing.T) {
+	_, _, isClear, err := parseSpanMessage("c", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isClear {
+		t.Error("expected isClear=true")
+	}
+}
+
+func TestParseSpanMessage_SingleSpan(t *testing.T) {
+	runs, regionStart, isClear, err := parseSpanMessage("s 0 10 #ff0000", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isClear {
+		t.Error("expected isClear=false")
+	}
+	if regionStart != 0 {
+		t.Errorf("regionStart = %d; want 0", regionStart)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	if runs[0].Len != 10 {
+		t.Errorf("run[0].Len = %d; want 10", runs[0].Len)
+	}
+	wantFg := color.RGBA{R: 0xff, A: 0xff}
+	if !colorEqual(runs[0].Style.Fg, wantFg) {
+		t.Errorf("run[0].Style.Fg = %v; want %v", runs[0].Style.Fg, wantFg)
+	}
+	if runs[0].Style.IsBox {
+		t.Error("span run should not be a box")
+	}
+}
+
+func TestParseSpanMessage_MultiSpanContiguous(t *testing.T) {
+	input := "s 0 4 #0000ff\ns 4 6 -"
+	runs, regionStart, _, err := parseSpanMessage(input, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if regionStart != 0 {
+		t.Errorf("regionStart = %d; want 0", regionStart)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs; want 2", len(runs))
+	}
+	if runs[0].Len != 4 {
+		t.Errorf("run[0].Len = %d; want 4", runs[0].Len)
+	}
+	if runs[1].Len != 6 {
+		t.Errorf("run[1].Len = %d; want 6", runs[1].Len)
+	}
+}
+
+func TestParseSpanMessage_SpanWithFlags(t *testing.T) {
+	runs, _, _, err := parseSpanMessage("s 0 5 #ff0000 bold italic", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	if !runs[0].Style.Bold {
+		t.Error("expected Bold=true")
+	}
+	if !runs[0].Style.Italic {
+		t.Error("expected Italic=true")
+	}
+}
+
+func TestParseSpanMessage_BoxBasic(t *testing.T) {
+	runs, regionStart, _, err := parseSpanMessage("b 0 5 200 150", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if regionStart != 0 {
+		t.Errorf("regionStart = %d; want 0", regionStart)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	if !runs[0].Style.IsBox {
+		t.Error("expected IsBox=true")
+	}
+	if runs[0].Style.BoxWidth != 200 {
+		t.Errorf("BoxWidth = %d; want 200", runs[0].Style.BoxWidth)
+	}
+	if runs[0].Style.BoxHeight != 150 {
+		t.Errorf("BoxHeight = %d; want 150", runs[0].Style.BoxHeight)
+	}
+	if runs[0].Len != 5 {
+		t.Errorf("run Len = %d; want 5", runs[0].Len)
+	}
+}
+
+func TestParseSpanMessage_BoxWithPayload(t *testing.T) {
+	runs, _, _, err := parseSpanMessage("b 10 5 200 150 image:/path with spaces/img.png", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	if runs[0].Style.BoxPayload != "image:/path with spaces/img.png" {
+		t.Errorf("BoxPayload = %q; want %q", runs[0].Style.BoxPayload, "image:/path with spaces/img.png")
+	}
+}
+
+func TestParseSpanMessage_BoxWithColorsAndFlags(t *testing.T) {
+	runs, _, _, err := parseSpanMessage("b 0 8 200 150 #ff0000 #00ff00 bold image:/tmp/test.png", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	r := runs[0]
+	if !r.Style.IsBox {
+		t.Error("expected IsBox=true")
+	}
+	wantFg := color.RGBA{R: 0xff, A: 0xff}
+	if !colorEqual(r.Style.Fg, wantFg) {
+		t.Errorf("Fg = %v; want %v", r.Style.Fg, wantFg)
+	}
+	wantBg := color.RGBA{G: 0xff, A: 0xff}
+	if !colorEqual(r.Style.Bg, wantBg) {
+		t.Errorf("Bg = %v; want %v", r.Style.Bg, wantBg)
+	}
+	if !r.Style.Bold {
+		t.Error("expected Bold=true")
+	}
+	if r.Style.BoxPayload != "image:/tmp/test.png" {
+		t.Errorf("BoxPayload = %q; want %q", r.Style.BoxPayload, "image:/tmp/test.png")
+	}
+}
+
+func TestParseSpanMessage_BoxWithFgOnly(t *testing.T) {
+	runs, _, _, err := parseSpanMessage("b 0 5 100 50 #ff0000 bold image:foo.png", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	r := runs[0]
+	wantFg := color.RGBA{R: 0xff, A: 0xff}
+	if !colorEqual(r.Style.Fg, wantFg) {
+		t.Errorf("Fg = %v; want %v", r.Style.Fg, wantFg)
+	}
+	if r.Style.Bg != nil {
+		t.Errorf("Bg = %v; want nil", r.Style.Bg)
+	}
+	if !r.Style.Bold {
+		t.Error("expected Bold=true")
+	}
+	if r.Style.BoxPayload != "image:foo.png" {
+		t.Errorf("BoxPayload = %q; want %q", r.Style.BoxPayload, "image:foo.png")
+	}
+}
+
+func TestParseSpanMessage_MixedSpansAndBoxes(t *testing.T) {
+	input := "s 0 10 #0000cc\ns 10 5 - bold\nb 15 8 200 150 image:/tmp/diagram.png\ns 23 12 #008000 italic"
+	runs, regionStart, _, err := parseSpanMessage(input, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if regionStart != 0 {
+		t.Errorf("regionStart = %d; want 0", regionStart)
+	}
+	if len(runs) != 4 {
+		t.Fatalf("got %d runs; want 4", len(runs))
+	}
+
+	// Verify span types.
+	if runs[0].Style.IsBox {
+		t.Error("run[0] should not be a box")
+	}
+	if runs[1].Style.IsBox {
+		t.Error("run[1] should not be a box")
+	}
+	if !runs[2].Style.IsBox {
+		t.Error("run[2] should be a box")
+	}
+	if runs[3].Style.IsBox {
+		t.Error("run[3] should not be a box")
+	}
+
+	// Verify contiguity.
+	expectedLens := []int{10, 5, 8, 12}
+	for i, want := range expectedLens {
+		if runs[i].Len != want {
+			t.Errorf("run[%d].Len = %d; want %d", i, runs[i].Len, want)
+		}
+	}
+}
+
+func TestParseSpanMessage_NonContiguous(t *testing.T) {
+	input := "s 0 5 #ff0000\ns 7 3 #00ff00"
+	_, _, _, err := parseSpanMessage(input, 10)
+	if err == nil {
+		t.Fatal("expected error for non-contiguous spans")
+	}
+	if !strings.Contains(err.Error(), "contiguous") {
+		t.Errorf("error = %q; want to contain %q", err.Error(), "contiguous")
+	}
+}
+
+func TestParseSpanMessage_UnknownPrefix(t *testing.T) {
+	_, _, _, err := parseSpanMessage("x 0 5 #ff0000", 10)
+	if err == nil {
+		t.Fatal("expected error for unknown prefix")
+	}
+	if !strings.Contains(err.Error(), "unknown span command") {
+		t.Errorf("error = %q; want to contain %q", err.Error(), "unknown span command")
+	}
+}
+
+func TestParseSpanMessage_BoxMissingFields(t *testing.T) {
+	_, _, _, err := parseSpanMessage("b 0 5 200", 10)
+	if err == nil {
+		t.Fatal("expected error for box with missing height")
+	}
+	if !strings.Contains(err.Error(), "bad box format") {
+		t.Errorf("error = %q; want to contain %q", err.Error(), "bad box format")
+	}
+}
+
+func TestParseSpanMessage_ClearMustBeAlone(t *testing.T) {
+	_, _, _, err := parseSpanMessage("s 0 5 #ff0000\nc", 10)
+	if err == nil {
+		t.Fatal("expected error for clear after span")
+	}
+	if !strings.Contains(err.Error(), "clear must be the only command") {
+		t.Errorf("error = %q; want to contain %q", err.Error(), "clear must be the only command")
+	}
+}
+
+func TestParseSpanMessage_BoxClampToBuffer(t *testing.T) {
+	runs, _, _, err := parseSpanMessage("b 0 20 200 150 image:test.png", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs; want 1", len(runs))
+	}
+	if runs[0].Len != 10 {
+		t.Errorf("run Len = %d; want 10 (clamped from 20)", runs[0].Len)
+	}
+}
+
+// =========================================================================
+// isPrefixedFormat tests
+// =========================================================================
+
+func TestIsPrefixedFormat(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"clear command", "c", true},
+		{"span prefix", "s 0 10 #ff0000", true},
+		{"box prefix", "b 0 5 200 150", true},
+		{"legacy numeric", "0 10 #ff0000", false},
+		{"legacy clear", "clear", false},
+		{"empty", "", false},
+		{"unknown prefix", "x 0 5", false},
+		{"multiline span", "s 0 5 #ff0000\ns 5 5 -", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isPrefixedFormat(tc.data)
+			if got != tc.want {
+				t.Errorf("isPrefixedFormat(%q) = %v; want %v", tc.data, got, tc.want)
+			}
+		})
+	}
+}

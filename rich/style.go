@@ -37,10 +37,14 @@ type Style struct {
 	BlockquoteDepth int  // Nesting level (1 = `>`, 2 = `> >`, …)
 
 	// Image placeholder
-	Image      bool   // This span is an image placeholder
-	ImageURL   string // URL/path of the image
-	ImageAlt   string // Alt text
-	ImageWidth int    // Explicit width in pixels (0 = use natural size)
+	Image       bool   // This span is an image placeholder
+	ImageURL    string // URL/path of the image
+	ImageAlt    string // Alt text
+	ImageWidth  int    // Explicit width in pixels (0 = use natural size)
+	ImageHeight int    // Explicit height in pixels (0 = use natural/proportional size)
+
+	// Fixed-dimension box (spans protocol replaced element)
+	FixedBox bool // This span is a fixed-size replaced element
 
 	// Size multiplier (1.0 = normal body text)
 	// Used for headings: H1=2.0, H2=1.5, H3=1.25, etc.

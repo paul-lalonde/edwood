@@ -191,6 +191,11 @@ func imageBoxDimensions(box *Box, maxWidth int) (width, height int) {
 		targetWidth = box.Style.ImageWidth
 	}
 
+	// If explicit height is set, use it directly.
+	if box.Style.ImageHeight > 0 {
+		return targetWidth, box.Style.ImageHeight
+	}
+
 	// Scale height proportionally
 	if targetWidth == imgWidth {
 		return imgWidth, imgHeight
@@ -515,6 +520,10 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			if imgHeight > boxHeight {
 				boxHeight = imgHeight
 			}
+		} else if box.IsFixedBox() {
+			if box.Style.ImageHeight > boxHeight {
+				boxHeight = box.Style.ImageHeight
+			}
 		}
 
 		// Track actual content height (for non-newline, non-tab boxes)
@@ -590,8 +599,9 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				// instead of using the full gutter
 				indentPixels += ListIndentWidth
 			}
-		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || box.Style.Image {
+		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox) {
 			// All scrollable block elements get gutter indentation
+			// (FixedBox elements from the spans protocol are inline, not block)
 			indentPixels = gutterIndent
 		}
 
@@ -607,6 +617,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		} else if box.IsImage() {
 			// For image boxes, use scaled dimensions
 			width, _ = imageBoxDimensions(box, frameWidth)
+		} else if box.IsFixedBox() {
+			width = box.Style.ImageWidth
 		} else {
 			width = boxWidth(box, getFontForStyle(box.Style))
 		}
@@ -627,7 +639,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		if box.Style.Blockquote {
 			currentIndent += box.Style.BlockquoteDepth * ListIndentWidth
 		}
-		if (box.Style.Block && box.Style.Code) || box.Style.Table || box.Style.Image {
+		if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox) {
 			currentIndent = gutterIndent
 		}
 

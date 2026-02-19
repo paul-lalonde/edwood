@@ -104,8 +104,18 @@ definitions that replace all existing spans within the covered region. The
 region is defined implicitly by the first span's offset and the last span's
 offset + length.
 
-A write consists of one or more newline-separated span definitions:
+A write consists of one or more newline-separated span definitions. The
+preferred format uses single-letter prefixes (`s` for spans, `b` for boxes,
+`c` for clear). The legacy unprefixed format is still accepted.
 
+Prefixed format:
+```
+s <offset> <length> <fg-color> [<bg-color>] [<flags>...]
+b <offset> <length> <width> <height> [<fg-color>] [<bg-color>] [<flags>...] [<payload>...]
+c
+```
+
+Legacy format (still accepted):
 ```
 <offset> <length> <fg-color> [<bg-color>] [<flags>...]
 ```
@@ -117,6 +127,11 @@ Fields:
 - `bg-color` — (optional) background color as `#rrggbb` hex string, or `-`
   for default. Omitted means default.
 - `flags` — (optional) space-separated tokens: `bold`, `italic`, `hidden`.
+- `width`, `height` — (box only) pixel dimensions.
+- `payload` — (box only) rest of line, opaque string for the layout engine.
+
+See `spans-protocol.md` for the full protocol specification and
+`spans-box.md` for the box element design.
 
 **Spans within a single write must be contiguous and non-overlapping.** The
 first span starts at offset S, and each subsequent span starts where the

@@ -63,15 +63,10 @@ func (ps *PreviewState) IsMarkdown() bool {
 
 // CanPreview determines if preview can be enabled.
 // Returns (canPreview, reason) where reason is non-empty if canPreview is false.
+// Any window can be previewed — the user explicitly invokes "Markdown".
 func (ps *PreviewState) CanPreview() (bool, string) {
 	if !ps.hasWindow {
 		return false, "no window"
-	}
-	if ps.fileName == "" {
-		return false, "no file name"
-	}
-	if !ps.IsMarkdown() {
-		return false, "not markdown"
 	}
 	return true, ""
 }
@@ -107,9 +102,10 @@ func (p *PreviewOperation) RequiresWindow() bool {
 	return true
 }
 
-// RequiresMarkdown returns true because preview only works on .md files.
+// RequiresMarkdown returns false — preview can be manually invoked on any window.
+// Auto-behaviors (tag button, auto-preview on open) still check IsMarkdown().
 func (p *PreviewOperation) RequiresMarkdown() bool {
-	return true
+	return false
 }
 
 // IsToggle returns true because Markdown toggles preview mode on/off.

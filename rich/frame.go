@@ -173,6 +173,13 @@ type frameImpl struct {
 
 	// Tab width in characters (default 4 when zero)
 	maxtabChars int
+
+	// Layout cache: stores the result of contentToBoxes + layoutBoxes so
+	// repeated Redraw/TotalLines/etc. calls reuse expensive line-breaking
+	// computation when content and frame width are unchanged.
+	cachedBaseLines []Line // cached result of layoutBoxes
+	layoutDirty     bool   // true when cache needs recomputation
+	cachedWidth     int    // frame width used for cached layout
 }
 
 // maxtabPixels returns the tab width in pixels.
@@ -210,6 +217,7 @@ func (f *frameImpl) Clear() {
 // SetContent sets the content to display.
 func (f *frameImpl) SetContent(c Content) {
 	f.content = c
+	f.layoutDirty = true
 }
 
 // Rect returns the frame's rectangle.
@@ -222,6 +230,9 @@ func (f *frameImpl) Rect() image.Rectangle {
 // Subsequent calls to layout-dependent methods (TotalLines, Redraw, etc.)
 // will use the new rectangle dimensions.
 func (f *frameImpl) SetRect(r image.Rectangle) {
+	if r.Dx() != f.rect.Dx() {
+		f.layoutDirty = true
+	}
 	f.rect = r
 }
 
@@ -733,20 +744,7 @@ func (f *frameImpl) TotalLines() int {
 	if f.font == nil || f.content == nil {
 		return 0
 	}
-
-	// Convert content to boxes
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
-		return 0
-	}
-
-	// Calculate frame width for layout
-	frameWidth := f.rect.Dx()
-
-	maxtab := f.maxtabPixels()
-
-	// Layout all boxes (using cache if available)
-	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	lines := f.ensureBaseLayout()
 	return len(lines)
 }
 
@@ -756,20 +754,7 @@ func (f *frameImpl) LineStartRunes() []int {
 	if f.font == nil || f.content == nil {
 		return []int{0}
 	}
-
-	// Convert content to boxes
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
-		return []int{0}
-	}
-
-	// Calculate frame width for layout
-	frameWidth := f.rect.Dx()
-
-	maxtab := f.maxtabPixels()
-
-	// Layout all boxes (using cache if available)
-	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	lines := f.ensureBaseLayout()
 	if len(lines) == 0 {
 		return []int{0}
 	}
@@ -800,15 +785,10 @@ func (f *frameImpl) LinePixelHeights() []int {
 	if f.font == nil || f.content == nil {
 		return nil
 	}
-
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
+	lines := f.ensureBaseLayout()
+	if len(lines) == 0 {
 		return nil
 	}
-
-	frameWidth := f.rect.Dx()
-	maxtab := f.maxtabPixels()
-	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
 
 	heights := make([]int, len(lines))
 	for i, line := range lines {
@@ -826,15 +806,7 @@ func (f *frameImpl) SnapOriginToSlideStart(targetOrigin int) int {
 	if f.font == nil || f.content == nil {
 		return targetOrigin
 	}
-
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
-		return targetOrigin
-	}
-
-	frameWidth := f.rect.Dx()
-	maxtab := f.maxtabPixels()
-	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	lines := f.ensureBaseLayout()
 	if len(lines) == 0 {
 		return targetOrigin
 	}
@@ -899,18 +871,14 @@ func (f *frameImpl) TotalDocumentHeight() int {
 	if f.font == nil || f.content == nil {
 		return 0
 	}
-
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
+	base := f.ensureBaseLayout()
+	if len(base) == 0 {
 		return 0
 	}
 
+	// Clone because adjustLayoutForScrollbars/adjustLayoutForSlides mutate Y.
+	lines := cloneLines(base)
 	frameWidth := f.rect.Dx()
-	maxtab := f.maxtabPixels()
-	lines := f.layoutBoxes(boxes, frameWidth, maxtab)
-	if len(lines) == 0 {
-		return 0
-	}
 
 	// Apply the same scrollbar adjustments that layoutFromOrigin uses,
 	// so the total height accounts for horizontal scrollbar space.
@@ -1168,8 +1136,8 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
 				continue
 			}
-			// Skip images - they are handled in Phase 5
-			if pb.Box.Style.Image {
+			// Skip images and fixed boxes - they are handled in Phase 5
+			if pb.Box.Style.Image || pb.Box.IsFixedBox() {
 				continue
 			}
 			if len(pb.Box.Text) == 0 {
@@ -1204,7 +1172,7 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 		}
 	}
 
-	// Phase 5: Render images
+	// Phase 5: Render images and fixed boxes
 	// Images within a scrollable block region are shifted by -hOffset.
 	for lineIdx, line := range lines {
 		// Skip lines that start at or below the frame bottom
@@ -1213,6 +1181,16 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 		}
 		hOff := hOffsetForLine(lineIdx)
 		for _, pb := range line.Boxes {
+			// Fixed boxes without images: draw a colored rectangle.
+			if pb.Box.IsFixedBox() && !pb.Box.Style.Image {
+				pt := image.Point{
+					X: offset.X + pb.X,
+					Y: offset.Y + line.Y,
+				}
+				f.drawFixedBox(target, pt, pb.Box, frameWidth, frameHeight, offset)
+				continue
+			}
+
 			// Check if this is an image box
 			if !pb.Box.Style.Image {
 				continue
@@ -1450,20 +1428,17 @@ func (f *frameImpl) drawBlockquoteBorders(target edwooddraw.Image, line Line, of
 // first visible content starts at Y=0.
 // Returns the lines and the rune offset of the first visible content.
 func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
-	// Convert content to boxes
-	boxes := contentToBoxes(f.content)
-	if len(boxes) == 0 {
+	base := f.ensureBaseLayout()
+	if len(base) == 0 {
 		return nil, 0
 	}
 
-	// Calculate frame width for layout
 	frameWidth := f.rect.Dx()
 
-	maxtab := f.maxtabPixels()
-
-	// If origin is 0 and no pixel offset, just return the normal layout (using cache if available)
+	// If origin is 0 and no pixel offset, just return the normal layout.
+	// Clone because scrollbar/slide adjustments mutate Y.
 	if f.origin == 0 && f.originYOffset == 0 {
-		lines := f.layoutBoxes(boxes, frameWidth, maxtab)
+		lines := cloneLines(base)
 		regions := findBlockRegions(lines)
 		f.syncHScrollState(len(regions))
 		f.hscrollRegionOffset = 0
@@ -1476,8 +1451,8 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		return lines, 0
 	}
 
-	// Layout all boxes first (using cache if available)
-	allLines := f.layoutBoxes(boxes, frameWidth, maxtab)
+	// Clone because scrollbar adjustments mutate Y.
+	allLines := cloneLines(base)
 	if len(allLines) == 0 {
 		return nil, 0
 	}
@@ -1803,6 +1778,9 @@ func (f *frameImpl) boxHeight(box Box) int {
 		if h > 0 {
 			return h
 		}
+	}
+	if box.IsFixedBox() {
+		return box.Style.ImageHeight
 	}
 	return f.fontForStyle(box.Style).Height()
 }
@@ -2312,6 +2290,38 @@ func (f *frameImpl) layoutBoxes(boxes []Box, frameWidth, maxtab int) []Line {
 	return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 }
 
+// ensureBaseLayout returns the base layout lines (before any scrollbar/slide Y
+// adjustments), using a cache when content and frame width are unchanged.
+// Callers that mutate the returned lines (e.g. adjustLayoutForScrollbars)
+// must clone the slice first via cloneLines.
+func (f *frameImpl) ensureBaseLayout() []Line {
+	frameWidth := f.rect.Dx()
+	if !f.layoutDirty && f.cachedBaseLines != nil && f.cachedWidth == frameWidth {
+		return f.cachedBaseLines
+	}
+	boxes := contentToBoxes(f.content)
+	if len(boxes) == 0 {
+		f.cachedBaseLines = nil
+		f.cachedWidth = frameWidth
+		f.layoutDirty = false
+		return nil
+	}
+	maxtab := f.maxtabPixels()
+	f.cachedBaseLines = f.layoutBoxes(boxes, frameWidth, maxtab)
+	f.cachedWidth = frameWidth
+	f.layoutDirty = false
+	return f.cachedBaseLines
+}
+
+// cloneLines returns a shallow copy of the Line slice. This is sufficient
+// because adjustLayoutForScrollbars/adjustLayoutForSlides only modify Y
+// values on the Line structs, not the PositionedBox slices within them.
+func cloneLines(lines []Line) []Line {
+	clone := make([]Line, len(lines))
+	copy(clone, lines)
+	return clone
+}
+
 // drawImageTo renders an image box to the target at the appropriate position.
 // The image is clipped to the frame boundaries using Intersect.
 func (f *frameImpl) drawImageTo(target edwooddraw.Image, pb PositionedBox, line Line, offset image.Point, frameWidth, frameHeight int) {
@@ -2444,4 +2454,28 @@ func (f *frameImpl) drawImageErrorPlaceholder(target edwooddraw.Image, pt image.
 
 	// Render the placeholder text
 	target.Bytes(pt, blueColor, image.ZP, f.font, []byte(placeholder))
+}
+
+// drawFixedBox renders a fixed-dimension box as a colored rectangle.
+// Used for spans-protocol box elements without an image payload.
+func (f *frameImpl) drawFixedBox(target edwooddraw.Image, pt image.Point, box Box, frameWidth, frameHeight int, offset image.Point) {
+	w := box.Style.ImageWidth
+	h := box.Style.ImageHeight
+
+	boxRect := image.Rect(pt.X, pt.Y, pt.X+w, pt.Y+h)
+	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+	boxRect = boxRect.Intersect(clipRect)
+	if boxRect.Empty() {
+		return
+	}
+
+	// Draw background color.
+	bgColor := box.Style.Bg
+	if bgColor == nil {
+		bgColor = color.RGBA{R: 200, G: 200, B: 200, A: 255} // light gray default
+	}
+	bgImg := f.allocColorImage(bgColor)
+	if bgImg != nil {
+		target.Draw(boxRect, bgImg, nil, image.ZP)
+	}
 }

@@ -576,8 +576,30 @@ func xfidspanswrite(x *Xfid, w *Window) {
 
 	bufLen := w.body.Nc()
 
-	// Handle special commands.
-	if data == "clear" {
+	// Detect whether data uses the new prefixed format (lines starting
+	// with "c", "s", or "b") or the legacy unprefixed format.
+	var runs []StyleRun
+	var regionStart int
+	var isClear bool
+	var err error
+
+	if isPrefixedFormat(data) {
+		runs, regionStart, isClear, err = parseSpanMessage(data, bufLen)
+	} else {
+		// Legacy format: handle "clear" command and unprefixed span defs.
+		if data == "clear" {
+			isClear = true
+		} else {
+			runs, regionStart, err = parseSpanDefs(data, bufLen)
+		}
+	}
+
+	if err != nil {
+		x.respond(&fc, err)
+		return
+	}
+
+	if isClear {
 		if w.spanStore != nil {
 			w.spanStore.Clear()
 		}
@@ -585,13 +607,6 @@ func xfidspanswrite(x *Xfid, w *Window) {
 		w.styledSuppressed = false // spans are gone; reset suppression
 		fc.Count = x.fcall.Count
 		x.respond(&fc, nil)
-		return
-	}
-
-	// Parse span definitions.
-	runs, regionStart, err := parseSpanDefs(data, bufLen)
-	if err != nil {
-		x.respond(&fc, err)
 		return
 	}
 

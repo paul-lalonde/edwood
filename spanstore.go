@@ -10,6 +10,12 @@ type StyleAttrs struct {
 	Bold   bool
 	Italic bool
 	Hidden bool // reserved for future use
+
+	// Box fields (zero values = not a box)
+	IsBox      bool
+	BoxWidth   int    // pixels
+	BoxHeight  int    // pixels
+	BoxPayload string // opaque, e.g. "image:/path/to/img.png"
 }
 
 // colorEqual compares two color.Color values, handling nil.
@@ -31,7 +37,11 @@ func (a StyleAttrs) Equal(b StyleAttrs) bool {
 		colorEqual(a.Bg, b.Bg) &&
 		a.Bold == b.Bold &&
 		a.Italic == b.Italic &&
-		a.Hidden == b.Hidden
+		a.Hidden == b.Hidden &&
+		a.IsBox == b.IsBox &&
+		a.BoxWidth == b.BoxWidth &&
+		a.BoxHeight == b.BoxHeight &&
+		a.BoxPayload == b.BoxPayload
 }
 
 // StyleRun is a contiguous range of runes sharing the same style.
@@ -187,6 +197,20 @@ func (s *SpanStore) findRunAt(pos int) (int, int) {
 	return n, 0
 }
 
+// invalidateBoxIfNeeded resets a box run to a default text run.
+// If the run at logicalIdx is not a box, this is a no-op.
+func (s *SpanStore) invalidateBoxIfNeeded(logicalIdx int) {
+	if logicalIdx < 0 || logicalIdx >= s.NumRuns() {
+		return
+	}
+	r := s.getRun(logicalIdx)
+	if !r.Style.IsBox {
+		return
+	}
+	r.Style = StyleAttrs{}
+	s.setRun(logicalIdx, r)
+}
+
 // Insert adjusts runs when text is inserted at rune position pos.
 func (s *SpanStore) Insert(pos, length int) {
 	if length <= 0 {
@@ -206,6 +230,7 @@ func (s *SpanStore) Insert(pos, length int) {
 
 	// Insert at start: extend first run.
 	if pos == 0 {
+		s.invalidateBoxIfNeeded(0)
 		r := s.getRun(0)
 		r.Len += length
 		s.setRun(0, r)
@@ -215,6 +240,7 @@ func (s *SpanStore) Insert(pos, length int) {
 
 	// Insert at end: extend last run.
 	if pos >= s.totalLen {
+		s.invalidateBoxIfNeeded(n - 1)
 		r := s.getRun(n - 1)
 		r.Len += length
 		s.setRun(n-1, r)
@@ -226,11 +252,13 @@ func (s *SpanStore) Insert(pos, length int) {
 
 	if offsetInRun == 0 {
 		// At run boundary: extend the preceding run.
+		s.invalidateBoxIfNeeded(runIdx - 1)
 		r := s.getRun(runIdx - 1)
 		r.Len += length
 		s.setRun(runIdx-1, r)
 	} else {
 		// Mid-run: extend the containing run.
+		s.invalidateBoxIfNeeded(runIdx)
 		r := s.getRun(runIdx)
 		r.Len += length
 		s.setRun(runIdx, r)
@@ -253,6 +281,7 @@ func (s *SpanStore) Delete(pos, length int) {
 
 	if startIdx == endIdx {
 		// Deletion within a single run.
+		s.invalidateBoxIfNeeded(startIdx)
 		r := s.getRun(startIdx)
 		r.Len -= length
 		if r.Len == 0 {
@@ -267,6 +296,9 @@ func (s *SpanStore) Delete(pos, length int) {
 	}
 
 	// Deletion spans multiple runs.
+	s.invalidateBoxIfNeeded(startIdx)
+	s.invalidateBoxIfNeeded(endIdx)
+
 	// Shrink the first run.
 	firstRun := s.getRun(startIdx)
 	firstRun.Len = startOff

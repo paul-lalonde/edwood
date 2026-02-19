@@ -471,13 +471,13 @@ func writeSpans(fsys *client.Fsys, id int, spans []span) error {
 		var line string
 		switch {
 		case s.bg != "" && s.bold:
-			line = fmt.Sprintf("%d %d %s %s bold\n", s.offset, s.length, s.color, s.bg)
+			line = fmt.Sprintf("s %d %d %s %s bold\n", s.offset, s.length, s.color, s.bg)
 		case s.bg != "":
-			line = fmt.Sprintf("%d %d %s %s\n", s.offset, s.length, s.color, s.bg)
+			line = fmt.Sprintf("s %d %d %s %s\n", s.offset, s.length, s.color, s.bg)
 		case s.bold:
-			line = fmt.Sprintf("%d %d %s bold\n", s.offset, s.length, s.color)
+			line = fmt.Sprintf("s %d %d %s bold\n", s.offset, s.length, s.color)
 		default:
-			line = fmt.Sprintf("%d %d %s\n", s.offset, s.length, s.color)
+			line = fmt.Sprintf("s %d %d %s\n", s.offset, s.length, s.color)
 		}
 
 		if buf.Len()+len(line) > maxChunk && buf.Len() > 0 {

@@ -6,6 +6,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -2384,6 +2385,12 @@ func (w *Window) initStyledMode() {
 		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
 	}
 
+	// Create an image cache for box elements that reference images.
+	if w.imageCache == nil {
+		w.imageCache = rich.NewImageCache(0)
+	}
+	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+
 	rt.Init(display, font, rtOpts...)
 
 	w.richBody = rt
@@ -2444,10 +2451,18 @@ func (w *Window) buildStyledContent() rich.Content {
 		}
 		buf := make([]rune, run.Len)
 		w.body.file.Read(offset, buf)
+		text := string(buf)
+
+		var style rich.Style
+		if run.Style.IsBox {
+			style = boxStyleToRichStyle(run.Style, text)
+		} else {
+			style = styleAttrsToRichStyle(run.Style)
+		}
 
 		span := rich.Span{
-			Text:  string(buf),
-			Style: styleAttrsToRichStyle(run.Style),
+			Text:  text,
+			Style: style,
 		}
 		content = append(content, span)
 		offset += run.Len
@@ -2464,6 +2479,31 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s.Bg = sa.Bg
 	s.Bold = sa.Bold
 	s.Italic = sa.Italic
+	return s
+}
+
+// boxStyleToRichStyle maps a box StyleAttrs (IsBox=true) to rich.Style for rendering.
+// Boxes without an image: payload are fixed-dimension colored rectangles.
+// Boxes with an image: payload also enter the image rendering pipeline.
+func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
+	s := rich.Style{
+		Scale:       1.0,
+		FixedBox:    true,
+		ImageWidth:  sa.BoxWidth,
+		ImageHeight: sa.BoxHeight,
+		ImageAlt:    altText,
+	}
+	s.Fg = sa.Fg
+	s.Bg = sa.Bg
+	s.Bold = sa.Bold
+	s.Italic = sa.Italic
+
+	// Parse payload: if it starts with "image:", set Image + ImageURL.
+	if strings.HasPrefix(sa.BoxPayload, "image:") {
+		s.Image = true
+		s.ImageURL = strings.TrimPrefix(sa.BoxPayload, "image:")
+	}
+
 	return s
 }
 

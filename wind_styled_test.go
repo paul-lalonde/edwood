@@ -551,6 +551,191 @@ func TestStyledShowSendsSelectionEvent(t *testing.T) {
 // TestStyledShowScrollsRichText verifies that when Show() is called in
 // styled mode for text that is off-screen, the rich text frame scrolls
 // (not just the hidden plain text frame).
+// =========================================================================
+// boxStyleToRichStyle tests
+// =========================================================================
+
+func TestBoxStyleToRichStyleImagePayload(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:      true,
+		BoxWidth:   200,
+		BoxHeight:  150,
+		BoxPayload: "image:/tmp/diagram.png",
+		Fg:         color.RGBA{R: 0xff, A: 0xff},
+		Bold:       true,
+	}
+	got := boxStyleToRichStyle(sa, "alt text")
+
+	if !got.Image {
+		t.Error("Image should be true")
+	}
+	if got.ImageWidth != 200 {
+		t.Errorf("ImageWidth = %d; want 200", got.ImageWidth)
+	}
+	if got.ImageHeight != 150 {
+		t.Errorf("ImageHeight = %d; want 150", got.ImageHeight)
+	}
+	if got.ImageURL != "/tmp/diagram.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "/tmp/diagram.png")
+	}
+	if got.ImageAlt != "alt text" {
+		t.Errorf("ImageAlt = %q; want %q", got.ImageAlt, "alt text")
+	}
+	if !got.Bold {
+		t.Error("Bold should be true")
+	}
+	if got.Scale != 1.0 {
+		t.Errorf("Scale = %v; want 1.0", got.Scale)
+	}
+	if got.Fg == nil {
+		t.Error("Fg should not be nil")
+	}
+}
+
+func TestBoxStyleToRichStyleNoPayload(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:     true,
+		BoxWidth:  100,
+		BoxHeight: 50,
+	}
+	got := boxStyleToRichStyle(sa, "placeholder")
+
+	if got.Image {
+		t.Error("Image should be false for no-payload box")
+	}
+	if !got.FixedBox {
+		t.Error("FixedBox should be true")
+	}
+	if got.ImageURL != "" {
+		t.Errorf("ImageURL = %q; want empty", got.ImageURL)
+	}
+	if got.ImageAlt != "placeholder" {
+		t.Errorf("ImageAlt = %q; want %q", got.ImageAlt, "placeholder")
+	}
+	if got.ImageWidth != 100 {
+		t.Errorf("ImageWidth = %d; want 100", got.ImageWidth)
+	}
+	if got.ImageHeight != 50 {
+		t.Errorf("ImageHeight = %d; want 50", got.ImageHeight)
+	}
+}
+
+func TestBoxStyleToRichStyleNonImagePayload(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:      true,
+		BoxWidth:   300,
+		BoxHeight:  200,
+		BoxPayload: "widget:chart-v2",
+	}
+	got := boxStyleToRichStyle(sa, "chart")
+
+	if got.ImageURL != "" {
+		t.Errorf("ImageURL = %q; want empty for non-image payload", got.ImageURL)
+	}
+}
+
+// =========================================================================
+// buildStyledContent with boxes tests
+// =========================================================================
+
+func TestBuildStyledContentBoxRun(t *testing.T) {
+	w := makeStyledWindow(t, "hello world test!") // 17 runes
+
+	w.spanStore = NewSpanStore()
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 6, Style: StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
+		{Len: 5, Style: StyleAttrs{
+			IsBox:      true,
+			BoxWidth:   200,
+			BoxHeight:  100,
+			BoxPayload: "image:/tmp/test.png",
+		}},
+		{Len: 6, Style: StyleAttrs{Fg: color.RGBA{B: 0xff, A: 0xff}}},
+	})
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans; want 3", len(content))
+	}
+
+	// First span: regular text.
+	if content[0].Style.Image {
+		t.Error("span[0] should not be an image")
+	}
+	if content[0].Text != "hello " {
+		t.Errorf("span[0] text = %q; want %q", content[0].Text, "hello ")
+	}
+
+	// Second span: box (image).
+	if !content[1].Style.Image {
+		t.Error("span[1] should be an image")
+	}
+	if content[1].Style.ImageWidth != 200 {
+		t.Errorf("span[1] ImageWidth = %d; want 200", content[1].Style.ImageWidth)
+	}
+	if content[1].Style.ImageHeight != 100 {
+		t.Errorf("span[1] ImageHeight = %d; want 100", content[1].Style.ImageHeight)
+	}
+	if content[1].Style.ImageURL != "/tmp/test.png" {
+		t.Errorf("span[1] ImageURL = %q; want %q", content[1].Style.ImageURL, "/tmp/test.png")
+	}
+	if content[1].Text != "world" {
+		t.Errorf("span[1] text = %q; want %q", content[1].Text, "world")
+	}
+	if content[1].Style.ImageAlt != "world" {
+		t.Errorf("span[1] ImageAlt = %q; want %q", content[1].Style.ImageAlt, "world")
+	}
+
+	// Third span: regular text.
+	if content[2].Style.Image {
+		t.Error("span[2] should not be an image")
+	}
+}
+
+func TestBuildStyledContentMixedSpansAndBoxes(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghijklmnop") // 16 runes
+
+	w.spanStore = NewSpanStore()
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 4, Style: StyleAttrs{Bold: true}},
+		{Len: 4, Style: StyleAttrs{
+			IsBox: true, BoxWidth: 100, BoxHeight: 50,
+			BoxPayload: "image:/img1.png",
+		}},
+		{Len: 4, Style: StyleAttrs{Italic: true}},
+		{Len: 4, Style: StyleAttrs{
+			IsBox: true, BoxWidth: 200, BoxHeight: 100,
+		}},
+	})
+
+	content := w.buildStyledContent()
+	if len(content) != 4 {
+		t.Fatalf("got %d spans; want 4", len(content))
+	}
+
+	// text, image-box, text, fixed-box pattern.
+	if content[0].Style.Image || content[0].Style.FixedBox {
+		t.Error("span[0] should not be image or fixed box")
+	}
+	if !content[1].Style.Image {
+		t.Error("span[1] should be image (has image: payload)")
+	}
+	if content[2].Style.Image || content[2].Style.FixedBox {
+		t.Error("span[2] should not be image or fixed box")
+	}
+	if content[3].Style.Image {
+		t.Error("span[3] should not be image (no image: payload)")
+	}
+	if !content[3].Style.FixedBox {
+		t.Error("span[3] should be FixedBox")
+	}
+
+	// Verify the second box has no ImageURL since payload is empty.
+	if content[3].Style.ImageURL != "" {
+		t.Errorf("span[3] ImageURL = %q; want empty", content[3].Style.ImageURL)
+	}
+}
+
 func TestStyledShowScrollsRichText(t *testing.T) {
 	// Build body with enough text that later content is off-screen.
 	var bodyText string

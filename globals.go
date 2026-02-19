@@ -242,6 +242,11 @@ type globals struct {
 	// Sends trigger warning display in the UI.
 	cwarn chan uint
 
+	// previewRenderCh receives render callbacks from preview debounce timers.
+	// The timer goroutine posts a closure that performs the deferred render;
+	// keyboardthread picks it up and executes it on the main goroutine.
+	previewRenderCh chan func()
+
 	// ═══════════════════════════════════════════════════════════════════
 	// Edit Command Synchronization
 	// ═══════════════════════════════════════════════════════════════════
@@ -286,7 +291,8 @@ func makeglobals() *globals {
 		cedit:      make(chan int),
 		cexit:      make(chan struct{}),
 		cwarn:      make(chan uint),
-		mousestate: ui.NewMouseState(),
+		mousestate:      ui.NewMouseState(),
+		previewRenderCh: make(chan func(), 1),
 	}
 
 	if home, err := os.UserHomeDir(); err == nil {

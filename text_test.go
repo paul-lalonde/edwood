@@ -487,3 +487,66 @@ func TestTextTypeTabInTag(t *testing.T) {
 		return text
 	})
 }
+
+// TestTextTypeControlCharPassThrough verifies that in program-controlled
+// windows (nopen[QWevent] > 0), raw control characters like ^C (0x03) and
+// DEL (0x7F) are inserted as ordinary characters rather than triggering
+// editor commands. In regular windows, they should still act as shortcuts.
+func TestTextTypeControlCharPassThrough(t *testing.T) {
+	controlChars := []struct {
+		name string
+		r    rune
+	}{
+		{"CtrlC", 0x03},
+		{"CtrlZ", 0x1a},
+		{"CtrlX", 0x18},
+		{"CtrlV", 0x16},
+		{"DEL", 0x7F},
+	}
+
+	for _, cc := range controlChars {
+		t.Run(cc.name+"_ProgramControlled", func(t *testing.T) {
+			w := makeTestTextTabexpandState()
+			body := &w.body
+			body.what = Body
+
+			// Simulate program-controlled window (event file open).
+			w.owner = 'T'
+			w.nopen[QWevent]++
+
+			// Type 'a', then the control char.
+			body.Type('a')
+			body.Type(cc.r)
+
+			got := body.file.String()
+			want := string([]rune{'a', cc.r})
+			if got != want {
+				t.Errorf("buffer = %q; want %q (control char should be inserted in program-controlled window)", got, want)
+			}
+		})
+
+		t.Run(cc.name+"_RegularWindow", func(t *testing.T) {
+			w := makeTestTextTabexpandState()
+			body := &w.body
+			body.what = Body
+
+			// No nopen[QWevent] — regular editing window.
+
+			// Type 'a', 'b', 'c' to have some content.
+			body.Type('a')
+			body.Type('b')
+			body.Type('c')
+			before := body.file.String()
+
+			// Type the control character — should NOT insert it.
+			body.Type(cc.r)
+			after := body.file.String()
+
+			// The control char should not have been inserted as a literal character.
+			badResult := before + string(cc.r)
+			if after == badResult {
+				t.Errorf("control char %q was inserted literally in regular window; should have been handled as editor command", cc.r)
+			}
+		})
+	}
+}

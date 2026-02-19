@@ -76,29 +76,29 @@ func TestPreviewStateCanPreview(t *testing.T) {
 			name:       "empty filename",
 			fileName:   "",
 			hasWindow:  true,
-			wantOK:     false,
-			wantReason: "no file name",
+			wantOK:     true,
+			wantReason: "",
 		},
 		{
 			name:       "non-markdown file",
 			fileName:   "main.go",
 			hasWindow:  true,
-			wantOK:     false,
-			wantReason: "not markdown",
+			wantOK:     true,
+			wantReason: "",
 		},
 		{
 			name:       "text file",
 			fileName:   "notes.txt",
 			hasWindow:  true,
-			wantOK:     false,
-			wantReason: "not markdown",
+			wantOK:     true,
+			wantReason: "",
 		},
 		{
 			name:       "file with md in name but wrong extension",
 			fileName:   "markdown_notes.txt",
 			hasWindow:  true,
-			wantOK:     false,
-			wantReason: "not markdown",
+			wantOK:     true,
+			wantReason: "",
 		},
 		{
 			name:       "directory path with markdown file",
@@ -189,8 +189,8 @@ func TestPreviewOperationNew(t *testing.T) {
 	if !op.RequiresWindow() {
 		t.Error("preview should require a window")
 	}
-	if !op.RequiresMarkdown() {
-		t.Error("preview should require markdown file")
+	if op.RequiresMarkdown() {
+		t.Error("preview should not require markdown file (manual invocation on any window)")
 	}
 	if !op.IsToggle() {
 		t.Error("Markdown should be a toggle command")

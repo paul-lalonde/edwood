@@ -4477,3 +4477,162 @@ func TestExpandWordAtPos(t *testing.T) {
 		})
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheme A: Layout cache tests
+// ═══════════════════════════════════════════════════════════════════
+
+// newTestFrame is a helper that creates a frameImpl with a display/font/content
+// ready for layout-cache tests.
+func newTestFrame(t *testing.T, width, height int, content Content) *frameImpl {
+	t.Helper()
+	rect := image.Rect(0, 0, width, height)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+
+	fi := &frameImpl{
+		rect:       rect,
+		display:    display,
+		font:       font,
+		background: bgImage,
+		textColor:  textImage,
+		content:    content,
+		layoutDirty: true,
+	}
+	return fi
+}
+
+// TestLayoutCacheReuse verifies that ensureBaseLayout returns the same slice
+// pointer on consecutive calls when content and width are unchanged.
+func TestLayoutCacheReuse(t *testing.T) {
+	fi := newTestFrame(t, 200, 300, Plain("hello world"))
+
+	lines1 := fi.ensureBaseLayout()
+	if lines1 == nil {
+		t.Fatal("first ensureBaseLayout returned nil")
+	}
+
+	lines2 := fi.ensureBaseLayout()
+	if lines2 == nil {
+		t.Fatal("second ensureBaseLayout returned nil")
+	}
+
+	// Same slice header (pointer + len + cap) means no recomputation.
+	if &lines1[0] != &lines2[0] {
+		t.Error("ensureBaseLayout recomputed layout despite no changes")
+	}
+}
+
+// TestLayoutCacheInvalidateOnContentChange verifies that SetContent
+// invalidates the cache and the next ensureBaseLayout recomputes.
+func TestLayoutCacheInvalidateOnContentChange(t *testing.T) {
+	fi := newTestFrame(t, 200, 300, Plain("hello"))
+
+	lines1 := fi.ensureBaseLayout()
+	if lines1 == nil {
+		t.Fatal("first ensureBaseLayout returned nil")
+	}
+
+	// Change content.
+	fi.SetContent(Plain("hello world, this is new content"))
+
+	lines2 := fi.ensureBaseLayout()
+	if lines2 == nil {
+		t.Fatal("second ensureBaseLayout returned nil")
+	}
+
+	// Must be a different slice (recomputed).
+	if len(lines1) > 0 && len(lines2) > 0 && &lines1[0] == &lines2[0] {
+		t.Error("ensureBaseLayout should recompute after SetContent")
+	}
+}
+
+// TestLayoutCacheInvalidateOnResize verifies that SetRect with a different
+// width invalidates the cache.
+func TestLayoutCacheInvalidateOnResize(t *testing.T) {
+	fi := newTestFrame(t, 200, 300, Plain("hello world"))
+
+	lines1 := fi.ensureBaseLayout()
+	if lines1 == nil {
+		t.Fatal("first ensureBaseLayout returned nil")
+	}
+
+	// Resize to a different width.
+	fi.SetRect(image.Rect(0, 0, 60, 300))
+
+	if !fi.layoutDirty {
+		t.Error("layoutDirty should be true after SetRect with different width")
+	}
+
+	lines2 := fi.ensureBaseLayout()
+	if lines2 == nil {
+		t.Fatal("second ensureBaseLayout returned nil")
+	}
+
+	// Different width → different layout (narrow frame wraps text).
+	if len(lines1) > 0 && len(lines2) > 0 && &lines1[0] == &lines2[0] {
+		t.Error("ensureBaseLayout should recompute after width change")
+	}
+}
+
+// TestLayoutCachePreservesCorrectness verifies that the cached layout
+// produces the same results as uncached (by comparing TotalLines and
+// LineStartRunes between first and second calls).
+func TestLayoutCachePreservesCorrectness(t *testing.T) {
+	content := Content{
+		{Text: "Heading\n", Style: StyleH1},
+		{Text: "Normal text with "},
+		{Text: "bold words", Style: StyleBold},
+		{Text: " and a code block:\n"},
+		{Text: "func main() {}\n", Style: Style{Code: true, Block: true}},
+	}
+	fi := newTestFrame(t, 300, 400, content)
+
+	// First call (uncached).
+	lines1 := fi.TotalLines()
+	starts1 := fi.LineStartRunes()
+
+	// Second call (cached).
+	lines2 := fi.TotalLines()
+	starts2 := fi.LineStartRunes()
+
+	if lines1 != lines2 {
+		t.Errorf("TotalLines: first=%d, second=%d", lines1, lines2)
+	}
+	if len(starts1) != len(starts2) {
+		t.Fatalf("LineStartRunes length: first=%d, second=%d", len(starts1), len(starts2))
+	}
+	for i := range starts1 {
+		if starts1[i] != starts2[i] {
+			t.Errorf("LineStartRunes[%d]: first=%d, second=%d", i, starts1[i], starts2[i])
+		}
+	}
+}
+
+// TestLayoutCacheSameWidthNoInvalidate verifies that SetRect with the same
+// width but different height does NOT invalidate the cache (only width
+// affects line layout).
+func TestLayoutCacheSameWidthNoInvalidate(t *testing.T) {
+	fi := newTestFrame(t, 200, 300, Plain("hello world"))
+
+	// Warm the cache.
+	lines1 := fi.ensureBaseLayout()
+	if lines1 == nil {
+		t.Fatal("first ensureBaseLayout returned nil")
+	}
+
+	// Resize with same width, different height.
+	fi.SetRect(image.Rect(0, 0, 200, 500))
+
+	if fi.layoutDirty {
+		t.Error("layoutDirty should be false when only height changes")
+	}
+
+	lines2 := fi.ensureBaseLayout()
+	// Same pointer means cache was reused.
+	if len(lines1) > 0 && len(lines2) > 0 && &lines1[0] != &lines2[0] {
+		t.Error("ensureBaseLayout should reuse cache when only height changes")
+	}
+}

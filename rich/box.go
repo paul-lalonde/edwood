@@ -33,3 +33,10 @@ func (b *Box) IsTab() bool {
 func (b *Box) IsImage() bool {
 	return b.Style.Image && b.ImageData != nil
 }
+
+// IsFixedBox returns true if this box is a fixed-dimension replaced element.
+// Fixed boxes have explicit pixel dimensions (ImageWidth/ImageHeight) and
+// render as colored rectangles. They may optionally also be images.
+func (b *Box) IsFixedBox() bool {
+	return b.Style.FixedBox && b.Style.ImageWidth > 0 && b.Style.ImageHeight > 0
+}

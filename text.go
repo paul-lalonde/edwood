@@ -787,6 +787,18 @@ func (t *Text) Type(r rune) {
 	nr = 1
 	rp := []rune{r}
 
+	// In program-controlled windows (event file open), pass control chars
+	// through as ordinary insertions so external programs like win can
+	// receive them. Matches original Plan 9 acme behavior where raw
+	// control characters (0x03) are distinct from Cmd+key (Kcmd+'c').
+	passThrough := false
+	if t.what == Body && t.w != nil && t.w.nopen[QWevent] > 0 {
+		switch r {
+		case 0x03, 0x1a, 0x18, 0x16, 0x7F:
+			passThrough = true
+		}
+	}
+
 	Tagdown := func() {
 		// expand tag to show all text
 		if !t.w.tagexpand {
@@ -936,11 +948,23 @@ func (t *Text) Type(r rune) {
 		}
 		t.Show(q0, q0, true)
 		return
-	case 0x3, draw.KeyCmd + 'c': // %C: copy
+	case 0x3: // ^C: copy (or pass through to program-controlled window)
+		if !passThrough {
+			t.TypeCommit()
+			cut(t, t, nil, true, false, "")
+			return
+		}
+	case draw.KeyCmd + 'c': // Cmd+C: copy
 		t.TypeCommit()
 		cut(t, t, nil, true, false, "")
 		return
-	case 0x1a, draw.KeyCmd + 'z': // %Z: undo
+	case 0x1a: // ^Z: undo (or pass through to program-controlled window)
+		if !passThrough {
+			t.TypeCommit()
+			undo(t, nil, nil, true, false, "")
+			return
+		}
+	case draw.KeyCmd + 'z': // Cmd+Z: undo
 		t.TypeCommit()
 		undo(t, nil, nil, true, false, "")
 		return
@@ -959,7 +983,20 @@ func (t *Text) Type(r rune) {
 	// These following blocks contain mutating actions.
 	// cut/paste must be done after the seq++/filemark
 	switch r {
-	case 0x18, draw.KeyCmd + 'x': // %X: cut
+	case 0x18: // ^X: cut (or pass through to program-controlled window)
+		if !passThrough {
+			setUndoPoint()
+			t.TypeCommit()
+			if t.what == Body {
+				global.seq++
+				t.file.Mark(global.seq)
+			}
+			cut(t, t, nil, true, true, "")
+			t.Show(t.q0, t.q0, true)
+			t.iq1 = t.q0
+			return
+		}
+	case draw.KeyCmd + 'x': // Cmd+X: cut
 		setUndoPoint()
 		t.TypeCommit()
 		if t.what == Body {
@@ -970,7 +1007,20 @@ func (t *Text) Type(r rune) {
 		t.Show(t.q0, t.q0, true)
 		t.iq1 = t.q0
 		return
-	case 0x16, draw.KeyCmd + 'v': // %V: paste
+	case 0x16: // ^V: paste (or pass through to program-controlled window)
+		if !passThrough {
+			setUndoPoint()
+			t.TypeCommit()
+			if t.what == Body {
+				global.seq++
+				t.file.Mark(global.seq)
+			}
+			paste(t, t, nil, true, false, "")
+			t.Show(t.q0, t.q1, true)
+			t.iq1 = t.q1
+			return
+		}
+	case draw.KeyCmd + 'v': // Cmd+V: paste
 		setUndoPoint()
 		t.TypeCommit()
 		if t.what == Body {
@@ -984,7 +1034,7 @@ func (t *Text) Type(r rune) {
 	}
 	wasrange := t.q0 != t.q1
 	removedstuff := false
-	if t.q1 > t.q0 {
+	if t.q1 > t.q0 && !passThrough {
 		setUndoPoint()
 		cut(t, t, nil, true, true, "")
 		t.eq0 = ^0
@@ -1013,17 +1063,19 @@ func (t *Text) Type(r rune) {
 		}
 		t.iq1 = t.q0
 		return
-	case 0x7F: // Del: erase character right
-		if t.q1 >= t.Nc()-1 {
-			return // End of file
+	case 0x7F: // Del: erase character right (or pass through to program-controlled window)
+		if !passThrough {
+			if t.q1 >= t.Nc()-1 {
+				return // End of file
+			}
+			setUndoPoint()
+			t.TypeCommit() // Avoid messing with the cache?
+			if !wasrange {
+				t.q1++
+				cut(t, t, nil, false, true, "")
+			}
+			return
 		}
-		setUndoPoint()
-		t.TypeCommit() // Avoid messing with the cache?
-		if !wasrange {
-			t.q1++
-			cut(t, t, nil, false, true, "")
-		}
-		return
 	case 0x08:
 		fallthrough // ^H: erase character
 	case 0x15:

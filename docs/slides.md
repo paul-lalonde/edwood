@@ -1,4 +1,5 @@
 # Edwood Presentation Slides
+![Edwood](edwood.png "width=800px")
 
 ---
 
