@@ -1323,110 +1323,83 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 					return 0
 				}
 
-			// Set search start to after the current selection, so the address
-			// expression searches forward from the current position.
-			// Save original selection in case address evaluation fails.
-			origQ0 := w.body.q0
-			origQ1 := w.body.q1
-			w.body.q0 = origQ1
-			w.body.q1 = origQ1
+				// Set search start to after the current selection, so the address
+				// expression searches forward from the current position.
+				// Save original selection in case address evaluation fails.
+				origQ0 := w.body.q0
+				origQ1 := w.body.q1
+				w.body.q0 = origQ1
+				w.body.q1 = origQ1
 
-			// Skip the leading ':' prefix — it's our convention marker meaning
-			// "this is an address expression", not part of Acme's address syntax.
-			// Without this, the address parser treats ':' as a compound operator,
-			// turning /regexp/ into a range instead of a point search.
-			addrStart := 0
-			if urlRunes[0] == ':' {
-				addrStart = 1
-			}
+				// Skip the leading ':' prefix — it's our convention marker meaning
+				// "this is an address expression", not part of Acme's address syntax.
+				// Without this, the address parser treats ':' as a compound operator,
+				// turning /regexp/ into a range instead of a point search.
+				addrStart := 0
+				if urlRunes[0] == ':' {
+					addrStart = 1
+				}
 
-			// Evaluate the address expression
-			r, eval, _ := address(false, &w.body, Range{-1, -1}, Range{w.body.q0, w.body.q1}, addrStart, len(urlRunes), getc, true)
-			if eval && r.q0 <= r.q1 {
-				w.body.q0 = r.q0
-				w.body.q1 = r.q1
-				found = true
-			}
-
-			// Wrap around: if forward search didn't find from current
-			// position, retry from the start of the file. For backward
-			// search, retry from the end. This matches Acme's Look behavior.
-			if !found {
-				nr := w.body.file.Nr()
-				w.body.q0 = 0
-				w.body.q1 = 0
-				r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{0, 0}, addrStart, len(urlRunes), getc, true)
+				// Evaluate the address expression
+				r, eval, _ := address(false, &w.body, Range{-1, -1}, Range{w.body.q0, w.body.q1}, addrStart, len(urlRunes), getc, true)
 				if eval && r.q0 <= r.q1 {
 					w.body.q0 = r.q0
 					w.body.q1 = r.q1
 					found = true
-				} else {
-					// Also try from end for backward searches
-					w.body.q0 = nr
-					w.body.q1 = nr
-					r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{nr, nr}, addrStart, len(urlRunes), getc, true)
+				}
+
+				// Wrap around: if forward search didn't find from current
+				// position, retry from the start of the file. For backward
+				// search, retry from the end. This matches Acme's Look behavior.
+				if !found {
+					nr := w.body.file.Nr()
+					w.body.q0 = 0
+					w.body.q1 = 0
+					r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{0, 0}, addrStart, len(urlRunes), getc, true)
 					if eval && r.q0 <= r.q1 {
 						w.body.q0 = r.q0
 						w.body.q1 = r.q1
 						found = true
-					}
-				}
-			}
-
-			if !found {
-				w.body.q0 = origQ0
-				w.body.q1 = origQ1
-			}
-
-			if found {
-				// Use ShowInPreview to map source positions to rendered,
-				// set selection, scroll, draw, and flush — all in one call.
-				rendStart := w.ShowInPreview(w.body.q0, w.body.q1)
-				if rendStart >= 0 {
-					// Warp cursor to found text
-					if w.display != nil {
-						warpPt := rt.Frame().Ptofchar(rendStart).Add(
-							image.Pt(4, rt.Frame().DefaultFontHeight()-4))
-						w.display.MoveTo(warpPt)
-					}
-					// Restore original body selection so toggling preview mode doesn't show erroneous selection
-					w.body.q0 = savedBodyQ0
-					w.body.q1 = savedBodyQ1
-					return true
-				}
-			}
-			} else {
-				// NOT an address expression - try literal text search
-				// Advance past the link URL in the markdown to avoid finding it in the link itself
-				w.body.q1 = w.body.q1 + len([]rune(url)) + 3
-
-				// Search source buffer for the URL text
-				if search(&w.body, []rune(url)) {
-					// Found a match! Map the result back to rendered positions
-					if w.previewSourceMap != nil {
-						rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
-						if rendStart >= 0 && rendEnd >= 0 {
-							rt.SetSelection(rendStart, rendEnd)
-							w.scrollPreviewToMatch(rt, rendStart)
-							// Warp cursor to found text
-							if w.display != nil {
-								warpPt := rt.Frame().Ptofchar(rendStart).Add(
-									image.Pt(4, rt.Frame().DefaultFontHeight()-4))
-								w.display.MoveTo(warpPt)
-							}
-							// Restore original body selection so toggling preview mode doesn't show erroneous selection
-							w.body.q0 = savedBodyQ0
-							w.body.q1 = savedBodyQ1
-							return true
+					} else {
+						// Also try from end for backward searches
+						w.body.q0 = nr
+						w.body.q1 = nr
+						r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{nr, nr}, addrStart, len(urlRunes), getc, true)
+						if eval && r.q0 <= r.q1 {
+							w.body.q0 = r.q0
+							w.body.q1 = r.q1
+							found = true
 						}
 					}
 				}
-				// Restore body selection if search didn't succeed or mapping failed
-				w.body.q0 = savedBodyQ0
-				w.body.q1 = savedBodyQ1
+
+				if !found {
+					w.body.q0 = origQ0
+					w.body.q1 = origQ1
+				}
+
+				if found {
+					// Use ShowInPreview to map source positions to rendered,
+					// set selection, scroll, draw, and flush — all in one call.
+					rendStart := w.ShowInPreview(w.body.q0, w.body.q1)
+					if rendStart >= 0 {
+						// Warp cursor to found text
+						if w.display != nil {
+							warpPt := rt.Frame().Ptofchar(rendStart).Add(
+								image.Pt(4, rt.Frame().DefaultFontHeight()-4))
+							w.display.MoveTo(warpPt)
+						}
+						// Restore original body selection so toggling preview mode doesn't show erroneous selection
+						w.body.q0 = savedBodyQ0
+						w.body.q1 = savedBodyQ1
+						return true
+					}
+				}
 			}
 
-			// Either address expression or literal search failed - restore body selection and plumb it
+			// Not an address expression, or address evaluation failed — plumb the URL.
+			// We don't search the body for the URL text because search() wraps around
+			// and matches the URL inside the link's own markdown syntax [text](url).
 			w.body.q0 = savedBodyQ0
 			w.body.q1 = savedBodyQ1
 
