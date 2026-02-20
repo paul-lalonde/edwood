@@ -878,6 +878,8 @@ func fontx(et *Text, _ *Text, argt *Text, _, _ bool, arg string) {
 
 		if t.w.styledMode {
 			t.w.rebuildStyledFont()
+		} else if t.w.previewMode {
+			t.w.rebuildPreviewFont()
 		} else {
 			t.fr.Init(t.w.r, frame.OptFont(newfont), frame.OptBackground(global.row.display.ScreenImage()))
 
@@ -1239,17 +1241,22 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	// Get the body rectangle for the rich text renderer
 	bodyRect := w.body.all
 
-	// Get the font and font variants for styled text
-	font := fontget(global.tagfont, display)
-	boldFont := tryLoadFontVariant(display, global.tagfont, "bold")
-	italicFont := tryLoadFontVariant(display, global.tagfont, "italic")
-	boldItalicFont := tryLoadFontVariant(display, global.tagfont, "bolditalic")
-	codeFont := tryLoadCodeFont(display, global.tagfont)
+	// Get the font and font variants for styled text.
+	// Use the window's body font if set, falling back to global.tagfont.
+	fontPath := w.body.font
+	if fontPath == "" {
+		fontPath = global.tagfont
+	}
+	font := fontget(fontPath, display)
+	boldFont := tryLoadFontVariant(display, fontPath, "bold")
+	italicFont := tryLoadFontVariant(display, fontPath, "italic")
+	boldItalicFont := tryLoadFontVariant(display, fontPath, "bolditalic")
+	codeFont := tryLoadCodeFont(display, fontPath)
 
 	// Get scaled fonts for headings (H1=2.0, H2=1.5, H3=1.25)
-	h1Font := tryLoadScaledFont(display, global.tagfont, 2.0)
-	h2Font := tryLoadScaledFont(display, global.tagfont, 1.5)
-	h3Font := tryLoadScaledFont(display, global.tagfont, 1.25)
+	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
+	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
+	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
 
 	// Create or reinitialize the rich text renderer
 	rt := NewRichText()

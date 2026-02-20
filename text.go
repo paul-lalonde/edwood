@@ -1444,15 +1444,16 @@ func (t *Text) SetSelect(q0, q1 int) {
 	if t.fr == nil {
 		return
 	}
-	if p0 > (t.fr.GetFrameFillStatus().Nchars) {
+	nchars := t.fr.GetFrameFillStatus().Nchars
+	if p0 > nchars {
 		ticked = false
-		p0 = t.fr.GetFrameFillStatus().Nchars
+		p0 = nchars
 	}
-	if p1 > (t.fr.GetFrameFillStatus().Nchars) {
-		p1 = t.fr.GetFrameFillStatus().Nchars
+	if p1 > nchars {
+		p1 = nchars
 	}
 	if p0 > p1 {
-		panic(fmt.Sprintf("acme: textsetselect p0=%d p1=%d q0=%v q1=%v t.org=%d nchars=%d", p0, p1, q0, q1, t.org, t.fr.GetFrameFillStatus().Nchars))
+		panic(fmt.Sprintf("acme: textsetselect p0=%d p1=%d q0=%v q1=%v t.org=%d nchars=%d", p0, p1, q0, q1, t.org, nchars))
 	}
 
 	t.fr.DrawSel(t.fr.Ptofchar(p0), p0, p1, ticked)

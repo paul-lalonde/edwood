@@ -1705,8 +1705,10 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 		}
 	}
 
-	// Scroll so the matched heading is at the top of the window
-	targetLine := matchLine
+	// Back up so the target appears ~3/4 down the window,
+	// matching plain-mode Show() behavior (text.go:1373-1378).
+	backLines := maxLines / 4
+	targetLine := matchLine - backLines
 	if targetLine < 0 {
 		targetLine = 0
 	}
@@ -2484,6 +2486,134 @@ func (w *Window) rebuildStyledFont() {
 		if w.display != nil {
 			w.display.Flush()
 		}
+	}
+}
+
+// rebuildPreviewFont tears down and rebuilds the preview richBody with
+// the current w.body.font, preserving scroll position and content.
+// Called when the user changes the font while in preview mode.
+func (w *Window) rebuildPreviewFont() {
+	if !w.previewMode || w.richBody == nil {
+		return
+	}
+
+	display := w.display
+	if display == nil {
+		display = global.row.display
+	}
+	if display == nil {
+		return
+	}
+
+	// Save scroll position.
+	savedOrigin := w.richBody.Origin()
+	savedYOffset := w.richBody.GetOriginYOffset()
+
+	// Resolve font path.
+	fontPath := w.body.font
+	if fontPath == "" {
+		fontPath = global.tagfont
+	}
+
+	// Load base font and variants.
+	font := fontget(fontPath, display)
+	if font == nil {
+		return
+	}
+	boldFont := tryLoadFontVariant(display, fontPath, "bold")
+	italicFont := tryLoadFontVariant(display, fontPath, "italic")
+	boldItalicFont := tryLoadFontVariant(display, fontPath, "bolditalic")
+	codeFont := tryLoadCodeFont(display, fontPath)
+	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
+	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
+	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
+
+	// Build new rich text renderer with preview colors.
+	rt := NewRichText()
+
+	bgImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
+	if err != nil {
+		return
+	}
+	textImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
+	if err != nil {
+		return
+	}
+
+	rtOpts := []RichTextOption{
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+		WithRichTextSelectionColor(global.textcolors[frame.ColHigh]),
+		WithScrollbarColors(global.textcolors[frame.ColBord], global.textcolors[frame.ColBack]),
+	}
+	if boldFont != nil {
+		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
+	}
+	if italicFont != nil {
+		rtOpts = append(rtOpts, WithRichTextItalicFont(italicFont))
+	}
+	if boldItalicFont != nil {
+		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
+	}
+	if codeFont != nil {
+		rtOpts = append(rtOpts, WithRichTextCodeFont(codeFont))
+	}
+	if h1Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(2.0, h1Font))
+	}
+	if h2Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.5, h2Font))
+	}
+	if h3Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
+	}
+
+	if w.imageCache != nil {
+		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+	}
+
+	// Wire async image load callback.
+	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
+		go func() {
+			global.row.lk.Lock()
+			defer global.row.lk.Unlock()
+			if !w.previewMode || w.richBody == nil {
+				return
+			}
+			w.richBody.Render(w.body.all)
+			if w.display != nil {
+				w.display.Flush()
+			}
+		}()
+	}))
+
+	// Set base path for relative image resolution.
+	name := w.body.file.Name()
+	basePath := name
+	if !filepath.IsAbs(basePath) {
+		if abs, err := filepath.Abs(basePath); err == nil {
+			basePath = abs
+		}
+	}
+	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
+
+	rt.Init(display, font, rtOpts...)
+
+	// Re-parse markdown and set content.
+	mdContent := w.body.file.String()
+	content, sourceMap, linkMap := markdown.ParseWithSourceMap(mdContent)
+	rt.SetContent(content)
+
+	w.richBody = rt
+	w.SetPreviewSourceMap(sourceMap)
+	w.SetPreviewLinkMap(linkMap)
+
+	// Restore scroll position.
+	rt.SetOrigin(savedOrigin)
+	rt.SetOriginYOffset(savedYOffset)
+	rt.Render(w.body.all)
+	if w.display != nil {
+		w.display.Flush()
 	}
 }
 

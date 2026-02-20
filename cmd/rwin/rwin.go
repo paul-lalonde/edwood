@@ -380,6 +380,7 @@ func startProcess(arg string, args []string, w *winWin) {
 	cmd.Env = append(os.Environ(), []string{
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
+		"TERM_PROGRAM=rwin",
 		fmt.Sprintf("winid=%d", w.W.ID()),
 	}...)
 	/*
@@ -401,6 +402,7 @@ func startProcess(arg string, args []string, w *winWin) {
 }
 
 func main() {
+	fmt.Fprintf(os.Stderr, "rwin: starting\n")
 	flag.BoolVar(&debug, "d", debug, "-d")
 	flag.Usage = usage
 	flag.Parse()
@@ -413,7 +415,7 @@ func main() {
 
 	pwd, _ := os.Getwd()
 	pwdSlash := strings.TrimSuffix(pwd, "/") + "/"
-	err = win.W.Name("%s+win", pwdSlash)
+	err = win.W.Name("%s+rwin", pwdSlash)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "win: Failed to set name\n")
 		os.Exit(0)
@@ -450,7 +452,9 @@ func main() {
 	if shell == "" {
 		shell = "rc"
 	}
+	fmt.Fprintf(os.Stderr, "rwin: launching shell %s\n", shell)
 	startProcess(shell, []string{"-i"}, win)
+	fmt.Fprintf(os.Stderr, "rwin: shell launched\n")
 	go win.stdoutproc()
 	events(win)
 }

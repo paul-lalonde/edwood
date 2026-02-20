@@ -6,13 +6,14 @@ import "strings"
 type ansiState int
 
 const (
-	stateGround   ansiState = iota // Normal text — printable runes emitted
-	stateEsc                       // Received ESC (0x1B), awaiting next byte
-	stateCSI                       // CSI introducer received (ESC [)
-	stateCSIParam                  // Collecting CSI numeric parameters
-	stateOSC                       // OSC introducer received (ESC ])
-	stateOSCString                 // Collecting OSC payload string
-	stateIgnore                    // Consuming unsupported sequence bytes
+	stateGround    ansiState = iota // Normal text — printable runes emitted
+	stateEsc                        // Received ESC (0x1B), awaiting next byte
+	stateCSI                        // CSI introducer received (ESC [)
+	stateCSIParam                   // Collecting CSI numeric parameters
+	stateOSC                        // OSC introducer received (ESC ])
+	stateOSCString                  // Collecting OSC payload string
+	stateIgnore                     // Consuming unsupported sequence bytes
+	stateCSCharset                  // ESC ( — awaiting charset designator
 )
 
 // ansiParser strips ANSI escape sequences from PTY output and tracks
@@ -32,6 +33,14 @@ type ansiParser struct {
 	// titleFunc is called when an OSC title sequence is complete.
 	// Nil-safe: if nil, OSC titles are silently consumed.
 	titleFunc func(title string)
+
+	// Screen buffer dispatch callbacks. All nil-safe.
+	// When set, the parser routes output through the screen buffer
+	// instead of appending to the clean output.
+	charFunc func(ch rune, style sgrState)      // printable character
+	csiFunc  func(final byte, params []int, priv byte) // non-SGR CSI sequence
+	escFunc  func(ch rune)                       // single-char ESC sequence
+	c0Func   func(ch rune) bool                  // C0 control; true = handled
 }
 
 // NewAnsiParser creates a parser in the ground state.
@@ -57,8 +66,26 @@ func (p *ansiParser) Process(input []rune) (clean []rune, runs []styledRun) {
 		case stateGround:
 			if r == 0x1B {
 				p.state = stateEsc
+			} else if r < 0x20 && r != 0x1B {
+				// C0 control character.
+				if p.c0Func != nil && p.c0Func(r) {
+					continue // handled by screen buffer
+				}
+				// Fall through to normal output.
+				if p.sgr != currentRun.style {
+					if len(currentRun.text) > 0 {
+						runs = append(runs, currentRun)
+					}
+					currentRun = styledRun{style: p.sgr}
+				}
+				currentRun.text = append(currentRun.text, r)
+				clean = append(clean, r)
 			} else {
-				// Printable or C0 control — emit to output.
+				// Printable character.
+				if p.charFunc != nil {
+					p.charFunc(r, p.sgr)
+					continue // handled by screen buffer
+				}
 				if p.sgr != currentRun.style {
 					if len(currentRun.text) > 0 {
 						runs = append(runs, currentRun)
@@ -85,8 +112,19 @@ func (p *ansiParser) Process(input []rune) (clean []rune, runs []styledRun) {
 				p.oscNum = 0
 				p.oscBuf = p.oscBuf[:0]
 				p.state = stateOSC
-			case '(', ')', '*', '+':
+			case '(':
+				if p.escFunc != nil {
+					p.state = stateCSCharset
+				} else {
+					p.state = stateIgnore
+				}
+			case ')', '*', '+':
 				p.state = stateIgnore
+			case '7', '8', 'D', 'M', 'E', 'H':
+				if p.escFunc != nil {
+					p.escFunc(r)
+				}
+				p.state = stateGround
 			case '=', '>':
 				p.state = stateGround
 			case 0x1B:
@@ -115,7 +153,9 @@ func (p *ansiParser) Process(input []rune) (clean []rune, runs []styledRun) {
 				p.state = stateGround
 			case r >= 0x40 && r <= 0x7E:
 				p.pushParam()
-				// non-SGR CSI: silently consumed
+				if p.csiFunc != nil {
+					p.csiFunc(byte(r), p.params, p.private)
+				}
 				p.state = stateGround
 			case r == 0x1B:
 				p.state = stateEsc
@@ -138,6 +178,9 @@ func (p *ansiParser) Process(input []rune) (clean []rune, runs []styledRun) {
 				p.state = stateGround
 			case r >= 0x40 && r <= 0x7E:
 				p.pushParam()
+				if p.csiFunc != nil {
+					p.csiFunc(byte(r), p.params, p.private)
+				}
 				p.state = stateGround
 			case r == 0x1B:
 				p.state = stateEsc
@@ -170,6 +213,18 @@ func (p *ansiParser) Process(input []rune) (clean []rune, runs []styledRun) {
 			default:
 				p.oscBuf = append(p.oscBuf, r)
 			}
+
+		case stateCSCharset:
+			// ESC ( <designator>: dispatch charset selection via escFunc.
+			if p.escFunc != nil {
+				switch r {
+				case '0':
+					p.escFunc('(') // line drawing
+				case 'B':
+					p.escFunc(')') // ASCII
+				}
+			}
+			p.state = stateGround
 
 		case stateIgnore:
 			// Consume one byte and return to ground.

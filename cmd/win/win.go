@@ -374,6 +374,7 @@ func startProcess(arg string, args []string, w *winWin) {
 	cmd := exec.Command(arg, args...)
 	var err error
 	cmd.Env = append(os.Environ(), []string{"TERM=dumb",
+		"TERM_PROGRAM=win",
 		fmt.Sprintf("winid=%d", w.W.ID())}...)
 	/*
 		w.rcpty, w.rctty, err = termios.Pty()
