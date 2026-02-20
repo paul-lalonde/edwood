@@ -407,7 +407,7 @@ func main() {
 
 	pwd, _ := os.Getwd()
 	pwdSlash := strings.TrimSuffix(pwd, "/") + "/"
-	err = win.W.Name(pwdSlash + "+win")
+	err = win.W.Name("%s", pwdSlash+"+win")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "win: Failed to set name\n")
 		os.Exit(0)
