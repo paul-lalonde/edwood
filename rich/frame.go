@@ -93,6 +93,10 @@ type Frame interface {
 	// The resulting offset is clamped to [0, maxScrollable].
 	HScrollWheel(delta int, regionIndex int)
 
+	// HasSlideBreakBetween returns true if there is a slide break (---\n---)
+	// between rune positions a and b.
+	HasSlideBreakBetween(a, b int) bool
+
 	// SnapOriginToSlideStart takes a target origin (rune position) and returns
 	// an adjusted origin that aligns to the start of the slide if the target
 	// falls within a slide region. Returns the original origin if not in a slide.
@@ -799,6 +803,48 @@ func (f *frameImpl) LinePixelHeights() []int {
 		heights[i] = line.Height
 	}
 	return heights
+}
+
+// HasSlideBreakBetween returns true if there is a slide break (---\n---)
+// between rune positions a and b in the document.
+func (f *frameImpl) HasSlideBreakBetween(a, b int) bool {
+	if a > b {
+		a, b = b, a
+	}
+	if f.font == nil || f.content == nil {
+		return false
+	}
+	lines := f.ensureBaseLayout()
+	if len(lines) == 0 {
+		return false
+	}
+
+	slideRegions := findSlideRegions(lines)
+	if len(slideRegions) == 0 {
+		return false
+	}
+
+	// Build rune offset at start of each line.
+	lineStarts := make([]int, len(lines))
+	runeCount := 0
+	for i, line := range lines {
+		lineStarts[i] = runeCount
+		for _, pb := range line.Boxes {
+			if pb.Box.IsNewline() || pb.Box.IsTab() {
+				runeCount++
+			} else {
+				runeCount += pb.Box.Nrune
+			}
+		}
+	}
+
+	for _, region := range slideRegions {
+		breakRune := lineStarts[region.FirstHRuleLineIdx]
+		if breakRune > a && breakRune < b {
+			return true
+		}
+	}
+	return false
 }
 
 // SnapOriginToSlideStart takes a target origin (rune position) and returns

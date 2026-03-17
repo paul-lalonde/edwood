@@ -1686,7 +1686,12 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 	origin := rt.Origin()
 	lastVisible := fr.Charofpt(image.Pt(frameRect.Max.X-1, frameRect.Max.Y-1))
 	if rendStart >= origin && rendStart <= lastVisible && lastVisible > origin {
-		return
+		// Even if the rune position is technically in the viewport,
+		// a slide break between origin and match means the match is
+		// on a different "page" due to fill spacing. Must scroll.
+		if !fr.HasSlideBreakBetween(origin, rendStart) {
+			return
+		}
 	}
 
 	// Need to scroll. Find line-based coordinates for positioning.
@@ -1715,11 +1720,14 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 	if targetLine < len(lineStarts) {
 		targetOrigin := lineStarts[targetLine]
 
-		// Snap to slide start if target falls within a slide region.
-		// This ensures that when jumping to content in a slide, we show
-		// the full slide from its beginning rather than landing mid-slide
-		// with the top HRule scrolled off-screen.
-		adjustedOrigin := fr.SnapOriginToSlideStart(targetOrigin)
+		// Snap to slide start based on where the MATCH is, not where the
+		// backed-up target falls. The backed-up position often lands in the
+		// slide break zone or previous slide, causing the snap to miss.
+		adjustedOrigin := fr.SnapOriginToSlideStart(rendStart)
+		if adjustedOrigin == rendStart {
+			// Match isn't in a slide region; use normal positioning.
+			adjustedOrigin = targetOrigin
+		}
 
 		rt.SetOrigin(adjustedOrigin)
 	}
