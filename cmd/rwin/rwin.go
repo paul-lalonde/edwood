@@ -149,41 +149,54 @@ func (w *winWin) addtype(c rune, p0 int, text []rune) {
 	w.typing = append(append(w.typing[0:p0], text...), w.typing[p0:]...)
 }
 
-// Send to the process
+// Send to the process.
+// Batches all complete lines into a single pty write so that
+// multi-line input is delivered atomically to the application.
 func (w *winWin) sendtype() {
 	raw := w.israw()
-lineloop:
+	totalRunes := 0
+	echoed := 0
+
 	for w.ntypebreak != 0 || (raw && len(w.typing) > 0) {
-		for i, r := range w.typing {
-			if r == '\n' || r == 0x04 || (i == len(w.typing)-1 && raw) {
+		found := false
+		for i, r := range w.typing[totalRunes:] {
+			if r == '\n' || r == 0x04 || (totalRunes+i == len(w.typing)-1 && raw) {
 				if (r == '\n' || r == 0x04) && w.ntypebreak > 0 {
 					w.ntypebreak--
 				}
-				nrunes := i + 1
+				nrunes := totalRunes + i + 1
 				if !raw {
 					// Don't include ^D in the echo buffer: the terminal
 					// line discipline consumes it without echoing.
-					end := i + 1
+					end := nrunes
 					if r == 0x04 {
-						end = i
+						end = totalRunes + i
 					}
-					if end > 0 {
-						w.echo.Echoed(w.typing[0:end])
+					if end > echoed {
+						w.echo.Echoed(w.typing[echoed:end])
+						echoed = end
 					}
 				}
-				outbuf := []byte(string(w.typing[0:nrunes]))
-				nbytes, err := w.rcpty.Write(outbuf)
-				if nbytes != len(outbuf) || err != nil {
-					fmt.Fprintf(os.Stderr, "sending to program")
-				}
-				w.p += nrunes
-				copy(w.typing[0:len(w.typing)-nrunes], w.typing[nrunes:])
-				w.typing = w.typing[0 : len(w.typing)-nrunes]
-				continue lineloop
+				totalRunes = nrunes
+				found = true
+				break
 			}
 		}
-		fmt.Fprintf(os.Stderr, "no breakchar\n")
-		w.ntypebreak = 0
+		if !found {
+			fmt.Fprintf(os.Stderr, "no breakchar\n")
+			w.ntypebreak = 0
+		}
+	}
+
+	if totalRunes > 0 {
+		outbuf := []byte(string(w.typing[0:totalRunes]))
+		nbytes, err := w.rcpty.Write(outbuf)
+		if nbytes != len(outbuf) || err != nil {
+			fmt.Fprintf(os.Stderr, "sending to program")
+		}
+		w.p += totalRunes
+		copy(w.typing[0:len(w.typing)-totalRunes], w.typing[totalRunes:])
+		w.typing = w.typing[0 : len(w.typing)-totalRunes]
 	}
 }
 
