@@ -159,7 +159,7 @@ lineloop:
 				if (r == '\n' || r == 0x04) && w.ntypebreak > 0 {
 					w.ntypebreak--
 				}
-				n := i + 1
+				nrunes := i + 1
 				if !raw {
 					// Don't include ^D in the echo buffer: the terminal
 					// line discipline consumes it without echoing.
@@ -171,13 +171,14 @@ lineloop:
 						w.echo.Echoed(w.typing[0:end])
 					}
 				}
-				n, err := w.rcpty.Write([]byte(string(w.typing[0:n])))
-				if n != i+1 || err != nil {
+				outbuf := []byte(string(w.typing[0:nrunes]))
+				nbytes, err := w.rcpty.Write(outbuf)
+				if nbytes != len(outbuf) || err != nil {
 					fmt.Fprintf(os.Stderr, "sending to program")
 				}
-				w.p += len([]rune(string(w.typing[0:n])))
-				copy(w.typing[0:len(w.typing)-n], w.typing[n:])
-				w.typing = w.typing[0 : len(w.typing)-n]
+				w.p += nrunes
+				copy(w.typing[0:len(w.typing)-nrunes], w.typing[nrunes:])
+				w.typing = w.typing[0 : len(w.typing)-nrunes]
 				continue lineloop
 			}
 		}
