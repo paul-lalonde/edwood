@@ -105,16 +105,14 @@ func (w *winWin) typetext(e *acme.Event) {
 		// read body[Q0:Q1]
 		m := e.Q0
 		for m < e.Q1 {
-			// Seek to Q0
-			w.Printf("addr", "#%d", e.Q0)
+			w.Printf("addr", "#%d", m)
 
-			// Read runes from Q0-Q1
 			n, err := w.W.Read("data", buf)
-			if err != nil || n != len(buf) {
+			if err != nil || n == 0 {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				break
 			}
-			rbuf := []rune(string(buf))
+			rbuf := []rune(string(buf[:n]))
 			w.addtype(e.C1, m-w.p, rbuf)
 			m += len(rbuf)
 		}
@@ -130,7 +128,10 @@ func (w *winWin) typetext(e *acme.Event) {
 	}
 }
 
-// Insert text into typing at p0
+// Insert text into typing at p0.
+// Only newlines/^D inserted at the end of the typing buffer (the input
+// point) count as breaks that trigger sending. Newlines inserted earlier
+// are just editing — they allow multi-line command composition.
 func (w *winWin) addtype(c rune, p0 int, text []rune) {
 	for _, r := range text {
 		if (r == 0x7F || r == 3) && c == 'K' { // del and ^c from keyboard
@@ -142,62 +143,56 @@ func (w *winWin) addtype(c rune, p0 int, text []rune) {
 			/* buglet:  more than one delete ignored */
 			return
 		}
-		if r == '\n' || r == 0x04 {
+		if (r == '\n' || r == 0x04) && p0 >= len(w.typing) {
 			w.ntypebreak++
 		}
 	}
-	w.typing = append(append(w.typing[0:p0], text...), w.typing[p0:]...)
+	tail := make([]rune, len(w.typing)-p0)
+	copy(tail, w.typing[p0:])
+	w.typing = append(append(w.typing[:p0], text...), tail...)
 }
 
 // Send to the process.
-// Batches all complete lines into a single pty write so that
-// multi-line input is delivered atomically to the application.
+// When a break is pending (newline/^D at the input point) or in raw mode,
+// send ALL of w.typing in a single pty write. The buffer may contain
+// embedded newlines from mid-buffer editing — these are part of the
+// composed multi-line command.
 func (w *winWin) sendtype() {
 	raw := w.israw()
-	totalRunes := 0
-	echoed := 0
+	if w.ntypebreak == 0 && !(raw && len(w.typing) > 0) {
+		return
+	}
 
-	for w.ntypebreak != 0 || (raw && len(w.typing) > 0) {
-		found := false
-		for i, r := range w.typing[totalRunes:] {
-			if r == '\n' || r == 0x04 || (totalRunes+i == len(w.typing)-1 && raw) {
-				if (r == '\n' || r == 0x04) && w.ntypebreak > 0 {
-					w.ntypebreak--
+	totalRunes := len(w.typing)
+	if totalRunes == 0 {
+		return
+	}
+
+	if !raw {
+		// Record echo for the entire buffer, skipping ^D characters
+		// (the terminal line discipline consumes ^D without echoing).
+		start := 0
+		for i, r := range w.typing {
+			if r == 0x04 {
+				if i > start {
+					w.echo.Echoed(w.typing[start:i])
 				}
-				nrunes := totalRunes + i + 1
-				if !raw {
-					// Don't include ^D in the echo buffer: the terminal
-					// line discipline consumes it without echoing.
-					end := nrunes
-					if r == 0x04 {
-						end = totalRunes + i
-					}
-					if end > echoed {
-						w.echo.Echoed(w.typing[echoed:end])
-						echoed = end
-					}
-				}
-				totalRunes = nrunes
-				found = true
-				break
+				start = i + 1
 			}
 		}
-		if !found {
-			fmt.Fprintf(os.Stderr, "no breakchar\n")
-			w.ntypebreak = 0
+		if start < totalRunes {
+			w.echo.Echoed(w.typing[start:totalRunes])
 		}
 	}
 
-	if totalRunes > 0 {
-		outbuf := []byte(string(w.typing[0:totalRunes]))
-		nbytes, err := w.rcpty.Write(outbuf)
-		if nbytes != len(outbuf) || err != nil {
-			fmt.Fprintf(os.Stderr, "sending to program")
-		}
-		w.p += totalRunes
-		copy(w.typing[0:len(w.typing)-totalRunes], w.typing[totalRunes:])
-		w.typing = w.typing[0 : len(w.typing)-totalRunes]
+	w.ntypebreak = 0
+	outbuf := []byte(string(w.typing))
+	nbytes, err := w.rcpty.Write(outbuf)
+	if nbytes != len(outbuf) || err != nil {
+		fmt.Fprintf(os.Stderr, "sending to program")
 	}
+	w.p += totalRunes
+	w.typing = w.typing[:0]
 }
 
 func (w *winWin) delete(e *acme.Event) int {
@@ -229,7 +224,7 @@ func (w *winWin) delete(e *acme.Event) int {
 
 func (w *winWin) deltype(p0, p1 int) {
 	for _, r := range w.typing[p0:p1] {
-		if r == '\n' || r == 0x04 {
+		if (r == '\n' || r == 0x04) && w.ntypebreak > 0 {
 			w.ntypebreak--
 		}
 	}
