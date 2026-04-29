@@ -212,8 +212,8 @@ func clampThumbHeight(q, track image.Rectangle) image.Rectangle {
 // legacy scrl.go (200ms initial, 80ms repeat). Defined as vars so
 // future tests can override; production code never mutates them.
 var (
-	initialDebounceMs = 200
-	repeatDebounceMs  = 80
+	initialDebounce = 200 * time.Millisecond
+	repeatDebounce  = 80 * time.Millisecond
 )
 
 // dispatch fires the appropriate ScrollModel method for the given
@@ -258,7 +258,9 @@ func (s *Scrollbar) HandleClick(button int) {
 		s.warpToCenter(centerX, my)
 		s.dispatch(button, my-rect.Min.Y, h)
 		s.Draw()
-		if !s.waitForNextTick(button, &first) {
+		var keepGoing bool
+		first, keepGoing = s.waitForNextTick(button, first)
+		if !keepGoing {
 			break
 		}
 	}
@@ -289,22 +291,25 @@ func (s *Scrollbar) warpToCenter(centerX, my int) {
 	global.mousectl.Read()
 }
 
-// waitForNextTick implements the per-iteration delay and exit check.
-// Returns false when the button has been released and the loop
-// should exit. B2 reads per-event for live thumb drag; B1/B3 use
-// 200ms initial, then 80ms repeating debounce.
-func (s *Scrollbar) waitForNextTick(button int, first *bool) bool {
+// waitForNextTick implements the per-iteration delay for the latch
+// loop. It returns the new value of `first`, plus whether the loop
+// should continue (true while the button is still held).
+//
+// B2 reads per-event for live thumb drag; B1/B3 use the initial
+// debounce on the first tick and the shorter repeat debounce
+// thereafter.
+func (s *Scrollbar) waitForNextTick(button int, first bool) (newFirst, keepGoing bool) {
 	if button == 2 {
 		global.mousectl.Read()
-	} else if *first {
+	} else if first {
 		s.display.Flush()
-		time.Sleep(time.Duration(initialDebounceMs) * time.Millisecond)
+		time.Sleep(initialDebounce)
 		global.mousectl.Mouse = <-global.mousectl.C
-		*first = false
+		first = false
 	} else {
-		scrollbarSleep(repeatDebounceMs)
+		scrollbarSleep(repeatDebounce)
 	}
-	return global.mouse.Buttons&(1<<uint(button-1)) != 0
+	return first, global.mouse.Buttons&(1<<uint(button-1)) != 0
 }
 
 // drainMouseEvents reads pending events until all buttons are
@@ -315,14 +320,14 @@ func drainMouseEvents() {
 	}
 }
 
-// scrollbarSleep waits for dt milliseconds, returning early if a
-// mouse event arrives. Mirrors ScrSleep in scrl.go and
-// previewScrSleep in wind.go.
-func scrollbarSleep(dt int) {
-	if dt == 0 {
+// scrollbarSleep waits for d, returning early if a mouse event
+// arrives. Mirrors ScrSleep in scrl.go and previewScrSleep in
+// wind.go.
+func scrollbarSleep(d time.Duration) {
+	if d <= 0 {
 		return
 	}
-	timer := time.NewTimer(time.Duration(dt) * time.Millisecond)
+	timer := time.NewTimer(d)
 	select {
 	case <-timer.C:
 	case <-global.mousectl.C:
