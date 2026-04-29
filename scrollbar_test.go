@@ -183,11 +183,30 @@ func TestScrollbar_DrawAfterModelChangeRepaints(t *testing.T) {
 func TestScrollbar_SetRectInvalidatesCache(t *testing.T) {
 	s, _, display := scrollbarTestHarness(t)
 	s.Draw()
-	display.(edwoodtest.GettableDrawOps).Clear()
+	if s.lastDrawnThumb.Empty() {
+		t.Fatal("lastDrawnThumb should be set after first Draw")
+	}
 	s.SetRect(image.Rect(0, 0, 12, 200)) // different rect
+	if !s.lastDrawnThumb.Empty() {
+		t.Error("SetRect with new rect must invalidate lastDrawnThumb cache")
+	}
+	display.(edwoodtest.GettableDrawOps).Clear()
 	s.Draw()
 	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got == 0 {
 		t.Error("Draw after SetRect produced no ops; want repaint")
+	}
+}
+
+func TestScrollbar_SetRectWithSameRectIsIdempotent(t *testing.T) {
+	// Window resize handlers can call SetRect with the existing rect
+	// (e.g. during font cache hits). The cache must not be
+	// invalidated; otherwise we force an unnecessary repaint.
+	s, _, _ := scrollbarTestHarness(t)
+	s.Draw()
+	cached := s.lastDrawnThumb
+	s.SetRect(s.rect) // identical rect
+	if !s.lastDrawnThumb.Eq(cached) {
+		t.Error("SetRect with identical rect must not invalidate cache")
 	}
 }
 

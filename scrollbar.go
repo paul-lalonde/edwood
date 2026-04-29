@@ -74,9 +74,9 @@ type Scrollbar struct {
 	track   draw.Image // border / track background color
 	thumb   draw.Image // thumb fill color
 
-	rect   image.Rectangle // current scrollbar rectangle on the screen
-	lastSR image.Rectangle // last drawn thumb rectangle (dirty cache)
-	tmp    draw.Image      // off-screen scratch image, lazily allocated
+	rect           image.Rectangle // current scrollbar rectangle on the screen
+	lastDrawnThumb image.Rectangle // last drawn thumb rectangle (dirty cache)
+	tmp            draw.Image      // off-screen scratch image, lazily allocated
 }
 
 // NewScrollbar constructs a Scrollbar bound to the given display and
@@ -90,12 +90,16 @@ func NewScrollbar(display draw.Display, model ScrollModel, track, thumb draw.Ima
 	}
 }
 
-// SetRect updates the scrollbar's on-screen rectangle. Subsequent
-// Draw calls render into this region. Invalidates the dirty cache so
-// the next Draw definitely repaints.
+// SetRect updates the scrollbar's on-screen rectangle. Idempotent:
+// passing the existing rect leaves the dirty cache intact so a
+// re-draw is a true cache hit. Passing a different rect invalidates
+// the cache so the next Draw definitely repaints.
 func (s *Scrollbar) SetRect(r image.Rectangle) {
+	if r.Eq(s.rect) {
+		return
+	}
 	s.rect = r
-	s.lastSR = image.Rectangle{}
+	s.lastDrawnThumb = image.Rectangle{}
 }
 
 // Draw renders the scrollbar (track, thumb, edge) into its current
@@ -107,10 +111,10 @@ func (s *Scrollbar) Draw() {
 	}
 	totalPx, viewPx, originPx := s.model.Geometry()
 	thumbRect := computeThumbRect(s.rect, totalPx, viewPx, originPx)
-	if thumbRect.Eq(s.lastSR) {
+	if thumbRect.Eq(s.lastDrawnThumb) {
 		return
 	}
-	s.lastSR = thumbRect
+	s.lastDrawnThumb = thumbRect
 	s.ensureScratch()
 	s.renderThumb(thumbRect)
 }
