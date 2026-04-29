@@ -84,8 +84,22 @@ Lifted bit-for-bit from `Text.Scroll` (`scrl.go:101-166`) and
 |-------|-------------|------|-------|
 | [x] Design | Confirm latch loop matches `scrl.go:108-165` | `scrl.go:101-166`, `wind.go:1481-1561`, `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | Loop body factored into `clampMouseY`, `warpToCenter`, `dispatch`, `waitForNextTick`, `drainMouseEvents`, `scrollbarSleep`. Ordering of Flush/MoveTo/Read/model-update preserved bit-for-bit. |
 | [x] Tests | Write tests for `Scrollbar.HandleClick` button dispatch | `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | `scrollbar_test.go` covers `dispatch` (B1→DragTopToPixel, B3→DragPixelToTop, B2→JumpToFraction with correct fraction, B2 zero-track-height guard, unknown-button no-op). The full latch loop (auto-repeat timing, drain) is **deferred to manual verification** in §2.3 — `Mousectl.Read` embeds a real-display `Flush()` and faking it requires invasive abstraction work. The timing test from the original plan is flagged as deferred. |
-| [x] Iterate | Implement `HandleClick` | `scrl.go:101-166`, `wind.go:1481-1561` | Done in `68ad57a`. `initialDebounceMs` and `repeatDebounceMs` are package-level vars to leave a future test seam. |
+| [x] Iterate | Implement `HandleClick` | `scrl.go:101-166`, `wind.go:1481-1561` | Done in `68ad57a`. `initialDebounce` / `repeatDebounce` are package-level `time.Duration` vars (renamed in Phase 1.4) to leave a future test seam. |
 | [x] Commit | Commit Scrollbar mouse latch | — | `68ad57a` Add Scrollbar widget mouse latch |
+
+### 1.4 Address Phase 1 reviewer findings
+
+Architect + code-reviewer pass against Phase 1 surfaced one bug
+(scratch image not reallocated on screen growth) plus a batch of
+correctness, idiomatic-Go, and test-sharpness improvements. All
+non-deferred findings landed before opening the PR.
+
+| Stage | Description | Read | Notes |
+|-------|-------------|------|-------|
+| [x] Design | Triage findings → fix-now vs. defer | reviewer outputs | Fix-now: `s.tmp` lifetime, `time.Duration` typing, `waitForNextTick` signature, `lastSR` rename, `SetRect` short-circuit, doc clarifications, design doc honesty fixes, test sharpness. Deferred: H-scrollbar axis parameterization (Phase 4 cleanup), full latch loop testing (Phase 2.3 manual), lifecycle ownership audit (Phase 2/3). |
+| [x] Tests | Strengthen tests in lockstep with each fix | — | Added: `s.tmp` resize self-heal (with same-size no-op); `Draw` empty-rect; `clampMouseY` boundary cases; `SetRect` same-rect idempotency; non-trivial `clickY` values for B1/B3/B2 dispatch (37, 73, 17, 88, 99 — chosen so any off-by-track-height error produces an unambiguous wrong number); exact draw-op count assertion (`expectedFirstDrawOps = 4`) instead of `> 0`. |
+| [x] Iterate | Apply fixes | — | Done across `5971ece`, `84a090f`, `dfc2325`, `200e59f`, `6bbb6e3`, `3eecc67`. |
+| [x] Commit | One commit per concern | — | See above SHAs. |
 
 ---
 
