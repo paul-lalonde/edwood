@@ -564,21 +564,22 @@ hoist into a subpackage once the API is stable.
 
 - **Horizontal scrollbar unification.** The H-scrollbar currently
   lives in `rich/frame.go` and is invoked via
-  `wind.go:previewHScrollLatch`. The latch pattern can be moved to
-  the same widget by parameterizing axis (vertical / horizontal),
-  but this is deferred to a follow-up. The H-scrollbar's
-  per-block-region indexing model (see
-  `docs/horizontal-scrollbar-design.md`) makes this a non-trivial
-  separate effort.
-  - **The V-scrollbar widget is not internally axis-agnostic.**
-    The Phase 1 implementation bakes vertical assumptions into
-    `clampMouseY`, `warpToCenter` (centerX/my split),
-    `computeThumbRect`, `clampThumbHeight`, and `dispatch`'s
-    pixel-Y semantics. An H-scrollbar variant would either share
-    code via per-axis adapters or require a non-trivial
-    parameterization pass. Treat the H-scrollbar follow-up as a
-    cleanup phase that revisits this trade-off; do not assume a
-    drop-in axis swap.
+  `wind.go:previewHScrollLatch`. Folding it into this widget is
+  deferred to a follow-up; the H-scrollbar's per-block-region
+  indexing model (see `docs/horizontal-scrollbar-design.md`) is a
+  separate concern from the V-axis click semantics this design
+  unifies.
+- **Axis-agnosticism.** The widget is named `Scrollbar` but is
+  vertical-only by construction. Vertical assumptions are baked
+  into `clampMouseY`, `warpToCenter` (centerX/my split),
+  `computeThumbRect`, `clampThumbHeight`, and `dispatch`'s
+  pixel-Y semantics — not just the public surface but the
+  internal arithmetic. An H-scrollbar variant will not be a
+  drop-in axis swap or a clean parameterization; it will need
+  per-axis adapters (or a generalization pass that extracts the
+  shared structure first). Anyone picking up the H-scrollbar
+  follow-up should plan for that work explicitly rather than
+  assume the V-widget can be reused unchanged.
 - **Scroll wheel.** `RichText.ScrollWheel` (`richtext.go:719`) and
   text mode's wheel handling continue to operate independently of
   the latch widget. They call into the same `ScrollModel` adapters,
