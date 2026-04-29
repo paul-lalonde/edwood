@@ -377,7 +377,9 @@ func mousethread(g *globals, display draw.Display) {
 			display.ScreenImage().Draw(display.ScreenImage().R(), display.White(), nil, image.Point{})
 			// TODO(rjk): We appear to have already done this.
 			g.iconinit(display)
-			ScrlResize(display)
+			// Per-Text Scrollbar widgets manage their own scratch
+			// images; the legacy package-level scrtmp was removed
+			// alongside scrl.go. No allocation needed here.
 			g.row.Resize(display.ScreenImage().R())
 		case g.mousectl.Mouse = <-g.mousectl.C:
 			MovedMouse(g, g.mousectl.Mouse)

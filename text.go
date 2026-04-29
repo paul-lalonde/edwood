@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rjkroege/edwood/complete"
 	"github.com/rjkroege/edwood/draw"
@@ -1177,10 +1178,48 @@ func getP1(fr frame.Frame) int {
 	return p1
 }
 
+// ScrDraw delegates to the shared Scrollbar widget. The widget owns
+// drawing, dirty caching, and scratch-image lifecycle; this method
+// keeps only the body-only and preview-mode guards. Both guards
+// must remain at the call site (not in the widget) because the
+// widget does not know which Text it is attached to or whether the
+// window is in preview mode.
+//
+// The nchars parameter is unused — the widget's textScrollModel
+// adapter reads frame Nchars itself via Geometry. The parameter
+// remains for backward compatibility with existing call sites; a
+// follow-up cleanup will drop it.
+func (t *Text) ScrDraw(nchars int) {
+	if t.w == nil || t != &t.w.body {
+		return
+	}
+	if t.w.IsPreviewMode() {
+		// In preview mode, the RichText handles its own scrollbar.
+		return
+	}
+	if t.scrollbar == nil {
+		return
+	}
+	t.scrollbar.Draw()
+}
+
+// Scroll delegates to the shared Scrollbar widget. The widget owns
+// the click-and-hold latch loop, debounce timing, cursor warping,
+// and post-release event drain. Mode-specific arithmetic
+// (BackNL / Charofpt / file.Nr) lives in textScrollModel.
+func (t *Text) Scroll(but int) {
+	if t.scrollbar == nil {
+		return
+	}
+	t.scrollbar.HandleClick(but)
+}
+
 func (t *Text) FrameScroll(fr frame.SelectScrollUpdater, dl int) {
 	if dl == 0 {
 		// TODO(rjk): Make this mechanism better? It seems unfortunate.
-		ScrSleep(100)
+		// 100ms throttle that returns early if mouse activity arrives,
+		// using the same drain primitive as the scrollbar latch.
+		drainScrollEvents(global.mousectl, 100*time.Millisecond)
 		return
 	}
 	var q0 int
