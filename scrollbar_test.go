@@ -264,6 +264,109 @@ func TestScrollbar_DispatchUnknownButtonIsNoop(t *testing.T) {
 	}
 }
 
+func TestScrollbar_DrawWithEmptyRectIsNoop(t *testing.T) {
+	s, _, display := scrollbarTestHarness(t)
+	s.SetRect(image.Rectangle{}) // empty rect
+	display.(edwoodtest.GettableDrawOps).Clear()
+	s.Draw()
+	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got != 0 {
+		t.Errorf("Draw with empty rect produced %d ops; want 0", got)
+	}
+}
+
+func TestScrollbar_ReallocatesScratchWhenTooSmall(t *testing.T) {
+	// Simulate a widget whose scratch image was allocated against a
+	// smaller screen (e.g. the screen later grew). Draw must
+	// reallocate; otherwise renderThumb's blit would clip.
+	s, _, display := scrollbarTestHarness(t)
+	screenH := display.ScreenImage().R().Max.Y
+	smallH := screenH / 4
+	if smallH < 1 {
+		t.Fatal("test display too small to simulate resize")
+	}
+	small, err := display.AllocImage(image.Rect(0, 0, 32, smallH), display.ScreenImage().Pix(), false, draw.Nofill)
+	if err != nil {
+		t.Fatalf("alloc small tmp: %v", err)
+	}
+	s.tmp = small
+	s.Draw()
+	if s.tmp == small {
+		t.Error("expected scratch to be reallocated when too small for screen")
+	}
+	if s.tmp.R().Max.Y < screenH {
+		t.Errorf("reallocated scratch height %d < screen height %d", s.tmp.R().Max.Y, screenH)
+	}
+}
+
+func TestScrollbar_KeepsScratchWhenAdequateSize(t *testing.T) {
+	// If the existing scratch is at least as tall as the screen,
+	// Draw must not reallocate. (Avoids freeing a perfectly good
+	// image on every paint.)
+	s, _, _ := scrollbarTestHarness(t)
+	s.Draw() // first draw allocates
+	original := s.tmp
+	s.Draw() // second draw with no change should reuse
+	if s.tmp != original {
+		t.Error("scratch reallocated unnecessarily on second Draw")
+	}
+}
+
+func TestClampMouseY_BelowRectClampsToMin(t *testing.T) {
+	rect := image.Rect(0, 100, 12, 200)
+	withGlobalMouseY(t, 50, func() {
+		if got := clampMouseY(rect); got != 100 {
+			t.Errorf("clampMouseY=%d, want 100", got)
+		}
+	})
+}
+
+func TestClampMouseY_AboveRectClampsToMax(t *testing.T) {
+	rect := image.Rect(0, 100, 12, 200)
+	withGlobalMouseY(t, 250, func() {
+		// Legacy clamps `>=` to Max (inclusive), not Max-1.
+		if got := clampMouseY(rect); got != 200 {
+			t.Errorf("clampMouseY=%d, want 200", got)
+		}
+	})
+}
+
+func TestClampMouseY_AtMaxBoundaryClampsToMax(t *testing.T) {
+	rect := image.Rect(0, 100, 12, 200)
+	withGlobalMouseY(t, 200, func() {
+		// `>= Max.Y` triggers clamp; result is Max.Y itself.
+		if got := clampMouseY(rect); got != 200 {
+			t.Errorf("clampMouseY at boundary=%d, want 200", got)
+		}
+	})
+}
+
+func TestClampMouseY_InsideRectIsUnchanged(t *testing.T) {
+	rect := image.Rect(0, 100, 12, 200)
+	withGlobalMouseY(t, 150, func() {
+		if got := clampMouseY(rect); got != 150 {
+			t.Errorf("clampMouseY=%d, want 150", got)
+		}
+	})
+}
+
+// withGlobalMouseY temporarily sets global.mouse.Point.Y to y,
+// running fn under the override and restoring on return. Tests of
+// clampMouseY use this rather than touching globals directly so
+// failures don't leak state into other tests.
+func withGlobalMouseY(t *testing.T, y int, fn func()) {
+	t.Helper()
+	if global == nil {
+		global = makeglobals()
+	}
+	if global.mouse == nil {
+		global.mouse = new(draw.Mouse)
+	}
+	saved := global.mouse.Point
+	global.mouse.Point.Y = y
+	defer func() { global.mouse.Point = saved }()
+	fn()
+}
+
 // HandleClick's full latch loop is not unit-tested. It mixes timing,
 // global mouse state, and a real-display-only Mousectl.Read (see
 // 9fans.net/go/draw/mouse.go); reproducing those in tests requires

@@ -111,10 +111,24 @@ func (s *Scrollbar) Draw() {
 		return
 	}
 	s.lastSR = thumbRect
-	if s.tmp == nil {
-		s.tmp = s.allocTmp()
-	}
+	s.ensureScratch()
 	s.renderThumb(thumbRect)
+}
+
+// ensureScratch lazily allocates s.tmp on first Draw and reallocates
+// it when the screen has grown beyond its current height. The legacy
+// scrl.go relied on a global ScrlResize call from acme.go on the
+// resize event; the widget self-heals per Draw instead so that
+// callers don't have to remember.
+func (s *Scrollbar) ensureScratch() {
+	needed := s.display.ScreenImage().R().Max.Y
+	if s.tmp != nil && s.tmp.R().Max.Y >= needed {
+		return
+	}
+	if s.tmp != nil {
+		_ = s.tmp.Free()
+	}
+	s.tmp = s.allocTmp()
 }
 
 // renderThumb paints track + thumb + 1-pixel right edge into the
