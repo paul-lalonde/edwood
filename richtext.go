@@ -53,7 +53,7 @@ type RichText struct {
 	maxtabChars int
 
 	// Shift content up so last visible line is fully visible
-	snapBottomLine bool
+	defaultScrollSnap rich.ScrollSnap // forwarded to frame on Init
 }
 
 // NewRichText creates a new RichText component.
@@ -119,8 +119,8 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	if rt.maxtabChars > 0 {
 		frameOpts = append(frameOpts, rich.WithMaxTab(rt.maxtabChars))
 	}
-	if rt.snapBottomLine {
-		frameOpts = append(frameOpts, rich.WithSnapBottomLine(true))
+	if rt.defaultScrollSnap != rich.SnapTop {
+		frameOpts = append(frameOpts, rich.WithDefaultScrollSnap(rt.defaultScrollSnap))
 	}
 
 	// Initialize frame with empty rectangle - will be set on first Render() call
@@ -367,6 +367,14 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	fontH := rt.frame.DefaultFontHeight()
 	var newPixelY int
 
+	// Per the scroll-snap policy (see unified-scrollbar.md
+	// § "Scroll snap policy (rich mode)"):
+	//   B1 reveals earlier content -> snap the bottom line at viewport bottom.
+	//   B3 reveals later content   -> snap the new top line at viewport top.
+	//   B2 jumps arbitrarily       -> snap top for predictability.
+	// SetOrigin/SetOriginYOffset (called below) reset snap to
+	// SnapTop, so SetScrollSnap must be called AFTER them.
+	var snap rich.ScrollSnap
 	switch button {
 	case 1:
 		// Button 1 (left): scroll up by a screenful scaled by click position
@@ -379,6 +387,7 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 		if newPixelY < 0 {
 			newPixelY = 0
 		}
+		snap = rich.SnapBottom
 
 	case 2:
 		// Button 2 (middle): jump to absolute position in the document.
@@ -390,6 +399,7 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 		if newPixelY < 0 {
 			newPixelY = 0
 		}
+		snap = rich.SnapTop
 
 	case 3:
 		// Button 3 (right): scroll down by a screenful scaled by click position.
@@ -401,6 +411,7 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 		if newPixelY > maxPixelY {
 			newPixelY = maxPixelY
 		}
+		snap = rich.SnapTop
 
 	default:
 		return rt.Origin()
@@ -412,6 +423,7 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	newOrigin := lineStarts[newLine]
 	rt.frame.SetOrigin(newOrigin)
 	rt.frame.SetOriginYOffset(newOffset)
+	rt.frame.SetScrollSnap(snap)
 	return newOrigin
 }
 
@@ -611,11 +623,16 @@ func WithRichTextMaxTab(chars int) RichTextOption {
 	}
 }
 
-// WithRichTextSnapBottomLine shifts content up so the last visible line
-// ends exactly at the frame bottom, avoiding bottom-line clipping after scroll.
-func WithRichTextSnapBottomLine(snap bool) RichTextOption {
+// WithRichTextDefaultScrollSnap configures the initial ScrollSnap
+// preference for the underlying rich frame. Default is SnapTop;
+// pass SnapBottom only if a freshly-displayed document should land
+// bottom-anchored. Most callers should leave this at the default —
+// scroll handlers switch to SnapBottom on B1 click, and
+// SetOrigin/SetOriginYOffset reset to SnapTop, so the freshly-
+// constructed default rarely matters in steady state.
+func WithRichTextDefaultScrollSnap(s rich.ScrollSnap) RichTextOption {
 	return func(rt *RichText) {
-		rt.snapBottomLine = snap
+		rt.defaultScrollSnap = s
 	}
 }
 

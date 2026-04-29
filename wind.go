@@ -2416,7 +2416,12 @@ func (w *Window) initStyledMode() {
 			global.textcolors[frame.ColBord],
 			global.textcolors[frame.ColBack]),
 		WithRichTextMaxTab(int(global.maxtab)),
-		WithRichTextSnapBottomLine(true),
+		// Default ScrollSnap (SnapTop) is what we want for a
+		// freshly-displayed document. The B1 handler switches to
+		// SnapBottom when the user starts scrolling. Removing
+		// the legacy WithRichTextSnapBottomLine(true) per
+		// docs/designs/features/unified-scrollbar.md
+		// § "Scroll snap policy (rich mode)".
 	}
 	if boldFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))

@@ -125,11 +125,13 @@ func WithMaxTab(chars int) Option {
 	}
 }
 
-// WithSnapBottomLine is an Option that shifts content up so the last
-// visible line ends exactly at the frame bottom. The top line absorbs
-// the clipping instead of the bottom line being cut off.
-func WithSnapBottomLine(snap bool) Option {
+// WithDefaultScrollSnap configures the initial ScrollSnap value for
+// the frame. The default (when unset or set to SnapTop) aligns the
+// first visible line to the viewport top and is appropriate for
+// freshly-displayed documents. Scroll handlers may switch to
+// SnapBottom or SnapPixel via Frame.SetScrollSnap.
+func WithDefaultScrollSnap(s ScrollSnap) Option {
 	return func(fi *frameImpl) {
-		fi.snapBottomLine = snap
+		fi.scrollSnap = s
 	}
 }
