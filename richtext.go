@@ -297,30 +297,6 @@ func (rt *RichText) Render(r image.Rectangle) {
 	}
 }
 
-// scrDraw renders the scrollbar background and thumb using cached rectangles.
-func (rt *RichText) scrDraw() {
-	rt.scrDrawAt(rt.lastScrollRect)
-}
-
-// scrDrawAt renders the scrollbar at the given rectangle.
-func (rt *RichText) scrDrawAt(scrollRect image.Rectangle) {
-	if rt.display == nil {
-		return
-	}
-
-	screen := rt.display.ScreenImage()
-
-	// Draw scrollbar background
-	if rt.scrollBg != nil {
-		screen.Draw(scrollRect, rt.scrollBg, rt.scrollBg, image.ZP)
-	}
-
-	// Draw scrollbar thumb
-	if rt.scrollThumb != nil {
-		thumbRect := rt.scrThumbRectAt(scrollRect)
-		screen.Draw(thumbRect, rt.scrollThumb, rt.scrollThumb, image.ZP)
-	}
-}
 
 // ScrollClick handles a click on the scrollbar using cached rectangles.
 // It takes the button number (1, 2, or 3) and the click point,
