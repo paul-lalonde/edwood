@@ -1,5 +1,16 @@
 # Horizontal Scroll Bars for Non-Foldable Elements
 
+> **Note (2026-04-28)**: The vertical-scrollbar latch logic described
+> in the "Scrollbar Latching (Remediation)" section below is being
+> consolidated with the text-mode scrollbar into a single shared
+> widget — see
+> [docs/designs/features/unified-scrollbar.md](designs/features/unified-scrollbar.md).
+> Horizontal-scrollbar unification (axis-agnostic widget) is an
+> intentional follow-up and is **out of scope** for the initial
+> unification because it interacts with the per-block-region
+> indexing model. `previewHScrollLatch` will continue to live in
+> `wind.go` until that follow-up.
+
 ## Problem
 
 Non-foldable layout elements (code blocks, tables, images) currently have
