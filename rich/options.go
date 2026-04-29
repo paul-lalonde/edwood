@@ -125,6 +125,19 @@ func WithMaxTab(chars int) Option {
 	}
 }
 
+// WithHScrollHeight overrides the horizontal scrollbar height used by
+// per-block-region scrollbar layout. Production callers (RichText)
+// pass main's Scrollwid through here so the rich package and main
+// agree at runtime; standalone callers and tests can rely on
+// DefaultHScrollHeight set at NewFrame time.
+func WithHScrollHeight(h int) Option {
+	return func(fi *frameImpl) {
+		if h > 0 {
+			fi.hscrollHeight = h
+		}
+	}
+}
+
 // WithDefaultScrollSnap configures the initial ScrollSnap value for
 // the frame. The default (when unset or set to SnapTop) aligns the
 // first visible line to the viewport top and is appropriate for
