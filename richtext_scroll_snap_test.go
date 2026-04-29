@@ -80,6 +80,43 @@ func TestScrollClickB2SetsSnapTop(t *testing.T) {
 	}
 }
 
+// TestScrollClickB1MagnitudeScalesWithClickY pins down the corrected
+// B1 semantic: clicking near the top of the scrollbar should produce
+// a small scroll-back; clicking near the bottom should produce a
+// large scroll-back. This mirrors acme text-mode B1
+// (BackNL(t.org, clickY/fontH)) and makes B1/B3 inverse operations
+// at any click position.
+//
+// A previous implementation used (1.0 - clickProportion) which
+// inverted this relationship; clicking near the top produced a
+// full-screen scroll-back. The user observed this as "B1 doesn't
+// behave as the inverse of B3" in rich-text mode.
+func TestScrollClickB1MagnitudeScalesWithClickY(t *testing.T) {
+	rt, scrollRect := scrollSnapHarness(t)
+	rt.SetOrigin(75) // mid-document, with room to scroll back
+	originAtMid := rt.Origin()
+
+	// Click near the TOP of the scrollbar -> small scroll back.
+	rt.SetOrigin(originAtMid)
+	rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+1))
+	smallBack := originAtMid - rt.Origin()
+
+	// Click near the BOTTOM of the scrollbar -> large scroll back.
+	rt.SetOrigin(originAtMid)
+	rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, scrollRect.Max.Y-1))
+	largeBack := originAtMid - rt.Origin()
+
+	if smallBack < 0 || largeBack < 0 {
+		t.Fatalf("expected origin to decrease in both cases, got smallBack=%d largeBack=%d",
+			smallBack, largeBack)
+	}
+	if smallBack >= largeBack {
+		t.Errorf("B1 near top should scroll back LESS than B1 near bottom; "+
+			"got smallBack=%d largeBack=%d (formula likely inverted)",
+			smallBack, largeBack)
+	}
+}
+
 // TestScrollClick_RoundTripFromTopLandsAtTop is the integration-
 // level regression test for the user-reported bug. Starting at
 // origin=0 (first line at top), B3 forward then B1 back to

@@ -377,8 +377,19 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	var snap rich.ScrollSnap
 	switch button {
 	case 1:
-		// Button 1 (left): scroll up by a screenful scaled by click position
-		pixelsToMove := int(float64(frameHeight) * (1.0 - clickProportion))
+		// Button 1 (left): "drag the top line of the viewport down to
+		// the click position." Scroll back by clickY pixels so the
+		// previous top ends up at viewport-Y = clickY (in screen
+		// pixels). Mirrors acme text-mode B1
+		// (BackNL(t.org, clickY/fontH) at scrl.go:142-143) which
+		// scrolls back by clickY's worth of lines.
+		//
+		// The previous formula used (1.0 - clickProportion) which
+		// inverted the relationship: clicking near the top
+		// produced a full-screen scroll-back, clicking near the
+		// bottom produced no scroll. Backwards from acme; the user
+		// observed this as "B1 doesn't behave as the inverse of B3."
+		pixelsToMove := int(float64(frameHeight) * clickProportion)
 		if pixelsToMove < 1 {
 			pixelsToMove = 1
 		}
