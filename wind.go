@@ -1478,15 +1478,36 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	return false
 }
 
-// previewScrSleep waits for dt milliseconds or until a mouse event arrives,
-// whichever comes first. This matches ScrSleep in scrl.go but reads from the
-// passed-in Mousectl rather than global.mousectl.
-func previewScrSleep(mc *draw.Mousectl, dt int) {
-	timer := time.NewTimer(time.Duration(dt) * time.Millisecond)
-	select {
-	case <-timer.C:
-	case mc.Mouse = <-mc.C:
-		timer.Stop()
+// drainScrollEvents consumes all mouse events from mc that arrive
+// within the given duration, leaving the LATEST event's state in
+// mc.Mouse. The outer latch loop then makes a single
+// button-held-or-released decision based on the final state.
+//
+// This replaces the previous "wait once then read one event" pattern
+// (previewScrSleep, scrollbarSleep), which dispatched an extra
+// auto-repeat scroll for every mouse event observed during the
+// debounce window. The OS commonly emits a handful of cursor-jitter
+// move events between a button-press and the subsequent release —
+// pressing physically wiggles the cursor a pixel or two — and each
+// one used to fire the latch's per-iteration dispatch even on a
+// single physical click. Draining absorbs the jitter; only the
+// final state (release vs still-held) drives the loop.
+//
+// Returns once the timer fires (regardless of whether any events
+// were consumed during the wait).
+func drainScrollEvents(mc *draw.Mousectl, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case mc.Mouse = <-mc.C:
+			// consumed an event; keep draining until the timer
+		case <-timer.C:
+			return
+		}
 	}
 }
 
@@ -1512,16 +1533,21 @@ func (w *Window) previewVScrollLatch(rt *RichText, mc *draw.Mousectl, button int
 			// B2: read per-event for live thumb drag.
 			mc.Mouse = <-mc.C
 		} else {
-			// B1/B3: debounce for auto-repeat.
+			// B1/B3: drain events for the debounce window. The
+			// drain absorbs cursor jitter (a click physically
+			// wiggles the cursor 1-2 px, generating spurious
+			// move events between press and release). Without
+			// the drain, each jitter event used to trigger a
+			// per-iteration scroll-click — a single physical
+			// click became N dispatches.
 			if first {
 				if w.display != nil {
 					w.display.Flush()
 				}
-				time.Sleep(200 * time.Millisecond)
-				mc.Mouse = <-mc.C
+				drainScrollEvents(mc, 200*time.Millisecond)
 				first = false
 			} else {
-				previewScrSleep(mc, 80)
+				drainScrollEvents(mc, 80*time.Millisecond)
 			}
 		}
 
@@ -1587,11 +1613,10 @@ func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int
 				if w.display != nil {
 					w.display.Flush()
 				}
-				time.Sleep(200 * time.Millisecond)
-				mc.Mouse = <-mc.C
+				drainScrollEvents(mc, 200*time.Millisecond)
 				first = false
 			} else {
-				previewScrSleep(mc, 80)
+				drainScrollEvents(mc, 80*time.Millisecond)
 			}
 		}
 

@@ -359,19 +359,19 @@ func (s *Scrollbar) warpToCenter(centerX, my int) {
 // loop. It returns the new value of `first`, plus whether the loop
 // should continue (true while the button is still held).
 //
-// B2 reads per-event for live thumb drag; B1/B3 use the initial
-// debounce on the first tick and the shorter repeat debounce
-// thereafter.
+// B2 reads per-event for live thumb drag; B1/B3 drain events for
+// the debounce window (initialDebounce on first tick,
+// repeatDebounce thereafter), absorbing cursor-jitter move events
+// that would otherwise trigger spurious auto-repeat dispatches.
 func (s *Scrollbar) waitForNextTick(button int, first bool) (newFirst, keepGoing bool) {
 	if button == 2 {
 		global.mousectl.Read()
 	} else if first {
 		s.display.Flush()
-		time.Sleep(initialDebounce)
-		global.mousectl.Mouse = <-global.mousectl.C
+		drainScrollEvents(global.mousectl, initialDebounce)
 		first = false
 	} else {
-		scrollbarSleep(repeatDebounce)
+		drainScrollEvents(global.mousectl, repeatDebounce)
 	}
 	return first, global.mouse.Buttons&(1<<uint(button-1)) != 0
 }
@@ -384,17 +384,3 @@ func drainMouseEvents() {
 	}
 }
 
-// scrollbarSleep waits for d, returning early if a mouse event
-// arrives. Mirrors ScrSleep in scrl.go and previewScrSleep in
-// wind.go.
-func scrollbarSleep(d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	timer := time.NewTimer(d)
-	select {
-	case <-timer.C:
-	case <-global.mousectl.C:
-		timer.Stop()
-	}
-}
