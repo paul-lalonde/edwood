@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rjkroege/edwood/complete"
 	"github.com/rjkroege/edwood/draw"
@@ -73,8 +74,9 @@ type Text struct {
 	tabexpand bool
 	w         *Window
 	scrollr   image.Rectangle
-	lastsr    image.Rectangle
+	lastsr    image.Rectangle // unused; legacy scrl.go cache. Removed in Phase 2.4 cleanup.
 	all       image.Rectangle
+	scrollbar *Scrollbar
 	row       *Row
 	col       *Column
 
@@ -109,6 +111,8 @@ func (t *Text) Init(r image.Rectangle, rf string, cols [frame.NumColours]draw.Im
 	t.tabstop = int(global.maxtab)
 	t.tabexpand = global.tabexpand
 	t.fr = frame.NewFrame(r, fontget(rf, t.display), t.display.ScreenImage(), cols)
+	t.scrollbar = NewScrollbar(dis, &textScrollModel{t: t}, cols[frame.ColBord], cols[frame.ColBack])
+	t.scrollbar.SetRect(t.scrollr)
 	t.Redraw(r, -1, false /* noredraw */)
 	return t
 }
@@ -182,6 +186,9 @@ func (t *Text) Resize(r image.Rectangle, keepextra, noredraw bool) int {
 	t.scrollr = r
 	t.scrollr.Max.X = r.Min.X + t.display.ScaleSize(Scrollwid)
 	t.lastsr = image.Rectangle{}
+	if t.scrollbar != nil {
+		t.scrollbar.SetRect(t.scrollr)
+	}
 	r.Min.X += t.display.ScaleSize(Scrollwid + Scrollgap)
 	t.fr.Clear(false)
 	// TODO(rjk): Remove this Font accessor.
@@ -191,6 +198,10 @@ func (t *Text) Resize(r image.Rectangle, keepextra, noredraw bool) int {
 
 func (t *Text) Close() {
 	t.fr.Clear(true)
+	if t.scrollbar != nil {
+		t.scrollbar.Free()
+		t.scrollbar = nil
+	}
 	if err := t.file.DelObserver(t); err != nil {
 		util.AcmeError(err.Error(), nil)
 	}
@@ -474,7 +485,7 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 	// sequence of modifications to the file.Buffer, not here per action.
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	}
 	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
 		t.w.UpdateStyledView()
@@ -645,7 +656,7 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	}
 	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
 		t.w.UpdateStyledView()
@@ -1167,10 +1178,43 @@ func getP1(fr frame.Frame) int {
 	return p1
 }
 
+// ScrDraw delegates to the shared Scrollbar widget. The widget owns
+// drawing, dirty caching, and scratch-image lifecycle; this method
+// keeps only the body-only and preview-mode guards. Both guards
+// must remain at the call site (not in the widget) because the
+// widget does not know which Text it is attached to or whether the
+// window is in preview mode.
+func (t *Text) ScrDraw() {
+	if t.w == nil || t != &t.w.body {
+		return
+	}
+	if t.w.IsPreviewMode() {
+		// In preview mode, the RichText handles its own scrollbar.
+		return
+	}
+	if t.scrollbar == nil {
+		return
+	}
+	t.scrollbar.Draw()
+}
+
+// Scroll delegates to the shared Scrollbar widget. The widget owns
+// the click-and-hold latch loop, debounce timing, cursor warping,
+// and post-release event drain. Mode-specific arithmetic
+// (BackNL / Charofpt / file.Nr) lives in textScrollModel.
+func (t *Text) Scroll(but int) {
+	if t.scrollbar == nil {
+		return
+	}
+	t.scrollbar.HandleClick(but)
+}
+
 func (t *Text) FrameScroll(fr frame.SelectScrollUpdater, dl int) {
 	if dl == 0 {
 		// TODO(rjk): Make this mechanism better? It seems unfortunate.
-		ScrSleep(100)
+		// 100ms throttle that returns early if mouse activity arrives,
+		// using the same drain primitive as the scrollbar latch.
+		drainScrollEvents(global.mousectl, 100*time.Millisecond)
 		return
 	}
 	var q0 int
@@ -1297,7 +1341,7 @@ func (t *Text) Select() {
 					}
 				}
 			}
-			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+			t.ScrDraw()
 			clearmouse()
 		}
 		t.display.Flush()
@@ -1369,7 +1413,7 @@ func (t *Text) Show(q0, q1 int, doselect bool) {
 		}
 	}
 	if tsd {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	} else {
 		if t.w.nopen[QWevent] > 0 {
 			nl = 3 * t.fr.GetFrameFillStatus().Maxlines / 4
@@ -1755,7 +1799,7 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 	}
 	t.org = org
 	t.fill(fr)
-	t.ScrDraw(fr.GetFrameFillStatus().Nchars)
+	t.ScrDraw()
 
 	if !calledfromscroll {
 		t.SetSelect(t.q0, t.q1)

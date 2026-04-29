@@ -551,9 +551,23 @@ Recommendation: Yes, match existing conventions for consistency.
 
 ### 5. Scrollbar
 
-Reuse existing scrollbar code from `scrl.go` or implement fresh?
+**Resolved**: extract to a shared widget. See
+[docs/designs/features/unified-scrollbar.md](designs/features/unified-scrollbar.md).
 
-Recommendation: Extract scrollbar to shared utility if possible, otherwise copy and adapt.
+Both modes use a single `Scrollbar` widget that owns drawing, mouse
+handling, and the click-and-hold latch. Each mode supplies a small
+`ScrollModel` adapter:
+
+- Text mode's adapter wraps `Text` and uses `BackNL` / `Charofpt` /
+  `SetOrigin` (preserving the formulas at `scrl.go:127-148`).
+- Rich mode's adapter wraps `RichText` and uses
+  `LinePixelHeights` / `LineStartRunes` / `SetOriginYOffset` so
+  that scrolling through tall images (taller than the viewport)
+  produces smooth partial-visible states rather than line-snapped
+  jumps.
+
+Visuals are hardcoded to `global.textcolors[ColBord]` (track) and
+`[ColBack]` (thumb): decorations do not change color across modes.
 
 ---
 
@@ -723,13 +737,25 @@ This already works via `PreviewState.BufferChanged()` - needs integration with W
 
 ### Scrollbar
 
-Reuse existing scrollbar rendering from `scrl.go`:
+`richBody` shares the unified `Scrollbar` widget with normal `Text`
+bodies. See [docs/designs/features/unified-scrollbar.md](designs/features/unified-scrollbar.md)
+for the full design.
 
-- `richBody` occupies same rectangle as `body` would
-- Scrollbar on left side, same width as normal Text scrollbar
-- Same interaction: B1 scroll up, B2 absolute position, B3 scroll down
+- `richBody` occupies same rectangle as `body` would.
+- Scrollbar on left side, same width as normal Text scrollbar.
+- Identical visuals (frame colors, 10px minimum thumb).
+- Acme drag semantics (canonical):
+  - **B1**: drag-the-top-line-down-to-here.
+  - **B3**: drag-the-line-here-up-to-the-top.
+  - **B2**: jump so the thumb top sits at the click's track
+    fraction.
+- Click-and-hold latches with cursor warping and 200ms/80ms debounce,
+  exactly as text mode.
 
-The current `RichText` component already implements scrollbar. Ensure it matches the visual style and behavior of the standard Text scrollbar.
+Rich mode's adapter operates in pixel coordinates with sub-line
+offsets via `SetOriginYOffset`, so a single tall image (e.g. taller
+than the viewport) scrolls smoothly rather than snapping past line
+boundaries.
 
 ### Column Participation
 

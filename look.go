@@ -272,7 +272,7 @@ func plumbshow(m *plumb.Message) {
 	r, _, _ = util.Cvttorunes(m.Data, len(m.Data))
 	w.body.Insert(0, r, true)
 	w.body.file.Clean()
-	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+	w.body.ScrDraw()
 	w.tag.SetSelect(w.tag.Nc(), w.tag.Nc())
 	xfidlog(w, "new")
 	maybeRunFileHook(w)

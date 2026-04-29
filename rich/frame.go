@@ -47,11 +47,23 @@ type Frame interface {
 	GetOrigin() int
 	SetOriginYOffset(pixels int)
 	GetOriginYOffset() int
+	// SetScrollSnap configures snap behavior for subsequent layouts.
+	// Callers (typically scroll handlers) set this immediately
+	// before calling SetOrigin/SetOriginYOffset to record the
+	// user's intent. Edge cases (origin at file top, tall origin
+	// line) override this inside layoutFromOrigin.
+	SetScrollSnap(s ScrollSnap)
+	// ScrollSnap returns the currently configured snap behavior.
+	// Note that file-top and tall-line overrides are applied
+	// inside layoutFromOrigin and are not reflected here — this
+	// returns the caller-set preference, not the effective snap.
+	ScrollSnap() ScrollSnap
 	MaxLines() int
 	VisibleLines() int
 	TotalLines() int         // Total number of layout lines in the content
-	LineStartRunes() []int   // Rune offset at the start of each visual line
+	LineStartRunes() []int     // Rune offset at the start of each visual line
 	LinePixelHeights() []int   // Pixel height of each visual line (accounts for images)
+	LinePixelYs() []int        // Rendered Y of each visual line, with inter-line gaps + scrollbar adjustments
 	TotalDocumentHeight() int  // Total rendered height including all inter-line gaps (paragraph, heading, scrollbar)
 
 	// Rendering
@@ -180,7 +192,7 @@ type frameImpl struct {
 
 	// Shift content up so the last visible line is fully visible.
 	// The top line absorbs the clipping instead of the bottom line.
-	snapBottomLine bool
+	scrollSnap ScrollSnap // current snap preference; default SnapTop
 
 	// Layout cache: stores the result of contentToBoxes + layoutBoxes so
 	// repeated Redraw/TotalLines/etc. calls reuse expensive line-breaking
@@ -700,11 +712,16 @@ func (f *frameImpl) GetSelection() (p0, p1 int) {
 	return f.p0, f.p1
 }
 
-// SetOrigin sets the scroll origin.
-// Resets the pixel offset within the origin line to 0.
+// SetOrigin sets the scroll origin and resets the pixel offset and
+// snap preference. Programmatic scrolls (Look, search, auto-scroll)
+// call this and shouldn't inherit a stale SnapBottom from a prior
+// B1; resetting to SnapTop here keeps the policy predictable.
+// Scrollbar handlers that need a different snap call SetScrollSnap
+// AFTER SetOrigin.
 func (f *frameImpl) SetOrigin(org int) {
 	f.origin = org
 	f.originYOffset = 0
+	f.scrollSnap = SnapTop
 }
 
 // GetOrigin returns the current scroll origin.
@@ -713,9 +730,26 @@ func (f *frameImpl) GetOrigin() int {
 }
 
 // SetOriginYOffset sets the pixel offset within the origin line.
-// This enables sub-line scrolling for tall elements (images, large code blocks).
+// This enables sub-line scrolling for tall elements (images, large
+// code blocks). Resets snap preference to SnapTop, matching
+// SetOrigin's semantics for programmatic scrolls.
 func (f *frameImpl) SetOriginYOffset(pixels int) {
 	f.originYOffset = pixels
+	f.scrollSnap = SnapTop
+}
+
+// SetScrollSnap records the caller's snap preference for subsequent
+// layouts. Should be called AFTER SetOrigin/SetOriginYOffset because
+// those reset snap to SnapTop. Scrollbar click handlers set this to
+// SnapBottom for B1 (revealing earlier content) and leave it at the
+// SnapTop reset for B2 / B3 / programmatic scrolls.
+func (f *frameImpl) SetScrollSnap(s ScrollSnap) {
+	f.scrollSnap = s
+}
+
+// ScrollSnap returns the currently configured snap preference.
+func (f *frameImpl) ScrollSnap() ScrollSnap {
+	return f.scrollSnap
 }
 
 // GetOriginYOffset returns the pixel offset within the origin line.
@@ -803,6 +837,38 @@ func (f *frameImpl) LinePixelHeights() []int {
 		heights[i] = line.Height
 	}
 	return heights
+}
+
+// LinePixelYs returns the rendered Y position of each visual line in
+// the current layout, accounting for inter-line gaps (paragraph
+// spacing, heading spacing) and horizontal-scrollbar height
+// adjustments. Y values are in document-absolute layout space (line
+// 0 at Y=0). Use together with LinePixelHeights and LineStartRunes
+// for screen-Y ↔ line mapping that respects gaps.
+//
+// Slides adjustments are NOT applied here because layoutFromOrigin
+// applies those only to the viewport-visible subset.
+func (f *frameImpl) LinePixelYs() []int {
+	if f.font == nil || f.content == nil {
+		return nil
+	}
+	base := f.ensureBaseLayout()
+	if len(base) == 0 {
+		return nil
+	}
+
+	// Clone because adjustLayoutForScrollbars mutates Y.
+	lines := cloneLines(base)
+	frameWidth := f.rect.Dx()
+	scrollbarHeight := 12 // Scrollwid; matches layoutFromOrigin
+	regions := findBlockRegions(lines)
+	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	ys := make([]int, len(lines))
+	for i, line := range lines {
+		ys[i] = line.Y
+	}
+	return ys
 }
 
 // HasSlideBreakBetween returns true if there is a slide break (---\n---)
@@ -1498,7 +1564,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		// Apply slide fill adjustments.
 		slideRegions := findSlideRegions(lines)
 		adjustLayoutForSlides(lines, slideRegions, f.rect.Dy())
-		f.applySnapBottomLine(lines)
+		f.applyScrollSnap(lines, 0, lines)
 		return lines, 0
 	}
 
@@ -1595,17 +1661,53 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// when both HRules of a pair have Y >= 0).
 	slideRegions := findSlideRegions(visibleLines)
 	adjustLayoutForSlides(visibleLines, slideRegions, f.rect.Dy())
-	f.applySnapBottomLine(visibleLines)
+	f.applyScrollSnap(visibleLines, startLineIdx, allLines)
 
 	return visibleLines, f.origin
 }
 
-// applySnapBottomLine shifts all line Y values up so that the last
-// visible line ends exactly at the frame bottom. This makes the top
-// line absorb the partial-line clipping instead of the bottom line.
-// No-op when snapBottomLine is false or lines is empty.
-func (f *frameImpl) applySnapBottomLine(lines []Line) {
-	if !f.snapBottomLine || len(lines) == 0 {
+// applyScrollSnap dispatches to the configured snap behavior with
+// two edge-case overrides:
+//
+//   - At file top (origin=0, originYOffset=0) snap is forced to
+//     SnapTop so the user can always reach the first line aligned
+//     to the viewport top.
+//   - When the origin line is taller than the frame (e.g. a large
+//     image) snap is forced to SnapPixel so the user can scroll
+//     within the line via originYOffset; line-level snapping has
+//     no clean anchor in this regime.
+//
+// SnapTop and SnapPixel are no-ops at this layer — the layout
+// already aligns the origin line's top to the viewport top, with
+// originYOffset accounted for in the visible-lines Y values.
+// SnapBottom calls applyBottomShift, which is the legacy
+// applySnapBottomLine logic verbatim.
+//
+// See docs/designs/features/unified-scrollbar.md § "Scroll snap
+// policy (rich mode)" for the full policy.
+func (f *frameImpl) applyScrollSnap(visible []Line, startIdx int, all []Line) {
+	if len(visible) == 0 {
+		return
+	}
+	snap := f.scrollSnap
+	switch {
+	case f.origin == 0 && f.originYOffset == 0:
+		snap = SnapTop
+	case startIdx >= 0 && startIdx < len(all) && all[startIdx].Height > f.rect.Dy():
+		snap = SnapPixel
+	}
+	if snap == SnapBottom {
+		f.applyBottomShift(visible)
+	}
+}
+
+// applyBottomShift shifts all line Y values up so that the last
+// visible line ends exactly at the frame bottom. This makes the
+// top line absorb the partial-line clipping instead of the bottom
+// line. Identical to the legacy applySnapBottomLine; only the name
+// changed (the snap-vs-not decision moved to applyScrollSnap).
+func (f *frameImpl) applyBottomShift(lines []Line) {
+	if len(lines) == 0 {
 		return
 	}
 	frameHeight := f.rect.Dy()

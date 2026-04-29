@@ -197,7 +197,7 @@ func (w *Window) Init(clone *Window, r image.Rectangle, dis draw.Display) {
 	if w.display != nil {
 		w.display.ScreenImage().Draw(r1, global.tagcolors[frame.ColBord], nil, image.Point{})
 	}
-	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+	w.body.ScrDraw()
 	w.r = r
 	var br image.Rectangle
 	br.Min = w.tag.scrollr.Min
@@ -369,7 +369,7 @@ func (w *Window) Resize(r image.Rectangle, safe, keepextra bool) int {
 		if (w.previewMode || w.styledMode) && w.richBody != nil {
 			w.richBody.Render(w.body.all)
 		} else {
-			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+			w.body.ScrDraw()
 		}
 	}
 	w.maxlines = util.Min(w.body.fr.GetFrameFillStatus().Nlines, util.Max(w.maxlines, w.body.fr.GetFrameFillStatus().Maxlines))
@@ -947,7 +947,7 @@ func (w *Window) SetPreviewMode(enabled bool) {
 		// Force a full redraw of the body by resizing it
 		if w.display != nil {
 			w.body.Resize(w.body.all, true, false)
-			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+			w.body.ScrDraw()
 			w.display.Flush()
 		}
 	}
@@ -1032,8 +1032,12 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		} else if m.Buttons&4 != 0 {
 			button = 3
 		}
-		if button != 0 && mc != nil {
-			w.previewVScrollLatch(rt, mc, button, scrRect)
+		if button != 0 && mc != nil && rt.scrollbar != nil {
+			rt.scrollbar.HandleClick(button)
+			w.Draw()
+			if w.display != nil {
+				w.display.Flush()
+			}
 			return true
 		}
 	}
@@ -1478,85 +1482,36 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	return false
 }
 
-// previewScrSleep waits for dt milliseconds or until a mouse event arrives,
-// whichever comes first. This matches ScrSleep in scrl.go but reads from the
-// passed-in Mousectl rather than global.mousectl.
-func previewScrSleep(mc *draw.Mousectl, dt int) {
-	timer := time.NewTimer(time.Duration(dt) * time.Millisecond)
-	select {
-	case <-timer.C:
-	case mc.Mouse = <-mc.C:
-		timer.Stop()
+// drainScrollEvents consumes all mouse events from mc that arrive
+// within the given duration, leaving the LATEST event's state in
+// mc.Mouse. The outer latch loop then makes a single
+// button-held-or-released decision based on the final state.
+//
+// This replaces the previous "wait once then read one event" pattern
+// (previewScrSleep, scrollbarSleep), which dispatched an extra
+// auto-repeat scroll for every mouse event observed during the
+// debounce window. The OS commonly emits a handful of cursor-jitter
+// move events between a button-press and the subsequent release —
+// pressing physically wiggles the cursor a pixel or two — and each
+// one used to fire the latch's per-iteration dispatch even on a
+// single physical click. Draining absorbs the jitter; only the
+// final state (release vs still-held) drives the loop.
+//
+// Returns once the timer fires (regardless of whether any events
+// were consumed during the wait).
+func drainScrollEvents(mc *draw.Mousectl, d time.Duration) {
+	if d <= 0 {
+		return
 	}
-}
-
-// previewVScrollLatch implements acme-style latching for the vertical
-// scrollbar in preview mode. Once a button is pressed in the scrollbar, the
-// scroll action tracks the mouse until the button is released. The cursor is
-// physically warped back into the scrollbar on each iteration, matching the
-// acme pattern in scrl.go.
-func (w *Window) previewVScrollLatch(rt *RichText, mc *draw.Mousectl, button int, scrRect image.Rectangle) {
-	buttonBit := 1 << uint(button-1)
-	centerX := (scrRect.Min.X + scrRect.Max.X) / 2
-
-	// Initial scroll action.
-	rt.ScrollClick(button, mc.Mouse.Point)
-	w.Draw()
-	if w.display != nil {
-		w.display.Flush()
-	}
-
-	first := true
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	for {
-		if button == 2 {
-			// B2: read per-event for live thumb drag.
-			mc.Mouse = <-mc.C
-		} else {
-			// B1/B3: debounce for auto-repeat.
-			if first {
-				if w.display != nil {
-					w.display.Flush()
-				}
-				time.Sleep(200 * time.Millisecond)
-				mc.Mouse = <-mc.C
-				first = false
-			} else {
-				previewScrSleep(mc, 80)
-			}
+		select {
+		case mc.Mouse = <-mc.C:
+			// consumed an event; keep draining until the timer
+		case <-timer.C:
+			return
 		}
-
-		if mc.Mouse.Buttons&buttonBit == 0 {
-			break
-		}
-
-		// Clamp Y and lock X to center of scrollbar.
-		my := mc.Mouse.Point.Y
-		if my < scrRect.Min.Y {
-			my = scrRect.Min.Y
-		}
-		if my >= scrRect.Max.Y {
-			my = scrRect.Max.Y
-		}
-		warpPt := image.Pt(centerX, my)
-
-		// Warp cursor back into scrollbar if it has moved away.
-		if !mc.Mouse.Point.Eq(warpPt) {
-			if w.display != nil {
-				w.display.MoveTo(warpPt)
-			}
-			mc.Mouse = <-mc.C // absorb synthetic move event
-		}
-
-		rt.ScrollClick(button, warpPt)
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-	}
-
-	// Drain remaining mouse events until all buttons released.
-	for mc.Mouse.Buttons != 0 {
-		mc.Mouse = <-mc.C
 	}
 }
 
@@ -1587,11 +1542,10 @@ func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int
 				if w.display != nil {
 					w.display.Flush()
 				}
-				time.Sleep(200 * time.Millisecond)
-				mc.Mouse = <-mc.C
+				drainScrollEvents(mc, 200*time.Millisecond)
 				first = false
 			} else {
-				previewScrSleep(mc, 80)
+				drainScrollEvents(mc, 80*time.Millisecond)
 			}
 		}
 
@@ -2416,7 +2370,12 @@ func (w *Window) initStyledMode() {
 			global.textcolors[frame.ColBord],
 			global.textcolors[frame.ColBack]),
 		WithRichTextMaxTab(int(global.maxtab)),
-		WithRichTextSnapBottomLine(true),
+		// Default ScrollSnap (SnapTop) is what we want for a
+		// freshly-displayed document. The B1 handler switches to
+		// SnapBottom when the user starts scrolling. Removing
+		// the legacy WithRichTextSnapBottomLine(true) per
+		// docs/designs/features/unified-scrollbar.md
+		// § "Scroll snap policy (rich mode)".
 	}
 	if boldFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
@@ -2460,7 +2419,7 @@ func (w *Window) exitStyledMode() {
 
 	if w.display != nil {
 		w.body.Resize(w.body.all, true, false)
-		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+		w.body.ScrDraw()
 		w.display.Flush()
 	}
 }
@@ -2746,8 +2705,12 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		} else if m.Buttons&4 != 0 {
 			button = 3
 		}
-		if button != 0 && mc != nil {
-			w.previewVScrollLatch(rt, mc, button, scrRect)
+		if button != 0 && mc != nil && rt.scrollbar != nil {
+			rt.scrollbar.HandleClick(button)
+			w.Draw()
+			if w.display != nil {
+				w.display.Flush()
+			}
 			return true
 		}
 	}

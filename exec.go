@@ -403,7 +403,7 @@ func cut(et *Text, t *Text, _ *Text, dosnarf bool, docut bool, _ string) {
 		t.Delete(t.q0, t.q1, true)
 		t.SetSelect(t.q0, t.q0)
 		if t.w != nil {
-			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+			t.ScrDraw()
 			t.w.Commit(t)
 		}
 	} else {
@@ -475,7 +475,7 @@ func paste(et *Text, t *Text, _ *Text, selectall bool, tobody bool, _ string) {
 		t.SetSelect(q1, q1)
 	}
 	if t.w != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 		t.w.Commit(t)
 	}
 }
@@ -1218,14 +1218,34 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 			w.imageCache.Clear()
 			w.imageCache = nil
 		}
+		// Capture viewport anchor BEFORE syncing selection so we
+		// can preserve the area the user was viewing in the
+		// preview. Prefer the rich-text selection if it's
+		// currently visible (the user clicked into the preview),
+		// else use the rune at the top of the rich viewport.
+		// Without this, an exit from a preview the user scrolled
+		// far into would jump body back to the source-position of
+		// the (often stale) q0 — typically the top of the file.
+		srcAnchor := -1
+		if w.richBody != nil && w.previewSourceMap != nil {
+			rendAnchor := pickRichViewportAnchor(w.richBody)
+			if s, _ := w.previewSourceMap.ToSource(rendAnchor, rendAnchor); s >= 0 {
+				srcAnchor = s
+			}
+		}
 		// Sync preview selection to source before exiting, so the source view
 		// shows the position the user was looking at in the preview.
 		// This avoids stale body.q0/q1 from link navigation or search operations.
 		w.syncSourceSelection()
 		w.SetPreviewMode(false)
-		// Scroll the source view to make the current selection visible.
-		// Show() handles ScrDraw + SetSelect + scrolling if off-screen.
-		w.body.Show(w.body.q0, w.body.q1, true)
+		if srcAnchor >= 0 {
+			// Position body so the same line is at the top of
+			// the plain viewport.
+			w.body.SetOrigin(srcAnchor, false)
+		} else {
+			// Fallback: scroll to show the cursor.
+			w.body.Show(w.body.q0, w.body.q1, true)
+		}
 		if w.display != nil {
 			w.display.Flush()
 		}
@@ -1360,16 +1380,70 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	// Enter preview mode
 	w.SetPreviewMode(true)
 
-	// Render the preview, then scroll to make the selection visible.
-	// Must render first so the frame has layout data for scrollPreviewToMatch.
+	// Render the preview, then scroll to preserve the viewing area
+	// the user had in the plain (source) view. Anchor preference:
+	// the cursor (body.q0) if it's currently visible, otherwise
+	// the top of the body's viewport (body.org). Without the
+	// fallback, a user who has scrolled deep into a long file but
+	// hasn't clicked anything recently would have q0=0 and the
+	// preview would jump to the top of the file — losing their
+	// viewing position.
 	rt.Render(bodyRect)
-	if rendStart >= 0 {
+	sourceAnchor := pickPlainViewportAnchor(&w.body)
+	if rendAnchor, _ := sourceMap.ToRendered(sourceAnchor, sourceAnchor); rendAnchor >= 0 {
+		rt.SetOrigin(rendAnchor)
+	} else if rendStart >= 0 {
+		// Fallback to the legacy "scroll to selection" behavior
+		// when source-map mapping fails.
 		w.scrollPreviewToMatch(rt, rendStart)
 	}
 	w.Draw()
 	if display != nil {
 		display.Flush()
 	}
+}
+
+// pickPlainViewportAnchor returns the source rune that anchors the
+// current plain-view viewport for cross-mode toggle purposes:
+// prefer body.q0 if it is currently visible (the user has clicked
+// recently), otherwise the rune at the top of the viewport
+// (body.org). Used to preserve viewing context across Markdown-mode
+// toggles.
+func pickPlainViewportAnchor(t *Text) int {
+	if t.fr == nil {
+		return t.org
+	}
+	nchars := t.fr.GetFrameFillStatus().Nchars
+	if t.q0 >= t.org && t.q0 <= t.org+nchars {
+		return t.q0
+	}
+	return t.org
+}
+
+// pickRichViewportAnchor returns the rendered rune that anchors the
+// current rich-view viewport for cross-mode toggle purposes:
+// prefer the selection start if it is currently visible (the user
+// has clicked recently in the preview), otherwise the rune at the
+// top of the rich viewport (rt.Origin()).
+func pickRichViewportAnchor(rt *RichText) int {
+	if rt == nil {
+		return 0
+	}
+	origin := rt.Origin()
+	fr := rt.Frame()
+	if fr == nil {
+		return origin
+	}
+	p0, _ := rt.Selection()
+	frameRect := fr.Rect()
+	if frameRect.Dx() <= 0 || frameRect.Dy() <= 0 {
+		return origin
+	}
+	lastVisible := fr.Charofpt(image.Point{X: frameRect.Max.X - 1, Y: frameRect.Max.Y - 1})
+	if p0 >= origin && p0 <= lastVisible {
+		return p0
+	}
+	return origin
 }
 
 // plaincmd toggles between styled and plain text rendering for windows

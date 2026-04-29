@@ -695,16 +695,22 @@ func TestScrollbarClickButton1(t *testing.T) {
 	rt.SetOrigin(75)
 	beforeOrigin := rt.Origin()
 
-	// Left-click (button 1) at the top of the scrollbar should scroll up
+	// Left-click (button 1) somewhere in the scrollbar: "send the top
+	// line of the screen to the click position." For this to produce
+	// any scroll-back, the click position must be at least one line
+	// height below the top of the scrollbar — otherwise the line at
+	// the new viewport top is the same as the previous top (matches
+	// acme text-mode B1, where BackNL(t.org, clickY/fontH) is 0
+	// when clickY < fontH). We use 30 px (font height = 14, so >2
+	// lines down).
 	scrollRect := rt.ScrollRect()
-	topY := scrollRect.Min.Y + 10
+	clickY := scrollRect.Min.Y + 30
 
-	// Simulate left-click in scrollbar
-	newOrigin := rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, topY))
+	newOrigin := rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, clickY))
 
-	// Button 1 should scroll up (decrease origin), backing up content
 	if newOrigin >= beforeOrigin {
-		t.Errorf("ScrollClick(1, top): expected origin to decrease from %d, got %d", beforeOrigin, newOrigin)
+		t.Errorf("ScrollClick(1, %d px down): expected origin to decrease from %d, got %d",
+			30, beforeOrigin, newOrigin)
 	}
 }
 
@@ -2130,5 +2136,212 @@ func TestScrollWheelTallLine(t *testing.T) {
 	}
 	if rt.GetOriginYOffset() != 0 {
 		t.Errorf("After scrolling all the way back up: originYOffset = %d, want 0", rt.GetOriginYOffset())
+	}
+}
+
+// TestScrollClickB1OntoTallImage exercises the regression where B1
+// could not scroll back up onto a tall image: round-up line mapping
+// snapped past the image to the following text line, so the image
+// was never visible at the viewport top. After the fix, B1 with a
+// click inside the image's vertical extent must land within the
+// image line (origin = image-line rune, originYOffset > 0).
+func TestScrollClickB1OntoTallImage(t *testing.T) {
+	tmpDir := t.TempDir()
+	imgPath := filepath.Join(tmpDir, "tall.png")
+	img := image.NewRGBA(image.Rect(0, 0, 10, 800))
+	for y := 0; y < 800; y++ {
+		for x := 0; x < 10; x++ {
+			img.Set(x, y, color.RGBA{R: 128, G: 128, B: 128, A: 255})
+		}
+	}
+	f, err := os.Create(imgPath)
+	if err != nil {
+		t.Fatalf("failed to create test PNG: %v", err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatalf("failed to encode test PNG: %v", err)
+	}
+	f.Close()
+
+	displayRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(displayRect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+	scrBg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Palebluegreen)
+	scrThumb, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Medblue)
+
+	cache := rich.NewImageCache(10)
+	if _, err := cache.Load(imgPath); err != nil {
+		t.Fatalf("failed to pre-load image: %v", err)
+	}
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+		WithScrollbarColors(scrBg, scrThumb),
+		WithRichTextImageCache(cache),
+	)
+
+	content := rich.Content{
+		rich.Span{Text: "before\n", Style: rich.Style{}},
+		rich.Span{
+			Text: "[Image: tall]",
+			Style: rich.Style{
+				Image:    true,
+				ImageURL: imgPath,
+				ImageAlt: "tall",
+			},
+		},
+		rich.Span{Text: "\nafter", Style: rich.Style{}},
+	}
+	rt.SetContent(content)
+
+	rect := image.Rect(0, 0, 400, 300)
+	rt.Render(rect)
+
+	lineHeights := rt.Frame().LinePixelHeights()
+	lineStarts := rt.Frame().LineStartRunes()
+	if len(lineHeights) < 3 || len(lineStarts) < 3 {
+		t.Skipf("Expected >=3 lines (text/image/text), got %d heights and %d starts", len(lineHeights), len(lineStarts))
+	}
+
+	imageLineIdx := -1
+	for i, h := range lineHeights {
+		if h > 300 {
+			imageLineIdx = i
+			break
+		}
+	}
+	if imageLineIdx < 0 || imageLineIdx >= len(lineStarts)-1 {
+		t.Skipf("No tall line followed by another line found; heights=%v", lineHeights)
+	}
+
+	// Position viewport so its top is exactly at the line after the
+	// image. From here, B1 must be able to walk back up onto the
+	// image with a sub-line offset.
+	postImageRune := lineStarts[imageLineIdx+1]
+	rt.SetOrigin(postImageRune)
+	rt.SetOriginYOffset(0)
+
+	// Click position 100px down the scrollbar — this maps to a
+	// targetTopDocY 100px above the post-image line, which falls
+	// inside the image (height 800).
+	scrollRect := rt.ScrollRect()
+	clickPoint := image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+100)
+	rt.ScrollClick(1, clickPoint)
+
+	if rt.Origin() != lineStarts[imageLineIdx] {
+		t.Errorf("After B1 onto tall image: origin = %d (rune), want %d (image-line start). originYOffset = %d",
+			rt.Origin(), lineStarts[imageLineIdx], rt.GetOriginYOffset())
+	}
+	if rt.GetOriginYOffset() <= 0 {
+		t.Errorf("After B1 onto tall image: originYOffset = %d, want > 0 (sub-line scroll into image)", rt.GetOriginYOffset())
+	}
+}
+
+// TestScrollClickB3ThenB1RoundTripPastTallImage exercises the user-
+// reported sequence: from the file top, hold B3 to scroll DOWN past
+// a tall image; then hold B1 to scroll BACK UP. After the held-B1
+// sequence terminates (target clamped to 0) the viewport must be at
+// origin=0, offset=0 — i.e., the image must be reachable as a
+// viewport top, not silently stuck.
+func TestScrollClickB3ThenB1RoundTripPastTallImage(t *testing.T) {
+	tmpDir := t.TempDir()
+	imgPath := filepath.Join(tmpDir, "tall.png")
+	img := image.NewRGBA(image.Rect(0, 0, 10, 800))
+	for y := 0; y < 800; y++ {
+		for x := 0; x < 10; x++ {
+			img.Set(x, y, color.RGBA{R: 128, G: 128, B: 128, A: 255})
+		}
+	}
+	f, err := os.Create(imgPath)
+	if err != nil {
+		t.Fatalf("failed to create test PNG: %v", err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatalf("failed to encode test PNG: %v", err)
+	}
+	f.Close()
+
+	displayRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(displayRect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+	scrBg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Palebluegreen)
+	scrThumb, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Medblue)
+
+	cache := rich.NewImageCache(10)
+	if _, err := cache.Load(imgPath); err != nil {
+		t.Fatalf("failed to pre-load image: %v", err)
+	}
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bgImage),
+		WithRichTextColor(textImage),
+		WithScrollbarColors(scrBg, scrThumb),
+		WithRichTextImageCache(cache),
+	)
+
+	content := rich.Content{
+		rich.Span{Text: "before\n", Style: rich.Style{}},
+		rich.Span{
+			Text: "[Image: tall]",
+			Style: rich.Style{
+				Image:    true,
+				ImageURL: imgPath,
+				ImageAlt: "tall",
+			},
+		},
+		rich.Span{Text: "\nafter", Style: rich.Style{}},
+	}
+	rt.SetContent(content)
+	rect := image.Rect(0, 0, 400, 300)
+	rt.Render(rect)
+
+	scrollRect := rt.ScrollRect()
+	mid := image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+scrollRect.Dy()/2)
+
+	rt.SetOrigin(0)
+	rt.SetOriginYOffset(0)
+
+	// Hold B3 (mid-scrollbar) until origin is past the image.
+	imageLineIdx := -1
+	heights := rt.Frame().LinePixelHeights()
+	for i, h := range heights {
+		if h > 300 {
+			imageLineIdx = i
+			break
+		}
+	}
+	if imageLineIdx < 0 {
+		t.Skipf("No tall image line; heights=%v", heights)
+	}
+	lineStarts := rt.Frame().LineStartRunes()
+	postImageRune := lineStarts[imageLineIdx+1]
+
+	for i := 0; i < 30 && rt.Origin() < postImageRune; i++ {
+		rt.ScrollClick(3, mid)
+	}
+	if rt.Origin() < postImageRune {
+		t.Fatalf("Could not advance past image with held B3 in 30 ticks: origin=%d offset=%d (want origin>=%d)",
+			rt.Origin(), rt.GetOriginYOffset(), postImageRune)
+	}
+
+	// Now hold B1 (mid-scrollbar) and expect to walk back to origin 0.
+	// Bound by 30 ticks so a regression manifests as a hard fail rather
+	// than a hang.
+	for i := 0; i < 30 && (rt.Origin() != 0 || rt.GetOriginYOffset() != 0); i++ {
+		rt.ScrollClick(1, mid)
+	}
+	if rt.Origin() != 0 || rt.GetOriginYOffset() != 0 {
+		t.Errorf("After holding B1 back: origin=%d offset=%d, want 0/0", rt.Origin(), rt.GetOriginYOffset())
 	}
 }

@@ -232,7 +232,7 @@ func xfidclose(x *Xfid) {
 			w.nomark = false
 			t := &w.body
 			t.Show(util.Min(w.wrselrange.q0, t.Nc()), util.Min(w.wrselrange.q1, t.Nc()), true)
-			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+			t.ScrDraw()
 		case QWeditout:
 			<-w.editoutlk
 		case QWspans:
@@ -437,7 +437,7 @@ func xfidwrite(x *Xfid) {
 				if qid != QWwrsel && shouldscroll(t, q0, qid) {
 					t.Show(q0+(nr), q0+(nr), true)
 				}
-				t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+				t.ScrDraw()
 				if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
 					t.w.UpdatePreview()
 				}
@@ -536,7 +536,7 @@ func xfidwrite(x *Xfid) {
 		if shouldscroll(t, q0, qid) {
 			t.Show(q0+len(r), q0+len(r), false)
 		}
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 		if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
 			t.w.UpdatePreview()
 		}
@@ -835,8 +835,7 @@ forloop:
 	x.respond(&fc, err)
 
 	if scrdraw && w != nil {
-		t := &w.body
-		w.body.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		w.body.ScrDraw()
 	}
 }
 
