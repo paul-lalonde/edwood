@@ -190,3 +190,83 @@ func TestScrollbar_SetRectInvalidatesCache(t *testing.T) {
 		t.Error("Draw after SetRect produced no ops; want repaint")
 	}
 }
+
+// recordingScrollModel captures every method call so dispatch tests
+// can assert exact button-to-method routing.
+type recordingScrollModel struct {
+	fakeScrollModel
+	dragTopCalls    []int
+	dragToTopCalls  []int
+	jumpFractCalls  []float64
+}
+
+func (m *recordingScrollModel) DragTopToPixel(y int) {
+	m.dragTopCalls = append(m.dragTopCalls, y)
+}
+func (m *recordingScrollModel) DragPixelToTop(y int) {
+	m.dragToTopCalls = append(m.dragToTopCalls, y)
+}
+func (m *recordingScrollModel) JumpToFraction(f float64) {
+	m.jumpFractCalls = append(m.jumpFractCalls, f)
+}
+
+func TestScrollbar_DispatchB1CallsDragTopToPixel(t *testing.T) {
+	model := &recordingScrollModel{}
+	s := &Scrollbar{model: model}
+	s.dispatch(1, 50, 100)
+	if len(model.dragTopCalls) != 1 || model.dragTopCalls[0] != 50 {
+		t.Errorf("dragTopCalls=%v, want [50]", model.dragTopCalls)
+	}
+	if len(model.dragToTopCalls) != 0 || len(model.jumpFractCalls) != 0 {
+		t.Errorf("B1 should not call B2/B3 paths")
+	}
+}
+
+func TestScrollbar_DispatchB3CallsDragPixelToTop(t *testing.T) {
+	model := &recordingScrollModel{}
+	s := &Scrollbar{model: model}
+	s.dispatch(3, 75, 100)
+	if len(model.dragToTopCalls) != 1 || model.dragToTopCalls[0] != 75 {
+		t.Errorf("dragToTopCalls=%v, want [75]", model.dragToTopCalls)
+	}
+	if len(model.dragTopCalls) != 0 || len(model.jumpFractCalls) != 0 {
+		t.Errorf("B3 should not call B1/B2 paths")
+	}
+}
+
+func TestScrollbar_DispatchB2CallsJumpToFraction(t *testing.T) {
+	model := &recordingScrollModel{}
+	s := &Scrollbar{model: model}
+	s.dispatch(2, 25, 100) // 25% down the track
+	if len(model.jumpFractCalls) != 1 {
+		t.Fatalf("jumpFractCalls=%v, want one entry", model.jumpFractCalls)
+	}
+	if got := model.jumpFractCalls[0]; got != 0.25 {
+		t.Errorf("fraction=%v, want 0.25", got)
+	}
+}
+
+func TestScrollbar_DispatchB2ZeroTrackHeightDoesNotPanic(t *testing.T) {
+	model := &recordingScrollModel{}
+	s := &Scrollbar{model: model}
+	s.dispatch(2, 0, 0) // would divide by zero if not guarded
+	if len(model.jumpFractCalls) != 0 {
+		t.Errorf("expected no JumpToFraction call when trackHeight=0; got %v", model.jumpFractCalls)
+	}
+}
+
+func TestScrollbar_DispatchUnknownButtonIsNoop(t *testing.T) {
+	model := &recordingScrollModel{}
+	s := &Scrollbar{model: model}
+	s.dispatch(7, 50, 100)
+	if len(model.dragTopCalls)+len(model.dragToTopCalls)+len(model.jumpFractCalls) != 0 {
+		t.Errorf("unknown button should be a no-op")
+	}
+}
+
+// HandleClick's full latch loop is not unit-tested. It mixes timing,
+// global mouse state, and a real-display-only Mousectl.Read (see
+// 9fans.net/go/draw/mouse.go); reproducing those in tests requires
+// either a real X server or invasive abstraction work. Verification
+// of the loop is part of the manual test pass in
+// PLAN_unified-scrollbar.md §2.3.

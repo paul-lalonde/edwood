@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"time"
 
 	"github.com/rjkroege/edwood/draw"
 )
@@ -191,4 +192,126 @@ func clampThumbHeight(q, track image.Rectangle) image.Rectangle {
 		q.Min.Y = q.Max.Y - MinThumbHeightPx
 	}
 	return q
+}
+
+// Debounce timings for HandleClick's auto-repeat. Values match the
+// legacy scrl.go (200ms initial, 80ms repeat). Defined as vars so
+// future tests can override; production code never mutates them.
+var (
+	initialDebounceMs = 200
+	repeatDebounceMs  = 80
+)
+
+// dispatch fires the appropriate ScrollModel method for the given
+// button. clickY is in track-relative pixels (0 = top of track);
+// trackHeight is the full track height. Pure with respect to mouse
+// state and display side effects, so unit-testable.
+func (s *Scrollbar) dispatch(button, clickY, trackHeight int) {
+	switch button {
+	case 1:
+		s.model.DragTopToPixel(clickY)
+	case 2:
+		if trackHeight > 0 {
+			s.model.JumpToFraction(float64(clickY) / float64(trackHeight))
+		}
+	case 3:
+		s.model.DragPixelToTop(clickY)
+	}
+}
+
+// HandleClick runs the click-and-hold latch loop for a single
+// scrollbar button-press. Reads global mouse state until the button
+// is released, re-firing dispatch on a 200ms-then-80ms debounce for
+// B1/B3 (auto-repeat) and per-mousectl-event for B2 (live thumb
+// drag). Mirrors the latch in the legacy scrl.go:101-166 with the
+// only change being pixel-space dispatch (via the model) rather
+// than rune-space.
+//
+// Timing-and-event-driven; verified manually rather than by unit
+// test. See PLAN_unified-scrollbar.md §1.3 / §2.3 for the manual
+// verification plan.
+func (s *Scrollbar) HandleClick(button int) {
+	rect := s.rect.Inset(1)
+	if rect.Empty() {
+		return
+	}
+	centerX := (rect.Min.X + rect.Max.X) / 2
+	h := rect.Dy()
+	first := true
+	for {
+		s.display.Flush()
+		my := clampMouseY(rect)
+		s.warpToCenter(centerX, my)
+		s.dispatch(button, my-rect.Min.Y, h)
+		s.Draw()
+		if !s.waitForNextTick(button, &first) {
+			break
+		}
+	}
+	drainMouseEvents()
+}
+
+// clampMouseY returns the current mouse Y clamped to the rect's
+// vertical extent. Matches scrl.go's clamping (Max inclusive).
+func clampMouseY(rect image.Rectangle) int {
+	my := global.mouse.Point.Y
+	if my < rect.Min.Y {
+		my = rect.Min.Y
+	}
+	if my >= rect.Max.Y {
+		my = rect.Max.Y
+	}
+	return my
+}
+
+// warpToCenter pins the cursor to the scrollbar's centerline column
+// at the given Y, absorbing the synthetic mouse event MoveTo
+// generates. Matches scrl.go:122-125.
+func (s *Scrollbar) warpToCenter(centerX, my int) {
+	if global.mouse.Point.Eq(image.Pt(centerX, my)) {
+		return
+	}
+	s.display.MoveTo(image.Pt(centerX, my))
+	global.mousectl.Read()
+}
+
+// waitForNextTick implements the per-iteration delay and exit check.
+// Returns false when the button has been released and the loop
+// should exit. B2 reads per-event for live thumb drag; B1/B3 use
+// 200ms initial, then 80ms repeating debounce.
+func (s *Scrollbar) waitForNextTick(button int, first *bool) bool {
+	if button == 2 {
+		global.mousectl.Read()
+	} else if *first {
+		s.display.Flush()
+		time.Sleep(time.Duration(initialDebounceMs) * time.Millisecond)
+		global.mousectl.Mouse = <-global.mousectl.C
+		*first = false
+	} else {
+		scrollbarSleep(repeatDebounceMs)
+	}
+	return global.mouse.Buttons&(1<<uint(button-1)) != 0
+}
+
+// drainMouseEvents reads pending events until all buttons are
+// released. Matches scrl.go:163-165.
+func drainMouseEvents() {
+	for global.mouse.Buttons != 0 {
+		global.mousectl.Read()
+	}
+}
+
+// scrollbarSleep waits for dt milliseconds, returning early if a
+// mouse event arrives. Mirrors ScrSleep in scrl.go and
+// previewScrSleep in wind.go.
+func scrollbarSleep(dt int) {
+	if dt == 0 {
+		return
+	}
+	timer := time.NewTimer(time.Duration(dt) * time.Millisecond)
+	select {
+	case <-timer.C:
+	case <-global.mousectl.C:
+		timer.Stop()
+	}
 }
