@@ -4493,13 +4493,13 @@ func newTestFrame(t *testing.T, width, height int, content Content) *frameImpl {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
 
 	fi := &frameImpl{
-		rect:       rect,
-		display:    display,
-		font:       font,
-		background: bgImage,
-		textColor:  textImage,
-		content:    content,
-		layoutDirty: true,
+		rect:        rect,
+		display:     display,
+		font:        font,
+		background:  bgImage,
+		textColor:   textImage,
+		content:     content,
+		layoutCache: layoutCache{layoutDirty: true},
 	}
 	return fi
 }

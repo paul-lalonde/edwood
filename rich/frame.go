@@ -119,6 +119,17 @@ type Frame interface {
 }
 
 // frameImpl is the concrete implementation of Frame.
+//
+// Fields are organized into named substructs that are embedded so
+// existing call sites can continue to use the promoted field names
+// (`f.tickImage`, `f.hscrollOrigins`, etc.). The grouping makes the
+// orthogonal subsystems visible at the type level: vertical scroll,
+// selection, cursor tick, horizontal-block scroll, and layout cache
+// each own their state, so adding a new field has an obvious home.
+//
+// Top-level fields are those that don't fit a clear subsystem yet
+// (display/font handles, content, scratch image, image cache,
+// callback, color cache, tab width).
 type frameImpl struct {
 	rect           image.Rectangle
 	display        edwooddraw.Display
@@ -127,9 +138,6 @@ type frameImpl struct {
 	selectionColor edwooddraw.Image // selection highlight color
 	font           edwooddraw.Font  // font for text rendering
 	content        Content
-	origin         int
-	originYOffset  int // pixel offset within the origin line (for sub-line scrolling)
-	p0, p1         int // selection
 
 	// Font variants for styled text
 	boldFont       edwooddraw.Font
@@ -156,58 +164,14 @@ type frameImpl struct {
 	// must marshal through the row lock or a channel.
 	onImageLoaded func(path string)
 
-	// Temporary sweep color override for colored selection during B2/B3 drags.
-	// When non-nil, drawSelectionTo uses this instead of selectionColor.
-	// Cleared after each SelectWithColor/SelectWithChordAndColor call.
-	sweepColor edwooddraw.Image
-
-	// Tick (cursor bar) fields for drawing the insertion cursor
-	tickImage  edwooddraw.Image // pre-rendered tick mask (transparent + opaque pattern)
-	tickScale  int              // display.ScaleSize(1)
-	tickHeight int              // height of current tickImage (re-init when changed)
-
-	// Horizontal scroll state per non-wrapping block element.
-	// Index is the ordinal of the block region (0th code block, 1st, etc.).
-	// Value is the pixel offset from the left edge.
-	hscrollOrigins []int
-
-	// Number of non-wrapping blocks seen on the last layout pass.
-	// Used to detect when blocks are added or removed.
-	hscrollBlockCount int
-
-	// Offset from visible-region index to global hscrollOrigins index.
-	// Equal to the number of block regions entirely above the viewport.
-	hscrollRegionOffset int
-
-	// Cached adjusted block regions from the last layout pass.
-	// Used for hit-testing horizontal scrollbar clicks.
-	hscrollRegions []AdjustedBlockRegion
-
-	// Horizontal scrollbar colors (passed from RichText to match vertical scrollbar)
-	hscrollBg    edwooddraw.Image
-	hscrollThumb edwooddraw.Image
-
 	// Tab width in characters (default 4 when zero)
 	maxtabChars int
 
-	// Shift content up so the last visible line is fully visible.
-	// The top line absorbs the clipping instead of the bottom line.
-	scrollSnap ScrollSnap // current snap preference; default SnapTop
-
-	// Layout cache: stores the result of contentToBoxes + layoutBoxes so
-	// repeated Redraw/TotalLines/etc. calls reuse expensive line-breaking
-	// computation when content and frame width are unchanged.
-	cachedBaseLines []Line // cached result of layoutBoxes
-	layoutDirty     bool   // true when cache needs recomputation
-	cachedWidth     int    // frame width used for cached layout
-
-	// Horizontal scrollbar height in pixels. Defaults to
-	// DefaultHScrollHeight at NewFrame time; RichText.Init overrides
-	// via WithHScrollHeight so main's Scrollwid is the single source
-	// of truth in production. Used wherever per-block-region
-	// scrollbar geometry is computed (layoutFromOrigin, drawTextTo,
-	// HScrollBarAt, etc.).
-	hscrollHeight int
+	vScrollState
+	selectionState
+	tickState
+	hScrollState
+	layoutCache
 
 	// Color image cache. Plan 9 image handles are scarce server-side
 	// resources, not just memory; allocColorImage was previously
@@ -218,6 +182,82 @@ type frameImpl struct {
 	// (e.g. RGBA vs NRGBA) share an entry. Cache size is bounded by
 	// the number of unique colors a document uses; lazily initialized.
 	colorCache map[edwooddraw.Color]edwooddraw.Image
+}
+
+// vScrollState groups vertical-scroll position state. The combination
+// (origin, originYOffset, scrollSnap) defines what's at the top of
+// the viewport: which document rune (origin), how many pixels into
+// that line's vertical extent the viewport top is (originYOffset, for
+// sub-line scrolling on tall lines like images), and how the layout
+// should snap when the viewport doesn't perfectly tile the document.
+type vScrollState struct {
+	origin        int
+	originYOffset int        // pixel offset within the origin line (for sub-line scrolling)
+	scrollSnap    ScrollSnap // current snap preference; default SnapTop
+}
+
+// selectionState groups selection state. p0/p1 are the selection
+// range (rune offsets, p0 <= p1); sweepColor is a transient
+// per-drag override of selectionColor used by the B2/B3 colored
+// sweeps and cleared after the drag completes.
+type selectionState struct {
+	p0, p1     int
+	sweepColor edwooddraw.Image
+}
+
+// tickState groups insertion-cursor (tick) rendering state. The tick
+// image is pre-rendered (transparent + opaque pattern) and re-init'd
+// when the cursor's height changes; tickScale tracks display DPI.
+type tickState struct {
+	tickImage  edwooddraw.Image
+	tickScale  int
+	tickHeight int
+}
+
+// hScrollState groups horizontal-block-scroll state. Edwood's rich
+// frames have per-block-region horizontal scrollbars (each non-
+// wrapping block — code block etc. — has its own thumb), so the
+// state is keyed by ordinal block index and accompanied by metadata
+// from the last layout pass for hit-testing scrollbar clicks.
+type hScrollState struct {
+	// Per-block scroll origins. Index is ordinal of block region
+	// (0th, 1st, ...); value is pixel offset from the block's left.
+	hscrollOrigins []int
+
+	// Total non-wrapping blocks seen on the last layout pass.
+	// Used to detect when blocks are added or removed.
+	hscrollBlockCount int
+
+	// Offset from visible-region index to global hscrollOrigins
+	// index. Equal to the number of block regions entirely above
+	// the viewport.
+	hscrollRegionOffset int
+
+	// Cached adjusted block regions from the last layout pass,
+	// used for hit-testing horizontal scrollbar clicks.
+	hscrollRegions []AdjustedBlockRegion
+
+	// Horizontal scrollbar colors (passed from RichText so they
+	// match the vertical scrollbar).
+	hscrollBg    edwooddraw.Image
+	hscrollThumb edwooddraw.Image
+
+	// Horizontal scrollbar height in pixels. Defaults to
+	// DefaultHScrollHeight at NewFrame time; RichText.Init overrides
+	// via WithHScrollHeight so main's Scrollwid is the single source
+	// of truth in production.
+	hscrollHeight int
+}
+
+// layoutCache stores the result of contentToBoxes + layoutBoxes so
+// repeated Redraw / TotalLines / etc. calls reuse the expensive
+// line-breaking computation when content and frame width are
+// unchanged. Invalidated by SetContent and by SetRect when the width
+// changes (height-only changes leave the cache valid).
+type layoutCache struct {
+	cachedBaseLines []Line
+	layoutDirty     bool
+	cachedWidth     int
 }
 
 // maxtabPixels returns the tab width in pixels.
@@ -241,7 +281,7 @@ const DefaultHScrollHeight = 12
 
 func NewFrame() Frame {
 	return &frameImpl{
-		hscrollHeight: DefaultHScrollHeight,
+		hScrollState: hScrollState{hscrollHeight: DefaultHScrollHeight},
 	}
 }
 
