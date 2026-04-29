@@ -113,34 +113,34 @@ verifying no behavioral or visual regression. After this phase,
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Confirm adapter formulas equal current `Text.Scroll` | `scrl.go:127-148`, `docs/designs/features/unified-scrollbar.md` § "Text-mode adapter" | `Geometry`: returns `(file.Nr(), nchars, t.org)` — rune-count proxy is sufficient because thumb math is purely proportional. `DragTopToPixel(clickY)`: `BackNL(t.org, clickY/fontH)`; `SetOrigin(p0, true)`. `DragPixelToTop(clickY)`: `t.org + Charofpt(scrollr.Max.X, scrollr.Min.Y+clickY)`; `SetOrigin(p0, true)`. `JumpToFraction(f)`: `int(f * file.Nr())`; if `>= q1` snap with `BackNL(p0, 2)`; `SetOrigin(p0, false)`. |
-| [ ] Tests | Write tests for `textScrollModel` | `docs/designs/features/unified-scrollbar.md` § "Text-mode adapter" | In `text_test.go` (or `scrl_test.go` if one exists). Use the existing `Text` test fixtures. Tests: (1) `Geometry` returns sensible values for a multiline buffer, (2) `DragTopToPixel(0)` is a no-op, (3) `DragTopToPixel(fontH)` advances origin to the previous line's first rune, (4) `DragPixelToTop(0)` is a no-op, (5) `JumpToFraction(0.0)` jumps to file start, (6) `JumpToFraction(1.0)` clamps to last addressable position, (7) `JumpToFraction` with `p0 >= q1` invokes the `BackNL(p0, 2)` snap. |
-| [ ] Iterate | Add `textScrollModel` type to `text.go`; add `scrollbar *Scrollbar` field on `Text` | `scrl.go:127-148`, `text.go:103-104,182-183` | In `text.go`. New unexported type `textScrollModel struct { t *Text }`. Field `scrollbar *Scrollbar` initialized in `Text.Init`. The scrollbar's `SetRect` is called from `Text.Init` and `Text.Resize` alongside the existing `t.scrollr` updates. |
-| [ ] Commit | Commit text-mode adapter | — | Message: `Add textScrollModel adapter implementing ScrollModel` |
+| [x] Design | Confirm adapter formulas equal current `Text.Scroll` | `scrl.go:127-148`, `docs/designs/features/unified-scrollbar.md` § "Text-mode adapter" | Bit-for-bit equivalent to scrl.go branches: BackNL+SetOrigin for B1, Charofpt-based for B3, BackNL(p0,2) snap for B2. |
+| [x] Tests | Write tests for `textScrollModel` | `docs/designs/features/unified-scrollbar.md` § "Text-mode adapter" | `text_scroll_test.go` covers all required cases plus mid-doc + below-q1 + nil-frame edge handling. |
+| [x] Iterate | Add `textScrollModel` type | — | Done in `4887ecc`. |
+| [x] Commit | Commit text-mode adapter | — | `4887ecc` Add textScrollModel adapter for shared Scrollbar widget |
 
 ### 2.2 Replace `Text.ScrDraw` and `Text.Scroll` with widget delegation
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Confirm preview-mode gating preserved | `scrl.go:73-79`, `docs/designs/features/unified-scrollbar.md` "Risks" #3 | `Text.ScrDraw` short-circuits when `t.w.IsPreviewMode()`. The new `Text.ScrDraw` keeps that guard and only then calls `t.scrollbar.Draw()`. The widget itself does not check preview mode. |
-| [ ] Tests | Existing scrollbar tests should continue to pass | — | Run the full test suite. There are limited existing scrollbar tests; document this as a coverage gap (the new widget tests in 1.2/1.3 partially compensate). |
-| [ ] Iterate | Rewrite `Text.ScrDraw` to delegate to `t.scrollbar.Draw()`; rewrite `Text.Scroll` to delegate to `t.scrollbar.HandleClick(but)` | `text.go:477,648,1300,1372,1758` (ScrDraw call sites), `acme.go:480` (Scroll call site), `scrl.go:67-166` | In `text.go`. Both old methods become 5-line delegators. The body / preview-mode / `t.w == nil` guards stay in `Text.ScrDraw`. The `nchars` parameter to `ScrDraw` becomes unused (it's already noted as a TODO at `scrl.go:66`); leave the signature for now to minimize churn, delete in cleanup phase. |
-| [ ] Commit | Commit text-mode delegation | — | Message: `Delegate Text scrollbar to shared Scrollbar widget` |
+| [x] Design | Confirm preview-mode gating preserved | `scrl.go:73-79`, `docs/designs/features/unified-scrollbar.md` "Risks" #3 | Body-only and IsPreviewMode guards remain at the call site (Text.ScrDraw); widget unaware of either. |
+| [x] Tests | Existing scrollbar tests should continue to pass | — | Full suite green. |
+| [x] Iterate | Rewrite `Text.ScrDraw` and `Text.Scroll` as delegators | — | Done in `7d49af1`. Bug found in Phase 2.3: SetRect's idempotent short-circuit broke post-Redraw clobber recovery; fixed in `42657fd`. |
+| [x] Commit | Commit text-mode delegation | — | `7d49af1` Delegate Text scrollbar to shared Scrollbar widget |
 
 ### 2.3 Manual visual verification
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Test | Boot edwood, open a long file, exercise the scrollbar | — | Verify: (1) thumb appears identical (color, size, edge pixel), (2) B1 at various Y positions matches old behavior (compare against a build of the parent commit side-by-side if possible), (3) B3 same, (4) B2 absolute jump, (5) hold-to-repeat works for B1/B3, (6) cursor warps to scrollbar centerline when held, (7) release drains correctly. |
-| [ ] Commit | n/a — verification only | — | If regressions found, document and iterate before proceeding. |
+| [x] Test | Boot edwood, open a long file, exercise the scrollbar | — | Verified iteratively across multiple branches of the diff: directory-listing initial paint (`42657fd`), B1 click direction (`f0d4997`), gap-aware click→line mapping for rich mode (`5543f81`), latch debounce for cursor jitter (`b03ef9c`). |
+| [x] Commit | n/a — verification only | — | Bugs found and fixed in-stream rather than discovered later. |
 
 ### 2.4 Delete `scrl.go`
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Iterate | Delete `scrl.go`. Delete the `scrtmp` package-level var (now lives inside `Scrollbar`). Delete `ScrSleep` (now lives inside the widget). Delete `ScrlResize` (lives inside the widget). | `scrl.go` | Update any external references. The `frame.Frame` interface's `BackNL`, `Charofpt`, `DefaultFontHeight` continue to live in the `frame/` package and are called by the adapter. |
-| [ ] Tests | Full test suite | — | Should pass without changes. |
-| [ ] Commit | Commit deletion | — | Message: `Delete scrl.go (subsumed by Scrollbar widget)` |
+| [x] Iterate | Delete `scrl.go`; relocate `Text.ScrDraw` / `Text.Scroll` delegators to `text.go`; remove `ScrlResize` call from `acme.go`; update `FrameScroll`'s `ScrSleep(100)` to use `drainScrollEvents`. | — | Done in `2c4daff`. |
+| [x] Tests | Full test suite | — | All green. |
+| [x] Commit | Commit deletion | — | `2c4daff` Delete scrl.go (subsumed by Scrollbar widget) |
 
 ---
 
