@@ -1139,279 +1139,323 @@ func (f *frameImpl) ensureScratchImage() edwooddraw.Image {
 	return f.scratchImage
 }
 
-// drawTextTo renders the content boxes onto the target image.
-// The offset parameter specifies where the frame's (0,0) maps to in the target.
-// When drawing to a scratch image, offset is (0,0). When drawing directly to
-// screen, offset is f.rect.Min.
-func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
-	// Get layout lines starting from origin
+// paintCtx bundles the per-paint state shared across drawTextTo's
+// phase methods. Built once at the top of drawTextTo and passed by
+// pointer to each phase. Held only for the duration of one paint;
+// no goroutines or cross-paint reuse.
+type paintCtx struct {
+	target          edwooddraw.Image
+	offset          image.Point
+	lines           []Line
+	frameWidth      int
+	frameHeight     int
+	adjustedRegions []AdjustedBlockRegion
+	// lineRegion[i] is the index into adjustedRegions for line i, or
+	// -1 if the line is not part of a scrollable block region.
+	lineRegion []int
+}
+
+// regionFor returns the adjustedRegions index for a line, or -1.
+func (c *paintCtx) regionFor(lineIdx int) int {
+	if lineIdx < 0 || lineIdx >= len(c.lineRegion) {
+		return -1
+	}
+	return c.lineRegion[lineIdx]
+}
+
+// leftIndentForLine returns the LeftIndent for a line in a scrollable
+// block region, or 0 if the line is not in one.
+func (c *paintCtx) leftIndentForLine(lineIdx int) int {
+	ri := c.regionFor(lineIdx)
+	if ri < 0 {
+		return 0
+	}
+	return c.adjustedRegions[ri].LeftIndent
+}
+
+// hOffsetForLine returns the horizontal scroll offset for a line.
+// Needs the frame because hscroll origins live there; otherwise this
+// would belong on paintCtx.
+func (f *frameImpl) hOffsetForLine(c *paintCtx, lineIdx int) int {
+	ri := c.regionFor(lineIdx)
+	if ri < 0 {
+		return 0
+	}
+	return f.GetHScrollOrigin(ri)
+}
+
+// buildPaintCtx assembles the per-paint context. Returns nil if there
+// is nothing to render (no lines).
+func (f *frameImpl) buildPaintCtx(target edwooddraw.Image, offset image.Point) *paintCtx {
 	lines, _ := f.layoutFromOrigin()
 	if len(lines) == 0 {
-		return
+		return nil
 	}
-
-	// frameHeight is used to skip lines that start completely outside the frame
-	frameHeight := f.rect.Dy()
 	frameWidth := f.rect.Dx()
-
-	// Compute block regions and scrollbar metadata. Lines already have
-	// correct Y values (including scrollbar height) from layoutFromOrigin,
-	// so we use the read-only computeScrollbarMetadata rather than
-	// adjustLayoutForScrollbars which would double-adjust Y.
+	// Lines already have correct Y values (including scrollbar height)
+	// from layoutFromOrigin, so use the read-only metadata variant
+	// rather than adjustLayoutForScrollbars which would double-shift.
 	regions := findBlockRegions(lines)
-	scrollbarHeight := f.hscrollHeight
-	adjustedRegions := computeScrollbarMetadata(lines, regions, frameWidth, scrollbarHeight)
+	adjustedRegions := computeScrollbarMetadata(lines, regions, frameWidth, f.hscrollHeight)
+	return &paintCtx{
+		target:          target,
+		offset:          offset,
+		lines:           lines,
+		frameWidth:      frameWidth,
+		frameHeight:     f.rect.Dy(),
+		adjustedRegions: adjustedRegions,
+		lineRegion:      buildLineRegionIndex(len(lines), adjustedRegions),
+	}
+}
 
-	// Cache the adjusted regions for hit-testing (HScrollBarAt).
-	f.hscrollRegions = adjustedRegions
-
-	// Build per-line region lookup: lineRegion[i] is the index into adjustedRegions,
-	// or -1 if the line is not in a block region.
-	lineRegion := make([]int, len(lines))
-	for i := range lineRegion {
-		lineRegion[i] = -1
+// buildLineRegionIndex returns a slice mapping each line index to its
+// adjustedRegions index, or -1 if the line is not part of any block
+// region. Pulled out of buildPaintCtx to keep that function compact.
+func buildLineRegionIndex(numLines int, adjustedRegions []AdjustedBlockRegion) []int {
+	idx := make([]int, numLines)
+	for i := range idx {
+		idx[i] = -1
 	}
 	for ri, ar := range adjustedRegions {
 		for li := ar.StartLine; li < ar.EndLine; li++ {
-			if li < len(lineRegion) {
-				lineRegion[li] = ri
+			if li < numLines {
+				idx[li] = ri
 			}
 		}
 	}
+	return idx
+}
 
-	// hOffsetForLine returns the horizontal scroll offset for a given line index.
-	// Lines not in a block region return 0.
-	hOffsetForLine := func(lineIdx int) int {
-		if lineIdx < 0 || lineIdx >= len(lineRegion) {
-			return 0
-		}
-		ri := lineRegion[lineIdx]
-		if ri < 0 {
-			return 0
-		}
-		return f.GetHScrollOrigin(ri)
+// drawTextTo renders the content boxes onto the target image.
+// The offset parameter specifies where the frame's (0,0) maps to in
+// the target. When drawing to a scratch image, offset is (0,0); when
+// drawing directly to screen, offset is f.rect.Min.
+//
+// The render is split into ordered phases. Order is load-bearing:
+// later phases assume earlier ones have laid down their pixels.
+//
+//	1.  block backgrounds       — full-line, behind everything else.
+//	2.  box backgrounds         — inline code etc., behind text.
+//	2b. selection highlight     — between backgrounds and text, so
+//	                              backgrounds don't overdraw it.
+//	3.  horizontal rules        — drawn as lines, not text.
+//	3a. blockquote left borders — narrow bars at the left edge.
+//	4.  text                    — on top of backgrounds.
+//	5.  images and fixed boxes  — at their layout positions.
+//	5b. gutter repaint          — clips horizontal-scroll overflow
+//	                              that crossed into the gutter.
+//	6.  horizontal scrollbars   — on top of everything.
+func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
+	c := f.buildPaintCtx(target, offset)
+	if c == nil {
+		return
 	}
+	// Cache the adjusted regions for hit-testing (HScrollBarAt).
+	f.hscrollRegions = c.adjustedRegions
 
-	// leftIndentForLine returns the LeftIndent for a line in a scrollable block
-	// region, or 0 if the line is not in one.
-	leftIndentForLine := func(lineIdx int) int {
-		if lineIdx < 0 || lineIdx >= len(lineRegion) {
-			return 0
-		}
-		ri := lineRegion[lineIdx]
-		if ri < 0 {
-			return 0
-		}
-		return adjustedRegions[ri].LeftIndent
-	}
+	f.paintPhaseBlockBackgrounds(c)
+	f.paintPhaseBoxBackgrounds(c)
+	f.paintPhaseSelectionHighlight(c)
+	f.paintPhaseHorizontalRules(c)
+	f.paintPhaseBlockquoteBorders(c)
+	f.paintPhaseText(c)
+	f.paintPhaseImagesAndFixedBoxes(c)
+	f.paintPhaseGutterRepaint(c)
+	f.paintPhaseHScrollbars(c)
+}
 
-	// Phase 1: Draw block-level backgrounds (full line width for fenced code blocks)
-	// This must happen first so text appears on top.
-	// Block backgrounds remain full-width and unshifted by horizontal scroll.
-	for _, line := range lines {
-		// Skip lines that start at or below the frame bottom
-		if line.Y >= frameHeight {
+// paintPhaseBlockBackgrounds draws full-line backgrounds for fenced
+// code blocks (Phase 1). These are not shifted by horizontal scroll —
+// the colored band remains full-width as the inner text scrolls
+// underneath.
+func (f *frameImpl) paintPhaseBlockBackgrounds(c *paintCtx) {
+	for _, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		// Check if any box on this line has Block=true with a background
 		for _, pb := range line.Boxes {
 			if pb.Box.Style.Block && pb.Box.Style.Bg != nil {
-				f.drawBlockBackgroundTo(target, line, offset, frameWidth, frameHeight)
-				break // Only draw once per line
+				f.drawBlockBackgroundTo(c.target, line, c.offset, c.frameWidth, c.frameHeight)
+				break // only once per line
 			}
 		}
 	}
+}
 
-	// Phase 2: Draw box backgrounds (for inline code, etc.)
-	// This must happen before text rendering so backgrounds appear behind text.
-	// Box backgrounds within a scrollable block region are shifted by -hOffset.
-	for lineIdx, line := range lines {
-		// Skip lines that start at or below the frame bottom
-		if line.Y >= frameHeight {
+// paintPhaseBoxBackgrounds draws per-box backgrounds for inline-code
+// and similar Bg-styled spans (Phase 2). Shifted by -hOffset inside
+// scrollable block regions so backgrounds track the text.
+func (f *frameImpl) paintPhaseBoxBackgrounds(c *paintCtx) {
+	for lineIdx, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		hOff := hOffsetForLine(lineIdx)
+		hOff := f.hOffsetForLine(c, lineIdx)
 		for _, pb := range line.Boxes {
-			// Skip newlines and tabs - they don't have backgrounds
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
 				continue
 			}
 			if len(pb.Box.Text) == 0 {
 				continue
 			}
-
-			// Draw background if style has Bg color set, but NOT for block-level styles
-			// (those are handled in Phase 1 with full-width backgrounds)
+			// Block-level Bg is handled in Phase 1.
 			if pb.Box.Style.Bg != nil && !pb.Box.Style.Block {
 				shiftedPB := pb
 				shiftedPB.X -= hOff
-				f.drawBoxBackgroundTo(target, shiftedPB, line, offset, frameWidth, frameHeight)
+				f.drawBoxBackgroundTo(c.target, shiftedPB, line, c.offset, c.frameWidth, c.frameHeight)
 			}
 		}
 	}
+}
 
-	// Phase 2b: Draw selection highlight on top of backgrounds but under text.
-	// This must come after Phase 1 and Phase 2 so the highlight is not
-	// overwritten by code block or inline code backgrounds.
+// paintPhaseSelectionHighlight draws the selection rectangle (Phase
+// 2b). Sits between Phases 2 and 4 so backgrounds don't overdraw the
+// highlight and text appears on top of it.
+func (f *frameImpl) paintPhaseSelectionHighlight(c *paintCtx) {
 	if f.selectionColor != nil && f.p0 != f.p1 {
-		f.drawSelectionTo(target, offset)
+		f.drawSelectionTo(c.target, c.offset)
 	}
+}
 
-	// Phase 3: Draw horizontal rules
-	for _, line := range lines {
-		// Skip lines that start at or below the frame bottom
-		if line.Y >= frameHeight {
+// paintPhaseHorizontalRules draws HRule lines (Phase 3).
+func (f *frameImpl) paintPhaseHorizontalRules(c *paintCtx) {
+	for _, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
 		for _, pb := range line.Boxes {
 			if pb.Box.Style.HRule {
-				f.drawHorizontalRuleTo(target, line, offset, frameWidth, frameHeight)
-				break // Only one rule per line
+				f.drawHorizontalRuleTo(c.target, line, c.offset, c.frameWidth, c.frameHeight)
+				break // one rule per line
 			}
 		}
 	}
+}
 
-	// Phase 3a: Draw blockquote left border bars
-	for _, line := range lines {
-		if line.Y >= frameHeight {
+// paintPhaseBlockquoteBorders draws the narrow left-edge bars used to
+// indicate blockquote depth (Phase 3a).
+func (f *frameImpl) paintPhaseBlockquoteBorders(c *paintCtx) {
+	for _, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		f.drawBlockquoteBorders(target, line, offset, frameWidth, frameHeight)
+		f.drawBlockquoteBorders(c.target, line, c.offset, c.frameWidth, c.frameHeight)
 	}
+}
 
-	// Phase 4: Render text on top of backgrounds
-	// Note: Text is now clipped by the scratch image bounds, so we can render
-	// partial lines without worrying about overflow into adjacent windows.
-	// Text within a scrollable block region is shifted by -hOffset.
-	for lineIdx, line := range lines {
-		// Skip lines that start at or below the frame bottom
-		if line.Y >= frameHeight {
+// paintPhaseText renders glyphs (Phase 4). Skips boxes that other
+// phases own (newlines, tabs, images, fixed boxes, horizontal rules).
+// Text inside a scrollable block region is shifted by -hOffset.
+func (f *frameImpl) paintPhaseText(c *paintCtx) {
+	for lineIdx, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		hOff := hOffsetForLine(lineIdx)
+		hOff := f.hOffsetForLine(c, lineIdx)
 		for _, pb := range line.Boxes {
-			// Skip newlines and tabs - they don't render visible text
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
 				continue
 			}
-			// Skip images and fixed boxes - they are handled in Phase 5
 			if pb.Box.Style.Image || pb.Box.IsFixedBox() {
-				continue
+				continue // Phase 5
 			}
 			if len(pb.Box.Text) == 0 {
 				continue
 			}
-			// Skip horizontal rules - they are drawn as lines, not text
 			if pb.Box.Style.HRule {
-				continue
+				continue // Phase 3
 			}
 
-			// Calculate position in target image, applying horizontal scroll offset
 			pt := image.Point{
-				X: offset.X + pb.X - hOff,
-				Y: offset.Y + line.Y,
+				X: c.offset.X + pb.X - hOff,
+				Y: c.offset.Y + line.Y,
 			}
-
-			// Determine text color: use box style Fg if set, otherwise default
 			textColorImg := f.textColor
 			if pb.Box.Style.Fg != nil {
-				// Allocate an image for this color
-				colorImg := f.allocColorImage(pb.Box.Style.Fg)
-				if colorImg != nil {
+				if colorImg := f.allocColorImage(pb.Box.Style.Fg); colorImg != nil {
 					textColorImg = colorImg
 				}
 			}
-
-			// Select the appropriate font for this box's style
 			boxFont := f.fontForStyle(pb.Box.Style)
-
-			// Render the text
-			target.Bytes(pt, textColorImg, image.ZP, boxFont, pb.Box.Text)
+			c.target.Bytes(pt, textColorImg, image.ZP, boxFont, pb.Box.Text)
 		}
 	}
+}
 
-	// Phase 5: Render images and fixed boxes
-	// Images within a scrollable block region are shifted by -hOffset.
-	for lineIdx, line := range lines {
-		// Skip lines that start at or below the frame bottom
-		if line.Y >= frameHeight {
+// paintPhaseImagesAndFixedBoxes renders inline images, image
+// placeholders (loading / error), and fixed-rectangle boxes (Phase 5).
+// Images within a scrollable block region are shifted by -hOffset;
+// fixed boxes are not (they're full-width markers).
+func (f *frameImpl) paintPhaseImagesAndFixedBoxes(c *paintCtx) {
+	for lineIdx, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		hOff := hOffsetForLine(lineIdx)
+		hOff := f.hOffsetForLine(c, lineIdx)
 		for _, pb := range line.Boxes {
-			// Fixed boxes without images: draw a colored rectangle.
 			if pb.Box.IsFixedBox() && !pb.Box.Style.Image {
-				pt := image.Point{
-					X: offset.X + pb.X,
-					Y: offset.Y + line.Y,
-				}
-				f.drawFixedBox(target, pt, pb.Box, frameWidth, frameHeight, offset)
+				pt := image.Point{X: c.offset.X + pb.X, Y: c.offset.Y + line.Y}
+				f.drawFixedBox(c.target, pt, pb.Box, c.frameWidth, c.frameHeight, c.offset)
 				continue
 			}
-
-			// Check if this is an image box
-			if !pb.Box.Style.Image {
-				continue
+			if pb.Box.Style.Image {
+				f.paintImageBox(c, line, pb, hOff)
 			}
-
-			// Calculate position in target image, applying horizontal scroll offset
-			pt := image.Point{
-				X: offset.X + pb.X - hOff,
-				Y: offset.Y + line.Y,
-			}
-
-			// Check for loading placeholder case (async load in progress)
-			if pb.Box.ImageData != nil && pb.Box.ImageData.Loading {
-				f.drawImageLoadingPlaceholder(target, pt, string(pb.Box.Text))
-				continue
-			}
-
-			// Check for error placeholder case
-			if pb.Box.ImageData != nil && pb.Box.ImageData.Err != nil {
-				f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
-				continue
-			}
-
-			// Check if we have valid image data to render
-			if !pb.Box.IsImage() {
-				f.drawImageErrorPlaceholder(target, pt, string(pb.Box.Text))
-				continue
-			}
-
-			// Render the actual image (with shifted X for scrollable blocks)
-			shiftedPB := pb
-			shiftedPB.X -= hOff
-			f.drawImageTo(target, shiftedPB, line, offset, frameWidth, frameHeight)
 		}
 	}
+}
 
-	// Phase 5b: Repaint gutter for scrollable block regions.
-	// When horizontally scrolled, text may render to the left of the block's
-	// LeftIndent. Repaint the gutter column [0, LeftIndent) with the frame
-	// background to clip any overflow.
-	for lineIdx, line := range lines {
-		if line.Y >= frameHeight {
+// paintImageBox draws one image-styled box: a loading placeholder, an
+// error placeholder, or the actual rendered image. Extracted from the
+// Phase 5 loop so the orchestrator stays compact and the per-box
+// branch logic is easy to follow.
+func (f *frameImpl) paintImageBox(c *paintCtx, line Line, pb PositionedBox, hOff int) {
+	pt := image.Point{X: c.offset.X + pb.X - hOff, Y: c.offset.Y + line.Y}
+	switch {
+	case pb.Box.ImageData != nil && pb.Box.ImageData.Loading:
+		f.drawImageLoadingPlaceholder(c.target, pt, string(pb.Box.Text))
+	case pb.Box.ImageData != nil && pb.Box.ImageData.Err != nil:
+		f.drawImageErrorPlaceholder(c.target, pt, string(pb.Box.Text))
+	case !pb.Box.IsImage():
+		f.drawImageErrorPlaceholder(c.target, pt, string(pb.Box.Text))
+	default:
+		shiftedPB := pb
+		shiftedPB.X -= hOff
+		f.drawImageTo(c.target, shiftedPB, line, c.offset, c.frameWidth, c.frameHeight)
+	}
+}
+
+// paintPhaseGutterRepaint clips horizontal-scroll overflow (Phase 5b).
+// When a block region is horizontally scrolled, text may render to the
+// LEFT of the block's LeftIndent. Repaint the gutter column
+// [0, LeftIndent) with the frame background so that overflow is hidden.
+func (f *frameImpl) paintPhaseGutterRepaint(c *paintCtx) {
+	for lineIdx, line := range c.lines {
+		if line.Y >= c.frameHeight {
 			break
 		}
-		indent := leftIndentForLine(lineIdx)
-		if indent <= 0 || hOffsetForLine(lineIdx) <= 0 {
+		indent := c.leftIndentForLine(lineIdx)
+		if indent <= 0 || f.hOffsetForLine(c, lineIdx) <= 0 {
 			continue
 		}
 		gutterRect := image.Rect(
-			offset.X,
-			offset.Y+line.Y,
-			offset.X+indent,
-			offset.Y+line.Y+line.Height,
+			c.offset.X,
+			c.offset.Y+line.Y,
+			c.offset.X+indent,
+			c.offset.Y+line.Y+line.Height,
 		)
-		clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
+		clipRect := image.Rect(c.offset.X, c.offset.Y, c.offset.X+c.frameWidth, c.offset.Y+c.frameHeight)
 		gutterRect = gutterRect.Intersect(clipRect)
 		if !gutterRect.Empty() {
-			target.Draw(gutterRect, f.background, nil, image.ZP)
+			c.target.Draw(gutterRect, f.background, nil, image.ZP)
 		}
 	}
+}
 
-	// Phase 6: Draw horizontal scrollbars for overflowing block regions
-	f.drawHScrollbarsTo(target, offset, lines, adjustedRegions, frameWidth)
+// paintPhaseHScrollbars draws horizontal scrollbars for overflowing
+// block regions (Phase 6). Drawn last so it sits on top of everything.
+func (f *frameImpl) paintPhaseHScrollbars(c *paintCtx) {
+	f.drawHScrollbarsTo(c.target, c.offset, c.lines, c.adjustedRegions, c.frameWidth)
 }
 
 // drawBlockBackgroundTo draws a full-width background for a line.
