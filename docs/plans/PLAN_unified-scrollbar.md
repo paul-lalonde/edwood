@@ -58,10 +58,10 @@ both modes still use their existing scrollbars unchanged.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Distill `ScrollModel` interface and `MinThumbHeightPx` from base doc | `docs/designs/features/unified-scrollbar.md` | Output is the doc itself. |
-| [ ] Tests | n/a (interface only; tests come with concrete widget in 1.2) | — | — |
-| [ ] Iterate | Add `scrollbar.go` with the `ScrollModel` interface and `MinThumbHeightPx` constant. No `Scrollbar` struct yet. | `docs/designs/features/unified-scrollbar.md` § "ScrollModel interface" | New file `/Users/paul/dev/edwood/scrollbar.go`. Interface has four methods: `Geometry() (totalPx, viewPx, originPx int)`, `DragTopToPixel(clickY int)`, `DragPixelToTop(clickY int)`, `JumpToFraction(f float64)`. Constant docstring per design doc. |
-| [ ] Commit | Commit interface + constant | — | Message: `Add ScrollModel interface and MinThumbHeightPx constant` |
+| [x] Design | Distill `ScrollModel` interface and `MinThumbHeightPx` from base doc | `docs/designs/features/unified-scrollbar.md` | Output is the doc itself. |
+| [x] Tests | n/a (interface only; tests come with concrete widget in 1.2) | — | — |
+| [x] Iterate | Add `scrollbar.go` with the `ScrollModel` interface and `MinThumbHeightPx` constant. No `Scrollbar` struct yet. | `docs/designs/features/unified-scrollbar.md` § "ScrollModel interface" | Done in `c7f55a2`. |
+| [x] Commit | Commit interface + constant | — | `c7f55a2` Add ScrollModel interface and MinThumbHeightPx constant |
 
 ### 1.2 `Scrollbar` widget — drawing
 
@@ -70,10 +70,10 @@ diff in PR2 is verifiable visually.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Confirm thumb math equals `scrpos()` | `scrl.go:27-56`, `docs/designs/features/unified-scrollbar.md` § "Drawing" | The `>>10` overflow guard is preserved. The `MinThumbHeightPx` enforcement replaces the `2` clamp at `scrl.go:48-53`. |
-| [ ] Tests | Write tests for `Scrollbar.Draw` thumb computation | `docs/designs/features/unified-scrollbar.md` § "Drawing" | New `scrollbar_test.go`. Tests: (1) thumb covers full track when `viewPx >= totalPx`, (2) thumb proportional for mid-document origin, (3) thumb height clamped to `MinThumbHeightPx` for very large `totalPx`, (4) overflow guard kicks in for `totalPx > 1<<20`, (5) dirty cache: second `Draw` with same Geometry is a no-op (verify via mock `draw.Image` recording call counts). Use `edwoodtest.NewDisplay` and a fake `ScrollModel` returning fixed geometry. |
-| [ ] Iterate | Implement `Scrollbar` struct, `SetRect`, `Draw`, internal `scrtmp` allocation | `scrl.go:58-99`, `docs/designs/features/unified-scrollbar.md` § "Drawing" | In `scrollbar.go`. Lift `ScrlResize` (allocation of `scrtmp`) into the widget as lazy init. Lift `scrpos`-equivalent logic but use `MinThumbHeightPx` clamp. Three-rectangle draw (track / thumb / right edge) with frame colors. Dirty-cache via `lastSR`. |
-| [ ] Commit | Commit Scrollbar drawing | — | Message: `Add Scrollbar widget drawing` |
+| [x] Design | Confirm thumb math equals `scrpos()` | `scrl.go:27-56`, `docs/designs/features/unified-scrollbar.md` § "Drawing" | Math reproduces `scrpos` semantics. `>>10` overflow guard preserved; `MinThumbHeightPx` (10) replaces the legacy `2` clamp. |
+| [x] Tests | Write tests for `Scrollbar.Draw` thumb computation | `docs/designs/features/unified-scrollbar.md` § "Drawing" | `scrollbar_test.go` covers: full track when view ≥ doc, zero-doc, origin at top/mid/bottom, MinThumbHeightPx clamp (extends-down + pin-to-bottom), large-doc overflow guard, track offset from zero, dirty cache (first draws, repeated no-ops, model change repaints, SetRect invalidates). |
+| [x] Iterate | Implement `Scrollbar` struct, `SetRect`, `Draw`, internal `scrtmp` allocation | `scrl.go:58-99`, `docs/designs/features/unified-scrollbar.md` § "Drawing" | Done in `b63ff39`. `computeThumbRect` + `clampThumbHeight` extracted as pure functions. |
+| [x] Commit | Commit Scrollbar drawing | — | `b63ff39` Add Scrollbar widget drawing |
 
 ### 1.3 `Scrollbar` widget — mouse latch
 
@@ -82,10 +82,10 @@ Lifted bit-for-bit from `Text.Scroll` (`scrl.go:101-166`) and
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Confirm latch loop matches `scrl.go:108-165` | `scrl.go:101-166`, `wind.go:1481-1561`, `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | Document the exact ordering of `Flush` / `MoveTo` / `Read` / model-update. Note that B2 reads per-event; B1/B3 use 200ms initial then 80ms debounce. |
-| [ ] Tests | Write tests for `Scrollbar.HandleClick` button dispatch | `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | In `scrollbar_test.go`. Use a fake `ScrollModel` recording method calls and a fake `mousectl` channel feeding scripted mouse events. Tests: (1) B1 click at clickY calls `DragTopToPixel(clickY)`, (2) B3 click calls `DragPixelToTop(clickY)`, (3) B2 click calls `JumpToFraction(f)` with the right fraction, (4) auto-repeat: hold B1 for 300ms; expect at least 2 calls (one immediate, one after 200ms initial debounce), (5) release: button up exits the loop and drains residual events. The timing test will be flaky if it asserts exact counts; assert "≥ N calls within window". |
-| [ ] Iterate | Implement `HandleClick` | `scrl.go:101-166`, `wind.go:1481-1561` | In `scrollbar.go`. Reads from `global.mousectl`, warps cursor via `s.display.MoveTo`, calls model methods, debounces with `time.Sleep` + `mousectl.C` select (matching `ScrSleep`). Drains residual events on exit. |
-| [ ] Commit | Commit Scrollbar mouse latch | — | Message: `Add Scrollbar widget mouse latch` |
+| [x] Design | Confirm latch loop matches `scrl.go:108-165` | `scrl.go:101-166`, `wind.go:1481-1561`, `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | Loop body factored into `clampMouseY`, `warpToCenter`, `dispatch`, `waitForNextTick`, `drainMouseEvents`, `scrollbarSleep`. Ordering of Flush/MoveTo/Read/model-update preserved bit-for-bit. |
+| [x] Tests | Write tests for `Scrollbar.HandleClick` button dispatch | `docs/designs/features/unified-scrollbar.md` § "Mouse latch" | `scrollbar_test.go` covers `dispatch` (B1→DragTopToPixel, B3→DragPixelToTop, B2→JumpToFraction with correct fraction, B2 zero-track-height guard, unknown-button no-op). The full latch loop (auto-repeat timing, drain) is **deferred to manual verification** in §2.3 — `Mousectl.Read` embeds a real-display `Flush()` and faking it requires invasive abstraction work. The timing test from the original plan is flagged as deferred. |
+| [x] Iterate | Implement `HandleClick` | `scrl.go:101-166`, `wind.go:1481-1561` | Done in `68ad57a`. `initialDebounceMs` and `repeatDebounceMs` are package-level vars to leave a future test seam. |
+| [x] Commit | Commit Scrollbar mouse latch | — | `68ad57a` Add Scrollbar widget mouse latch |
 
 ---
 
