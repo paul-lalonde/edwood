@@ -8,12 +8,18 @@ import (
 	"github.com/rjkroege/edwood/draw"
 )
 
-// MinThumbHeightPx is the minimum on-screen height of the scrollbar
-// thumb. Below this the thumb becomes hard to grab on hi-DPI displays
-// and visually disappears against the track. Chosen empirically to be
-// reliably grabbable; not tied to font height because the scrollbar
-// must remain usable in extremely large documents where a strictly
-// proportional thumb height would be sub-pixel.
+// MinThumbHeightPx is the minimum height of the scrollbar thumb in
+// **literal device pixels** — it is not scaled for hi-DPI displays.
+// On a 2× retina display the thumb is 5 logical pixels high. Below
+// this threshold the thumb becomes hard to grab and visually
+// disappears against the track. Chosen empirically; not tied to
+// font height because the scrollbar must remain usable in extremely
+// large documents where a strictly proportional thumb height would
+// be sub-pixel.
+//
+// TODO: when an explicit DPI scale becomes available, multiply
+// through. Until then, this is "good enough" relative to the
+// legacy 2-px clamp it replaces.
 const MinThumbHeightPx = 10
 
 // largeDocThreshold is the document size beyond which thumb math is
@@ -25,21 +31,28 @@ const largeDocThreshold = 1 << 20
 // calls to ask "where is the document, and where should it move
 // next?"
 //
-// All quantities are in document-space pixels: the document is
-// treated as a vertical strip of total height TotalPx, of which
-// ViewPx pixels are visible starting at OriginPx from the document
-// top. Modes that operate in non-pixel units (e.g. text mode in
-// runes) may return any unit triple from Geometry as long as the
-// three values share the same unit; the widget uses them only to
-// size and position the thumb proportionally.
+// At the *widget boundary* values are document-space pixels: the
+// document is treated as a vertical strip of total height TotalPx,
+// of which ViewPx pixels are visible starting at OriginPx from the
+// document top.
+//
+// Internally a model may use any unit it likes, including ones that
+// aren't pixels. For example, the text-mode adapter operates in
+// rune counts: it returns (file.Nr(), nchars, t.org) from Geometry
+// and treats the clickY arguments to Drag* as line counts via
+// fontH. The widget only uses Geometry's three values
+// proportionally, so any consistent unit triple works.
 //
 // The widget never sees runes, lines, or any mode-specific concept.
-// Three operations, all expressed in viewport-relative pixels.
+// Four operations, all expressed in viewport-relative pixels at the
+// boundary.
 type ScrollModel interface {
 	// Geometry returns the current scroll state.
 	//   totalPx:  total document height (>= viewPx).
 	//   viewPx:   viewport height.
 	//   originPx: offset from document top to viewport top.
+	// Adapters may return any unit triple (e.g. runes) as long as
+	// the three share the same unit.
 	Geometry() (totalPx, viewPx, originPx int)
 
 	// DragTopToPixel implements B1: the line currently at the top of
@@ -55,19 +68,34 @@ type ScrollModel interface {
 
 	// JumpToFraction implements B2: set origin so its position
 	// within [0, totalPx-viewPx] is at fraction f in [0, 1].
+	//
+	// Adapters that internally compute origin = totalUnits * f and
+	// then multiply by a per-unit size must apply their own
+	// overflow guard for documents larger than 1<<20 units. The
+	// widget's thumb-rect math (computeThumbRect) downscales by 10
+	// bits in that regime, but JumpToFraction is called with the
+	// raw unscaled fraction — adapters mirror their own scrl.go
+	// equivalents (e.g. text mode does p0 := nchars * y / h with
+	// pre-shifted operands).
 	JumpToFraction(f float64)
 }
 
-// Scrollbar renders an acme-style vertical scrollbar and (in a future
-// commit) handles click-and-hold mouse interaction. It delegates all
-// document arithmetic to a ScrollModel so the same widget can serve
-// both text mode (rune-based) and rich-text mode (pixel-based with
+// Scrollbar renders an acme-style vertical scrollbar and handles
+// click-and-hold mouse interaction. It delegates all document
+// arithmetic to a ScrollModel so the same widget can serve both
+// text mode (rune-based) and rich-text mode (pixel-based with
 // sub-line offsets).
 //
 // The widget is bound to a single display and model at construction.
 // Track and thumb colors are also fixed at construction; both modes
 // pass global.textcolors[ColBord] and [ColBack] so visuals are
 // uniform across modes.
+//
+// Concurrency: a Scrollbar is **not** internally synchronized. The
+// caller is responsible for serializing Draw / SetRect /
+// HandleClick. In edwood's current architecture all of these
+// originate from the main mouse/keyboard event loop, which provides
+// that serialization implicitly.
 type Scrollbar struct {
 	display draw.Display
 	model   ScrollModel
@@ -273,6 +301,11 @@ func (s *Scrollbar) HandleClick(button int) {
 
 // clampMouseY returns the current mouse Y clamped to the rect's
 // vertical extent. Matches scrl.go's clamping (Max inclusive).
+//
+// Reads from global.mouse rather than taking a parameter to mirror
+// the legacy scrl.go pattern; the latch loop's design intentionally
+// uses globals so existing acme.go event-loop semantics carry
+// through unchanged.
 func clampMouseY(rect image.Rectangle) int {
 	my := global.mouse.Point.Y
 	if my < rect.Min.Y {
@@ -287,6 +320,12 @@ func clampMouseY(rect image.Rectangle) int {
 // warpToCenter pins the cursor to the scrollbar's centerline column
 // at the given Y, absorbing the synthetic mouse event MoveTo
 // generates. Matches scrl.go:122-125.
+//
+// The unconditional mousectl.Read is a known portability concern:
+// platforms that don't generate a synthetic mouse-move event in
+// response to MoveTo (some Wayland configurations have been
+// reported elsewhere) would block here. The legacy code has the
+// same risk; flagged for future hardening.
 func (s *Scrollbar) warpToCenter(centerX, my int) {
 	if global.mouse.Point.Eq(image.Pt(centerX, my)) {
 		return
