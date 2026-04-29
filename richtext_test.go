@@ -695,16 +695,22 @@ func TestScrollbarClickButton1(t *testing.T) {
 	rt.SetOrigin(75)
 	beforeOrigin := rt.Origin()
 
-	// Left-click (button 1) at the top of the scrollbar should scroll up
+	// Left-click (button 1) somewhere in the scrollbar: "send the top
+	// line of the screen to the click position." For this to produce
+	// any scroll-back, the click position must be at least one line
+	// height below the top of the scrollbar — otherwise the line at
+	// the new viewport top is the same as the previous top (matches
+	// acme text-mode B1, where BackNL(t.org, clickY/fontH) is 0
+	// when clickY < fontH). We use 30 px (font height = 14, so >2
+	// lines down).
 	scrollRect := rt.ScrollRect()
-	topY := scrollRect.Min.Y + 10
+	clickY := scrollRect.Min.Y + 30
 
-	// Simulate left-click in scrollbar
-	newOrigin := rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, topY))
+	newOrigin := rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, clickY))
 
-	// Button 1 should scroll up (decrease origin), backing up content
 	if newOrigin >= beforeOrigin {
-		t.Errorf("ScrollClick(1, top): expected origin to decrease from %d, got %d", beforeOrigin, newOrigin)
+		t.Errorf("ScrollClick(1, %d px down): expected origin to decrease from %d, got %d",
+			30, beforeOrigin, newOrigin)
 	}
 }
 

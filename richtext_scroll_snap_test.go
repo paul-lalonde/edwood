@@ -117,6 +117,126 @@ func TestScrollClickB1MagnitudeScalesWithClickY(t *testing.T) {
 	}
 }
 
+// gappyScrollHarness builds a RichText whose content has heading
+// boxes (Scale > 1.0). Layout adds half-fontH spacing before each
+// heading, so TotalDocumentHeight > sum(LinePixelHeights). This is
+// the content shape that exposes the gap-mismatch bug: scrolls
+// computed in lineHeights-only space drift relative to what the
+// user sees in screen-space.
+func gappyScrollHarness(t *testing.T) (*RichText, image.Rectangle) {
+	t.Helper()
+	displayRect := image.Rect(0, 0, 800, 600)
+	display := edwoodtest.NewDisplay(displayRect)
+	font := edwoodtest.NewFont(10, 14)
+	bg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	text, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+	scrBg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Palebluegreen)
+	scrThumb, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Medblue)
+
+	rt := NewRichText()
+	rt.Init(display, font,
+		WithRichTextBackground(bg),
+		WithRichTextColor(text),
+		WithScrollbarColors(scrBg, scrThumb),
+	)
+	// Mixed body / heading content. Headings (Scale > 1.0) trigger
+	// half-fontH spacing in the layout (rich/layout.go:585). 20
+	// iterations produces ~980 px of content, comfortably more than
+	// the 300-px viewport.
+	var content rich.Content
+	for i := 0; i < 20; i++ {
+		content = append(content, rich.Span{Text: "body line", Style: rich.Style{Scale: 1.0}})
+		content = append(content, rich.Span{Text: "\n", Style: rich.Style{Scale: 1.0}})
+		content = append(content, rich.Span{Text: "Heading", Style: rich.Style{Scale: 2.0, Bold: true}})
+		content = append(content, rich.Span{Text: "\n", Style: rich.Style{Scale: 2.0}})
+	}
+	rt.SetContent(content)
+	rt.Render(image.Rect(0, 0, 400, 300))
+	return rt, rt.ScrollRect()
+}
+
+// TestScrollClick_GapsExistInHarness sanity-checks that the harness
+// does produce content with inter-line gaps. If this regresses (e.g.
+// the layout stops adding heading spacing) the inverse-B1/B3 test
+// below would silently lose its discriminating power.
+func TestScrollClick_GapsExistInHarness(t *testing.T) {
+	rt, _ := gappyScrollHarness(t)
+	heights := rt.Frame().LinePixelHeights()
+	total := rt.Frame().TotalDocumentHeight()
+	sumH := 0
+	for _, h := range heights {
+		sumH += h
+	}
+	if total <= sumH {
+		t.Errorf("expected gaps in harness (total %d > sum-heights %d); "+
+			"layout may have stopped adding heading spacing — harness "+
+			"is no longer testing what it claims", total, sumH)
+	}
+}
+
+// TestScrollClick_B1B3InverseOnGappyContent is the regression test
+// for the gap-mismatch bug: B3 forward then B1 back at the same
+// click position must return the viewport to its original state.
+//
+// The previous implementation computed scroll deltas in
+// lineHeights-only space (`pixelToLineOffset(currentPixelY + clickY,
+// lineHeights)`) but clickY was in screen pixels (which include
+// inter-line gaps for paragraph and heading spacing). For each gap
+// the user crossed during a scroll, the math advanced one extra line
+// — B3-then-B1 round-trips drifted, and the click line wasn't the
+// line the user actually saw at the click point.
+//
+// The fix introduces rich.Frame.LinePixelYs() (gap-aware Y values)
+// and routes all scroll-click math through document-rendered Y space.
+func TestScrollClick_B1B3InverseOnGappyContent(t *testing.T) {
+	rt, scrollRect := gappyScrollHarness(t)
+	frame := rt.Frame()
+	if frame.TotalDocumentHeight() <= frame.Rect().Dy() {
+		t.Fatalf("test fixture must produce overflowing content "+
+			"(total %d > frame %d) for scroll-click to do anything",
+			frame.TotalDocumentHeight(), frame.Rect().Dy())
+	}
+
+	// Start from a mid-document state (not origin=0) so the file-top
+	// override in applyScrollSnap doesn't mask any drift in B1's
+	// SnapBottom path. Find a line index that's well past the first
+	// viewport-worth of content.
+	lineStarts := frame.LineStartRunes()
+	if len(lineStarts) < 10 {
+		t.Fatalf("test fixture should have many lines; got %d", len(lineStarts))
+	}
+	startOrigin := lineStarts[len(lineStarts)/2] // mid-document
+	rt.SetOrigin(startOrigin)
+	rt.SetOriginYOffset(0)
+	if rt.Origin() != startOrigin {
+		t.Fatalf("SetOrigin precondition failed: got %d", rt.Origin())
+	}
+
+	// Click at mid-scrollbar, B3 forward then B1 back to round-trip.
+	clickPt := image.Pt(scrollRect.Min.X+5,
+		(scrollRect.Min.Y+scrollRect.Max.Y)/2)
+
+	rt.ScrollClick(3, clickPt)
+	if rt.Origin() == startOrigin {
+		t.Fatalf("B3 should have advanced origin past %d; stayed at %d",
+			startOrigin, rt.Origin())
+	}
+	originAfterB3 := rt.Origin()
+	offsetAfterB3 := rt.GetOriginYOffset()
+
+	rt.ScrollClick(1, clickPt)
+	if rt.Origin() != startOrigin {
+		t.Errorf("B1 after B3 with same click point: origin = %d, want %d "+
+			"(B1/B3 must be exact inverses, even with inter-line gaps). "+
+			"After B3: origin=%d offset=%d.",
+			rt.Origin(), startOrigin, originAfterB3, offsetAfterB3)
+	}
+	if rt.GetOriginYOffset() != 0 {
+		t.Errorf("B1 after B3: GetOriginYOffset = %d, want 0",
+			rt.GetOriginYOffset())
+	}
+}
+
 // TestScrollClick_RoundTripFromTopLandsAtTop is the integration-
 // level regression test for the user-reported bug. Starting at
 // origin=0 (first line at top), B3 forward then B1 back to
@@ -127,34 +247,30 @@ func TestScrollClick_RoundTripFromTopLandsAtTop(t *testing.T) {
 	rt, scrollRect := scrollSnapHarness(t)
 	rt.SetOrigin(0)
 
-	// B3 forward.
-	rt.ScrollClick(3, image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+100))
+	// B3 forward then B1 back at the SAME click position. With B3's
+	// round-down + B1's round-up line mapping, this is the
+	// canonical inverse-pair operation; round-trip is exact even
+	// when the click position falls between line boundaries. (See
+	// scrollClickAt for the asymmetric-rounding rationale.)
+	clickPt := image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+100)
+	rt.ScrollClick(3, clickPt)
 	if rt.Origin() == 0 {
 		t.Fatal("B3 should have advanced origin past 0")
 	}
+	rt.ScrollClick(1, clickPt)
 
-	// B1 back to origin=0. We may need multiple B1 clicks to fully
-	// return, depending on viewport/click geometry. Loop until at
-	// origin=0 (or bail after a sane number of attempts).
-	for i := 0; i < 20 && rt.Origin() > 0; i++ {
-		rt.ScrollClick(1, image.Pt(scrollRect.Min.X+5, scrollRect.Min.Y+1))
-	}
-	if rt.Origin() != 0 {
-		t.Fatalf("could not return to origin=0 via B1 clicks; stuck at %d", rt.Origin())
-	}
-
-	// At origin=0, the first line must be at Y=0 — the file-top
-	// override should kick in and force SnapTop, defeating any
-	// SnapBottom set by the last B1.
-	fi := rt.Frame()
-	// Re-render to compute layout after the scroll round-trip.
+	// Re-render to compute layout after the round-trip.
 	rt.Render(image.Rect(0, 0, 400, 300))
+
+	// First line must be at Y=0 — the file-top override forces
+	// SnapTop, defeating any SnapBottom set by the last B1.
+	fi := rt.Frame()
 	if got := fi.GetOriginYOffset(); got != 0 {
 		t.Errorf("after round-trip to origin=0: GetOriginYOffset = %d, want 0", got)
 	}
-	// The frame's layout should produce first line at Y=0.
-	// Read via LinePixelHeights to confirm we're showing line 0:
-	// LineStartRunes()[0] must be 0 (we're at the start of content).
+	if rt.Origin() != 0 {
+		t.Errorf("after round-trip: Origin = %d, want 0", rt.Origin())
+	}
 	if starts := fi.LineStartRunes(); len(starts) == 0 || starts[0] != 0 {
 		t.Errorf("LineStartRunes[0] = %v, want 0 (file top)", starts)
 	}

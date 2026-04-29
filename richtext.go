@@ -310,36 +310,41 @@ func (rt *RichText) ScrollClick(button int, pt image.Point) int {
 }
 
 // scrollClickAt handles a click on the scrollbar using a given scroll rectangle.
-// Uses pixel heights so that lines containing images scroll correctly.
+//
+// All math is done in document-rendered Y space (line.Y values from
+// the layout, which include inter-line gaps for paragraph/heading
+// spacing and horizontal-scrollbar adjustments). This makes B1 and B3
+// exact inverses for any clickY value, and makes B3 land the visually-
+// clicked line at the viewport top — even on documents with mixed line
+// heights or significant gaps between lines.
+//
+// Snap policy (see unified-scrollbar.md § "Scroll snap policy"):
+//   B1 reveals earlier content -> SnapBottom (anchor bottom line).
+//   B3 reveals later content   -> SnapTop (anchor new top line).
+//   B2 jumps arbitrarily       -> SnapTop for predictability.
+// SetOrigin/SetOriginYOffset reset snap to SnapTop, so SetScrollSnap
+// must be called AFTER them.
 func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.Rectangle) int {
-	// If no content or frame, return 0
 	if rt.content == nil || rt.frame == nil {
 		return 0
 	}
-
-	totalRunes := rt.content.Len()
-	if totalRunes == 0 {
+	if rt.content.Len() == 0 {
 		return 0
 	}
 
-	// Get per-line pixel heights and line start runes
 	lineHeights := rt.frame.LinePixelHeights()
+	lineYs := rt.frame.LinePixelYs()
 	lineStarts := rt.frame.LineStartRunes()
-	lineCount := len(lineHeights)
-	if lineCount == 0 {
+	if len(lineHeights) == 0 || len(lineYs) != len(lineHeights) {
 		return 0
 	}
 
-	// Total document height includes all inter-line gaps (paragraphs, headings, scrollbars)
 	totalPixelHeight := rt.frame.TotalDocumentHeight()
 	frameHeight := rt.frame.Rect().Dy()
-
-	// If all content fits, no scrolling needed
 	if totalPixelHeight <= frameHeight {
 		return 0
 	}
 
-	// Calculate click position as a proportion of the scrollbar height
 	scrollHeight := scrollRect.Dy()
 	if scrollHeight <= 0 {
 		return rt.Origin()
@@ -354,81 +359,61 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	}
 	clickProportion := float64(clickY) / float64(scrollHeight)
 
-	// Find current origin line and compute current pixel Y
+	// Current viewport top in document-rendered Y space.
 	currentOrigin := rt.Origin()
 	currentLine := findLineForOrigin(currentOrigin, lineStarts)
-	currentPixelY := lineOffsetToPixel(currentLine, rt.GetOriginYOffset(), lineHeights)
+	currentTopDocY := lineYs[currentLine] + rt.GetOriginYOffset()
 
-	maxPixelY := totalPixelHeight - frameHeight
-	if maxPixelY < 0 {
-		maxPixelY = 0
-	}
-
-	fontH := rt.frame.DefaultFontHeight()
-	var newPixelY int
-
-	// Per the scroll-snap policy (see unified-scrollbar.md
-	// § "Scroll snap policy (rich mode)"):
-	//   B1 reveals earlier content -> snap the bottom line at viewport bottom.
-	//   B3 reveals later content   -> snap the new top line at viewport top.
-	//   B2 jumps arbitrarily       -> snap top for predictability.
-	// SetOrigin/SetOriginYOffset (called below) reset snap to
-	// SnapTop, so SetScrollSnap must be called AFTER them.
+	// targetTopDocY is the document-rendered Y where the new viewport
+	// top should sit. Each button computes it differently:
+	//   B1: top line down to click   -> currentTopDocY - clickY
+	//   B3: click line up to top     -> currentTopDocY + clickY
+	//   B2: jump to fraction         -> totalPixelHeight * fraction
+	//
+	// No upper clamp: B3 (and B2) may set an origin past the
+	// "last-line-at-bottom" position so the last line ends up at
+	// the top of the viewport with empty space below. This matches
+	// acme's text-mode B3 (`org + Charofpt(...)` in scrl.go:145)
+	// which never clamps. A previous upper-clamp on B3 broke
+	// B1/B3 round-trip exactness — B3 might be truncated short of
+	// where B1 would expect to find the click line.
+	var targetTopDocY int
 	var snap rich.ScrollSnap
 	switch button {
 	case 1:
-		// Button 1 (left): "drag the top line of the viewport down to
-		// the click position." Scroll back by clickY pixels so the
-		// previous top ends up at viewport-Y = clickY (in screen
-		// pixels). Mirrors acme text-mode B1
-		// (BackNL(t.org, clickY/fontH) at scrl.go:142-143) which
-		// scrolls back by clickY's worth of lines.
-		//
-		// The previous formula used (1.0 - clickProportion) which
-		// inverted the relationship: clicking near the top
-		// produced a full-screen scroll-back, clicking near the
-		// bottom produced no scroll. Backwards from acme; the user
-		// observed this as "B1 doesn't behave as the inverse of B3."
-		pixelsToMove := int(float64(frameHeight) * clickProportion)
-		if pixelsToMove < 1 {
-			pixelsToMove = 1
-		}
-		newPixelY = currentPixelY - pixelsToMove
-		// Clamp to [0, maxPixelY]
-		if newPixelY < 0 {
-			newPixelY = 0
+		targetTopDocY = currentTopDocY - clickY
+		if targetTopDocY < 0 {
+			targetTopDocY = 0
 		}
 		snap = rich.SnapBottom
-
 	case 2:
-		// Button 2 (middle): jump to absolute position in the document.
-		// Acme convention: clicking at X% means "show from X% of the content."
-		// B2 can scroll past the bounded range to show any line (matching
-		// acme behavior where the last line can appear at the top of the
-		// viewport with empty space below).
-		newPixelY = int(float64(totalPixelHeight) * clickProportion)
-		if newPixelY < 0 {
-			newPixelY = 0
+		targetTopDocY = int(float64(totalPixelHeight) * clickProportion)
+		if targetTopDocY < 0 {
+			targetTopDocY = 0
 		}
 		snap = rich.SnapTop
-
 	case 3:
-		// Button 3 (right): scroll down by a screenful scaled by click position.
-		pixelsToMove := int(float64(frameHeight) * clickProportion)
-		if pixelsToMove < 1 {
-			pixelsToMove = 1
-		}
-		newPixelY = currentPixelY + pixelsToMove
-		if newPixelY > maxPixelY {
-			newPixelY = maxPixelY
-		}
+		targetTopDocY = currentTopDocY + clickY
 		snap = rich.SnapTop
-
 	default:
 		return rt.Origin()
 	}
 
-	newLine, newOffset := pixelToLineOffset(newPixelY, lineHeights)
+	// B1 uses round-up line mapping (smallest M with lineYs[M] >=
+	// target), B3 and B2 use round-down (largest L with lineYs[L]
+	// <= target). The asymmetry is what makes B3+B1 round-trips
+	// exact: B3 may snap *down* to a line boundary, leaving a
+	// residual; B1 then rounds *up* across the same residual to
+	// land back on the original line. Without the asymmetry, both
+	// rounding directions truncate, and round-trips drift by one
+	// line per traversed snap residual.
+	var newLine, newOffset int
+	if button == 1 {
+		newLine, newOffset = lineAtDocYRoundUp(targetTopDocY, lineYs)
+	} else {
+		newLine, newOffset = lineAtDocY(targetTopDocY, lineYs, lineHeights)
+	}
+	fontH := rt.frame.DefaultFontHeight()
 	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
 
 	newOrigin := lineStarts[newLine]
@@ -436,6 +421,65 @@ func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.R
 	rt.frame.SetOriginYOffset(newOffset)
 	rt.frame.SetScrollSnap(snap)
 	return newOrigin
+}
+
+// lineAtDocY returns (lineIndex, offsetWithinLine) for the line whose
+// rendered Y range contains docY (round-down: largest lineYs[i] <=
+// docY). If docY falls in a gap *between* lines, the next line down
+// is selected (offset 0). Used by B3 (drag-this-line-to-top) and B2
+// (jump-to-fraction) — both want the click to land at or just below
+// docY in document space. Y values are in document-rendered space
+// matching frame.LinePixelYs().
+func lineAtDocY(docY int, lineYs, lineHeights []int) (lineIdx, offset int) {
+	if len(lineYs) == 0 {
+		return 0, 0
+	}
+	// Find the largest i with lineYs[i] <= docY.
+	lineIdx = 0
+	for i, y := range lineYs {
+		if y > docY {
+			break
+		}
+		lineIdx = i
+	}
+	// If docY is in the gap below lineIdx (past the line's content),
+	// advance to the next line so the new viewport top lands on a
+	// line boundary rather than in dead space.
+	if lineIdx+1 < len(lineYs) {
+		lineEnd := lineYs[lineIdx] + lineHeights[lineIdx]
+		if docY >= lineEnd {
+			lineIdx++
+			return lineIdx, 0
+		}
+	}
+	offset = docY - lineYs[lineIdx]
+	if offset < 0 {
+		offset = 0
+	}
+	return lineIdx, offset
+}
+
+// lineAtDocYRoundUp returns the smallest line index whose Y is >=
+// docY (round-up). Used by B1 (drag-top-line-down-to-click-position):
+// the new viewport top is the *earliest* line whose start is at or
+// after the requested target, so the previous top ends up at
+// viewport-Y <= clickY in the new view.
+//
+// The asymmetry with lineAtDocY (round-down) is what makes B3+B1
+// round-trips exact regardless of clickY. B3 snaps down by some
+// residual R; B1 rounds up across the SAME R, landing back on the
+// original line.
+func lineAtDocYRoundUp(docY int, lineYs []int) (lineIdx, offset int) {
+	if len(lineYs) == 0 {
+		return 0, 0
+	}
+	for i, y := range lineYs {
+		if y >= docY {
+			return i, 0
+		}
+	}
+	// docY is past all line starts; clamp to the last line.
+	return len(lineYs) - 1, 0
 }
 
 // scrThumbRect returns the rectangle for the scrollbar thumb using cached rectangles.
@@ -793,6 +837,16 @@ func (rt *RichText) ScrollWheel(up bool) int {
 		newPixelY = currentPixelY + scrollStep
 		if newPixelY > maxPixelY {
 			newPixelY = maxPixelY
+		}
+		// Defensive: scroll-wheel-down must never scroll backward.
+		// scrollClickAt may set an origin past maxPixelY (e.g. B3
+		// click far down the scrollbar with the new no-upper-clamp
+		// behavior); when the user then scrolls the wheel down, a
+		// naive maxPixelY clamp would reduce newPixelY below
+		// currentPixelY. Keep currentPixelY in that case — at end
+		// of content there's nothing to advance to.
+		if newPixelY < currentPixelY {
+			newPixelY = currentPixelY
 		}
 	}
 

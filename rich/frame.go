@@ -61,8 +61,9 @@ type Frame interface {
 	MaxLines() int
 	VisibleLines() int
 	TotalLines() int         // Total number of layout lines in the content
-	LineStartRunes() []int   // Rune offset at the start of each visual line
+	LineStartRunes() []int     // Rune offset at the start of each visual line
 	LinePixelHeights() []int   // Pixel height of each visual line (accounts for images)
+	LinePixelYs() []int        // Rendered Y of each visual line, with inter-line gaps + scrollbar adjustments
 	TotalDocumentHeight() int  // Total rendered height including all inter-line gaps (paragraph, heading, scrollbar)
 
 	// Rendering
@@ -836,6 +837,38 @@ func (f *frameImpl) LinePixelHeights() []int {
 		heights[i] = line.Height
 	}
 	return heights
+}
+
+// LinePixelYs returns the rendered Y position of each visual line in
+// the current layout, accounting for inter-line gaps (paragraph
+// spacing, heading spacing) and horizontal-scrollbar height
+// adjustments. Y values are in document-absolute layout space (line
+// 0 at Y=0). Use together with LinePixelHeights and LineStartRunes
+// for screen-Y ↔ line mapping that respects gaps.
+//
+// Slides adjustments are NOT applied here because layoutFromOrigin
+// applies those only to the viewport-visible subset.
+func (f *frameImpl) LinePixelYs() []int {
+	if f.font == nil || f.content == nil {
+		return nil
+	}
+	base := f.ensureBaseLayout()
+	if len(base) == 0 {
+		return nil
+	}
+
+	// Clone because adjustLayoutForScrollbars mutates Y.
+	lines := cloneLines(base)
+	frameWidth := f.rect.Dx()
+	scrollbarHeight := 12 // Scrollwid; matches layoutFromOrigin
+	regions := findBlockRegions(lines)
+	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+
+	ys := make([]int, len(lines))
+	for i, line := range lines {
+		ys[i] = line.Y
+	}
+	return ys
 }
 
 // HasSlideBreakBetween returns true if there is a slide break (---\n---)
