@@ -298,129 +298,32 @@ func (rt *RichText) Render(r image.Rectangle) {
 }
 
 
-// ScrollClick handles a click on the scrollbar using cached rectangles.
-// It takes the button number (1, 2, or 3) and the click point,
-// calculates the new origin based on the button behavior, and returns it.
-// Button 1 (left): scroll up (backward in content)
-// Button 2 (middle): jump to absolute position
-// Button 3 (right): scroll down (forward in content)
-// The origin is also updated in the RichText component.
+// ScrollClick is the legacy public scrollbar-click API. It synthesizes
+// a click in scrollbar-relative coordinates and delegates to the
+// shared richScrollModel adapter (which is what the unified Scrollbar
+// widget calls). Kept around because external callers (and tests)
+// still use it; new code should drive the model directly through
+// rt.scrollbar.HandleClick.
 func (rt *RichText) ScrollClick(button int, pt image.Point) int {
-	return rt.scrollClickAt(button, pt, rt.lastScrollRect)
+	scrollRect := rt.lastScrollRect
+	if scrollRect.Empty() {
+		return rt.Origin()
+	}
+	m := &richScrollModel{rt: rt}
+	return m.scrollByClickY(button, pt.Y-scrollRect.Min.Y)
 }
 
-// scrollClickAt handles a click on the scrollbar using a given scroll rectangle.
-//
-// All math is done in document-rendered Y space (line.Y values from
-// the layout, which include inter-line gaps for paragraph/heading
-// spacing and horizontal-scrollbar adjustments). This makes B1 and B3
-// exact inverses for any clickY value, and makes B3 land the visually-
-// clicked line at the viewport top — even on documents with mixed line
-// heights or significant gaps between lines.
-//
-// Snap policy (see unified-scrollbar.md § "Scroll snap policy"):
-//   B1 reveals earlier content -> SnapBottom (anchor bottom line).
-//   B3 reveals later content   -> SnapTop (anchor new top line).
-//   B2 jumps arbitrarily       -> SnapTop for predictability.
-// SetOrigin/SetOriginYOffset reset snap to SnapTop, so SetScrollSnap
-// must be called AFTER them.
-func (rt *RichText) scrollClickAt(button int, pt image.Point, scrollRect image.Rectangle) int {
-	if rt.content == nil || rt.frame == nil {
-		return 0
+// scrThumbRect returns the current thumb rectangle by recomputing it
+// from the model's geometry. Test-only accessor: the widget's own
+// dirty-cache (lastDrawnThumb) reflects the last *painted* state and
+// can lag behind a SetOrigin that wasn't followed by Redraw, so
+// tests prefer this fresh recomputation.
+func (rt *RichText) scrThumbRect() image.Rectangle {
+	if rt.scrollbar == nil {
+		return image.Rectangle{}
 	}
-	if rt.content.Len() == 0 {
-		return 0
-	}
-
-	lineHeights := rt.frame.LinePixelHeights()
-	lineYs := rt.frame.LinePixelYs()
-	lineStarts := rt.frame.LineStartRunes()
-	if len(lineHeights) == 0 || len(lineYs) != len(lineHeights) {
-		return 0
-	}
-
-	totalPixelHeight := rt.frame.TotalDocumentHeight()
-	frameHeight := rt.frame.Rect().Dy()
-	if totalPixelHeight <= frameHeight {
-		return 0
-	}
-
-	scrollHeight := scrollRect.Dy()
-	if scrollHeight <= 0 {
-		return rt.Origin()
-	}
-
-	clickY := pt.Y - scrollRect.Min.Y
-	if clickY < 0 {
-		clickY = 0
-	}
-	if clickY > scrollHeight {
-		clickY = scrollHeight
-	}
-	clickProportion := float64(clickY) / float64(scrollHeight)
-
-	// Current viewport top in document-rendered Y space.
-	currentOrigin := rt.Origin()
-	currentLine := findLineForOrigin(currentOrigin, lineStarts)
-	currentTopDocY := lineYs[currentLine] + rt.GetOriginYOffset()
-
-	// targetTopDocY is the document-rendered Y where the new viewport
-	// top should sit. Each button computes it differently:
-	//   B1: top line down to click   -> currentTopDocY - clickY
-	//   B3: click line up to top     -> currentTopDocY + clickY
-	//   B2: jump to fraction         -> totalPixelHeight * fraction
-	//
-	// No upper clamp: B3 (and B2) may set an origin past the
-	// "last-line-at-bottom" position so the last line ends up at
-	// the top of the viewport with empty space below. This matches
-	// acme's text-mode B3 (`org + Charofpt(...)` in scrl.go:145)
-	// which never clamps. A previous upper-clamp on B3 broke
-	// B1/B3 round-trip exactness — B3 might be truncated short of
-	// where B1 would expect to find the click line.
-	var targetTopDocY int
-	var snap rich.ScrollSnap
-	switch button {
-	case 1:
-		targetTopDocY = currentTopDocY - clickY
-		if targetTopDocY < 0 {
-			targetTopDocY = 0
-		}
-		snap = rich.SnapBottom
-	case 2:
-		targetTopDocY = int(float64(totalPixelHeight) * clickProportion)
-		if targetTopDocY < 0 {
-			targetTopDocY = 0
-		}
-		snap = rich.SnapTop
-	case 3:
-		targetTopDocY = currentTopDocY + clickY
-		snap = rich.SnapTop
-	default:
-		return rt.Origin()
-	}
-
-	// B1 uses round-up line mapping (smallest M with lineYs[M] >=
-	// target), B3 and B2 use round-down (largest L with lineYs[L]
-	// <= target). The asymmetry is what makes B3+B1 round-trips
-	// exact: B3 may snap *down* to a line boundary, leaving a
-	// residual; B1 then rounds *up* across the same residual to
-	// land back on the original line. Without the asymmetry, both
-	// rounding directions truncate, and round-trips drift by one
-	// line per traversed snap residual.
-	var newLine, newOffset int
-	if button == 1 {
-		newLine, newOffset = lineAtDocYRoundUp(targetTopDocY, lineYs)
-	} else {
-		newLine, newOffset = lineAtDocY(targetTopDocY, lineYs, lineHeights)
-	}
-	fontH := rt.frame.DefaultFontHeight()
-	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
-
-	newOrigin := lineStarts[newLine]
-	rt.frame.SetOrigin(newOrigin)
-	rt.frame.SetOriginYOffset(newOffset)
-	rt.frame.SetScrollSnap(snap)
-	return newOrigin
+	totalPx, viewPx, originPx := rt.scrollbar.model.Geometry()
+	return computeThumbRect(rt.lastScrollRect, totalPx, viewPx, originPx)
 }
 
 // lineAtDocY returns (lineIndex, offsetWithinLine) for the line whose
@@ -482,96 +385,6 @@ func lineAtDocYRoundUp(docY int, lineYs []int) (lineIdx, offset int) {
 	return len(lineYs) - 1, 0
 }
 
-// scrThumbRect returns the rectangle for the scrollbar thumb using cached rectangles.
-func (rt *RichText) scrThumbRect() image.Rectangle {
-	return rt.scrThumbRectAt(rt.lastScrollRect)
-}
-
-// scrThumbRectAt computes thumb position for a given scrollbar rectangle.
-// The thumb position and size reflect the current scroll position and
-// the proportion of visible content to total content, using pixel heights
-// so that lines containing images are properly accounted for.
-func (rt *RichText) scrThumbRectAt(scrollRect image.Rectangle) image.Rectangle {
-	// If no content or frame, fill the whole scrollbar
-	if rt.content == nil || rt.frame == nil {
-		return scrollRect
-	}
-
-	totalRunes := rt.content.Len()
-	if totalRunes == 0 {
-		return scrollRect
-	}
-
-	// Get per-line pixel heights and line start runes
-	lineHeights := rt.frame.LinePixelHeights()
-	lineStarts := rt.frame.LineStartRunes()
-	if len(lineHeights) == 0 {
-		return scrollRect
-	}
-
-	// Total document height includes all inter-line gaps (paragraphs, headings, scrollbars)
-	totalPixelHeight := rt.frame.TotalDocumentHeight()
-
-	frameHeight := rt.frame.Rect().Dy()
-	scrollHeight := scrollRect.Dy()
-
-	// If all content fits in the frame, fill the scrollbar
-	if totalPixelHeight <= frameHeight {
-		return scrollRect
-	}
-
-	// Thumb height: proportion of frame to total content, in pixels
-	visibleProportion := float64(frameHeight) / float64(totalPixelHeight)
-	if visibleProportion > 1.0 {
-		visibleProportion = 1.0
-	}
-
-	thumbHeight := int(float64(scrollHeight) * visibleProportion)
-	if thumbHeight < 10 {
-		thumbHeight = 10
-	}
-
-	// Find which line the origin corresponds to
-	origin := rt.frame.GetOrigin()
-	originLine := 0
-	for i, start := range lineStarts {
-		if origin >= start {
-			originLine = i
-		} else {
-			break
-		}
-	}
-
-	// Compute pixel offset of the origin line, including sub-line offset
-	originPixelY := 0
-	for i := 0; i < originLine && i < len(lineHeights); i++ {
-		originPixelY += lineHeights[i]
-	}
-	originPixelY += rt.GetOriginYOffset()
-
-	// Position proportion based on pixel offset
-	scrollablePixels := totalPixelHeight - frameHeight
-	if scrollablePixels < 1 {
-		scrollablePixels = 1
-	}
-	posProportion := float64(originPixelY) / float64(scrollablePixels)
-	if posProportion > 1.0 {
-		posProportion = 1.0
-	}
-
-	// Available space for thumb movement
-	availableSpace := scrollHeight - thumbHeight
-
-	// Thumb top position
-	thumbTop := scrollRect.Min.Y + int(float64(availableSpace)*posProportion)
-
-	return image.Rect(
-		scrollRect.Min.X,
-		thumbTop,
-		scrollRect.Max.X,
-		thumbTop+thumbHeight,
-	)
-}
 
 // RichTextOption is a functional option for configuring RichText.
 type RichTextOption func(*RichText)

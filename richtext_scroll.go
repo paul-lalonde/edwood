@@ -1,25 +1,27 @@
 package main
 
-import "image"
+import "github.com/rjkroege/edwood/rich"
 
 // richScrollModel adapts *RichText to the ScrollModel interface that
 // the shared Scrollbar widget consumes. This is the rich-text mode
 // counterpart of textScrollModel, completing the unification: both
 // modes drive the same widget.
 //
-// The adapter delegates the heavy lifting (B1/B3 drag-line math,
-// B2 fraction jump, gap-aware line mapping, asymmetric line-boundary
-// rounding) to scrollClickAt, which already encapsulates that
-// behavior for the legacy ScrollClick API. Both legacy and unified
-// paths share that single source of truth, so the visual experience
-// is consistent across the migration.
+// All math is done in document-rendered Y space (line.Y values from
+// the layout, which include inter-line gaps for paragraph/heading
+// spacing and horizontal-scrollbar adjustments). This makes B1 and
+// B3 exact inverses for any clickY, and makes B3 land the visually-
+// clicked line at the viewport top — even on documents with mixed
+// line heights or significant gaps between lines.
 //
-// All quantities at the widget boundary are document-rendered pixels
-// (LinePixelYs), with inter-line gaps and scrollbar-height
-// adjustments included. This matches the gap-aware fix from
-// `5543f81` in the unified-scrollbar branch — see
-// docs/designs/features/unified-scrollbar.md § "Scroll snap policy
-// (rich mode)".
+// Snap policy (see unified-scrollbar.md § "Scroll snap policy"):
+//
+//	B1 reveals earlier content -> SnapBottom (anchor bottom line).
+//	B3 reveals later content   -> SnapTop (anchor new top line).
+//	B2 jumps arbitrarily       -> SnapTop for predictability.
+//
+// SetOrigin/SetOriginYOffset reset snap to SnapTop, so SetScrollSnap
+// must be called AFTER them.
 type richScrollModel struct {
 	rt *RichText
 }
@@ -49,20 +51,16 @@ func (m *richScrollModel) Geometry() (totalPx, viewPx, originPx int) {
 }
 
 // DragTopToPixel implements B1 (drag-the-top-line-down-to-clickY).
-// Delegates to scrollClickAt with the appropriate button code and a
-// synthesized click point.
 func (m *richScrollModel) DragTopToPixel(clickY int) {
-	m.dispatchButton(1, clickY)
+	m.scrollByClickY(1, clickY)
 }
 
 // DragPixelToTop implements B3 (drag-the-line-here-up-to-the-top).
 func (m *richScrollModel) DragPixelToTop(clickY int) {
-	m.dispatchButton(3, clickY)
+	m.scrollByClickY(3, clickY)
 }
 
 // JumpToFraction implements B2 (jump to fraction of total document).
-// The widget passes a fraction in [0, 1]; we convert to clickY and
-// route through scrollClickAt's existing B2 path.
 func (m *richScrollModel) JumpToFraction(f float64) {
 	rt := m.rt
 	if rt == nil || rt.frame == nil {
@@ -79,21 +77,100 @@ func (m *richScrollModel) JumpToFraction(f float64) {
 	if clickY > scrollHeight {
 		clickY = scrollHeight
 	}
-	m.dispatchButton(2, clickY)
+	m.scrollByClickY(2, clickY)
 }
 
-// dispatchButton synthesizes a click point at the scrollbar's left
-// edge (X is irrelevant for vertical scroll math) and the requested
-// clickY, then delegates to scrollClickAt.
-func (m *richScrollModel) dispatchButton(button, clickY int) {
+// scrollByClickY computes a new origin from button + clickY (in
+// scrollbar-relative pixels) and applies it to the underlying
+// rich.Frame. Encapsulates the gap-aware math (LinePixelYs,
+// asymmetric line-boundary rounding) and the snap policy.
+//
+// Returns the new rune origin so that the legacy ScrollClick API
+// can preserve its return type.
+func (m *richScrollModel) scrollByClickY(button, clickY int) int {
 	rt := m.rt
-	if rt == nil || rt.frame == nil {
-		return
+	if rt == nil || rt.content == nil || rt.frame == nil {
+		return 0
 	}
-	scrollRect := rt.lastScrollRect
-	if scrollRect.Empty() {
-		return
+	if rt.content.Len() == 0 {
+		return 0
 	}
-	pt := image.Point{X: scrollRect.Min.X, Y: scrollRect.Min.Y + clickY}
-	rt.scrollClickAt(button, pt, scrollRect)
+
+	lineHeights := rt.frame.LinePixelHeights()
+	lineYs := rt.frame.LinePixelYs()
+	lineStarts := rt.frame.LineStartRunes()
+	if len(lineHeights) == 0 || len(lineYs) != len(lineHeights) {
+		return 0
+	}
+
+	totalPixelHeight := rt.frame.TotalDocumentHeight()
+	frameHeight := rt.frame.Rect().Dy()
+	if totalPixelHeight <= frameHeight {
+		return 0
+	}
+
+	scrollHeight := rt.lastScrollRect.Dy()
+	if scrollHeight <= 0 {
+		return rt.Origin()
+	}
+	if clickY < 0 {
+		clickY = 0
+	}
+	if clickY > scrollHeight {
+		clickY = scrollHeight
+	}
+	clickProportion := float64(clickY) / float64(scrollHeight)
+
+	currentOrigin := rt.Origin()
+	currentLine := findLineForOrigin(currentOrigin, lineStarts)
+	currentTopDocY := lineYs[currentLine] + rt.GetOriginYOffset()
+
+	// targetTopDocY is the document-rendered Y where the new
+	// viewport top should sit. No upper clamp: B3 / B2 may set an
+	// origin past the "last-line-at-bottom" position so the last
+	// line ends up at the viewport top with empty space below
+	// (matches acme's text-mode B3, never clamped). A previous
+	// upper clamp broke B1/B3 round-trip exactness.
+	var targetTopDocY int
+	var snap rich.ScrollSnap
+	switch button {
+	case 1:
+		targetTopDocY = currentTopDocY - clickY
+		if targetTopDocY < 0 {
+			targetTopDocY = 0
+		}
+		snap = rich.SnapBottom
+	case 2:
+		targetTopDocY = int(float64(totalPixelHeight) * clickProportion)
+		if targetTopDocY < 0 {
+			targetTopDocY = 0
+		}
+		snap = rich.SnapTop
+	case 3:
+		targetTopDocY = currentTopDocY + clickY
+		snap = rich.SnapTop
+	default:
+		return rt.Origin()
+	}
+
+	// B1 uses round-up line mapping (smallest M with lineYs[M] >=
+	// target), B3 and B2 use round-down (largest L with lineYs[L]
+	// <= target). The asymmetry is what makes B3+B1 round-trips
+	// exact: B3 may snap *down* to a line boundary, leaving a
+	// residual; B1 then rounds *up* across the same residual to
+	// land back on the original line.
+	var newLine, newOffset int
+	if button == 1 {
+		newLine, newOffset = lineAtDocYRoundUp(targetTopDocY, lineYs)
+	} else {
+		newLine, newOffset = lineAtDocY(targetTopDocY, lineYs, lineHeights)
+	}
+	fontH := rt.frame.DefaultFontHeight()
+	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
+
+	newOrigin := lineStarts[newLine]
+	rt.frame.SetOrigin(newOrigin)
+	rt.frame.SetOriginYOffset(newOffset)
+	rt.frame.SetScrollSnap(snap)
+	return newOrigin
 }

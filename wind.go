@@ -1032,18 +1032,11 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		} else if m.Buttons&4 != 0 {
 			button = 3
 		}
-		if button != 0 && mc != nil {
-			if rt.scrollbar != nil {
-				rt.scrollbar.HandleClick(button)
-				w.Draw()
-				if w.display != nil {
-					w.display.Flush()
-				}
-			} else {
-				// Fallback path: should not happen in practice
-				// because Init constructs scrollbar whenever bg/thumb
-				// colors are configured.
-				w.previewVScrollLatch(rt, mc, button, scrRect)
+		if button != 0 && mc != nil && rt.scrollbar != nil {
+			rt.scrollbar.HandleClick(button)
+			w.Draw()
+			if w.display != nil {
+				w.display.Flush()
 			}
 			return true
 		}
@@ -1519,81 +1512,6 @@ func drainScrollEvents(mc *draw.Mousectl, d time.Duration) {
 		case <-timer.C:
 			return
 		}
-	}
-}
-
-// previewVScrollLatch implements acme-style latching for the vertical
-// scrollbar in preview mode. Once a button is pressed in the scrollbar, the
-// scroll action tracks the mouse until the button is released. The cursor is
-// physically warped back into the scrollbar on each iteration, matching the
-// acme pattern in scrl.go.
-func (w *Window) previewVScrollLatch(rt *RichText, mc *draw.Mousectl, button int, scrRect image.Rectangle) {
-	buttonBit := 1 << uint(button-1)
-	centerX := (scrRect.Min.X + scrRect.Max.X) / 2
-
-	// Initial scroll action.
-	rt.ScrollClick(button, mc.Mouse.Point)
-	w.Draw()
-	if w.display != nil {
-		w.display.Flush()
-	}
-
-	first := true
-	for {
-		if button == 2 {
-			// B2: read per-event for live thumb drag.
-			mc.Mouse = <-mc.C
-		} else {
-			// B1/B3: drain events for the debounce window. The
-			// drain absorbs cursor jitter (a click physically
-			// wiggles the cursor 1-2 px, generating spurious
-			// move events between press and release). Without
-			// the drain, each jitter event used to trigger a
-			// per-iteration scroll-click — a single physical
-			// click became N dispatches.
-			if first {
-				if w.display != nil {
-					w.display.Flush()
-				}
-				drainScrollEvents(mc, 200*time.Millisecond)
-				first = false
-			} else {
-				drainScrollEvents(mc, 80*time.Millisecond)
-			}
-		}
-
-		if mc.Mouse.Buttons&buttonBit == 0 {
-			break
-		}
-
-		// Clamp Y and lock X to center of scrollbar.
-		my := mc.Mouse.Point.Y
-		if my < scrRect.Min.Y {
-			my = scrRect.Min.Y
-		}
-		if my >= scrRect.Max.Y {
-			my = scrRect.Max.Y
-		}
-		warpPt := image.Pt(centerX, my)
-
-		// Warp cursor back into scrollbar if it has moved away.
-		if !mc.Mouse.Point.Eq(warpPt) {
-			if w.display != nil {
-				w.display.MoveTo(warpPt)
-			}
-			mc.Mouse = <-mc.C // absorb synthetic move event
-		}
-
-		rt.ScrollClick(button, warpPt)
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-	}
-
-	// Drain remaining mouse events until all buttons released.
-	for mc.Mouse.Buttons != 0 {
-		mc.Mouse = <-mc.C
 	}
 }
 
@@ -2787,18 +2705,11 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 		} else if m.Buttons&4 != 0 {
 			button = 3
 		}
-		if button != 0 && mc != nil {
-			if rt.scrollbar != nil {
-				rt.scrollbar.HandleClick(button)
-				w.Draw()
-				if w.display != nil {
-					w.display.Flush()
-				}
-			} else {
-				// Fallback path: should not happen in practice
-				// because Init constructs scrollbar whenever bg/thumb
-				// colors are configured.
-				w.previewVScrollLatch(rt, mc, button, scrRect)
+		if button != 0 && mc != nil && rt.scrollbar != nil {
+			rt.scrollbar.HandleClick(button)
+			w.Draw()
+			if w.display != nil {
+				w.display.Flush()
 			}
 			return true
 		}
