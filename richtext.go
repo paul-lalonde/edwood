@@ -555,6 +555,34 @@ func snapOffset(lineIdx, offset, fontH int, lineHeights []int) int {
 	return offset
 }
 
+// landWithinTallLine maps docY to a (line, sub-line offset) when docY
+// falls inside a "tall" line — one taller than 2*fontH, the same
+// threshold snapOffset uses to allow sub-line scrolling. Returns
+// ok=false if docY is not inside any tall line, in which case the
+// caller falls back to the normal line-granular mapping
+// (lineAtDocYRoundUp for B1 / lineAtDocY for B3 and B2).
+//
+// This exists to fix B1 specifically: round-up snaps past the image
+// to the line below, so without this override B1 cannot move the
+// viewport top onto a tall image. For B3 and B2 the result is
+// identical to lineAtDocY, since round-down already lands inside the
+// tall line — so applying this universally is safe.
+func landWithinTallLine(docY int, lineYs, lineHeights []int, fontH int) (lineIdx, offset int, ok bool) {
+	for i, y := range lineYs {
+		if i >= len(lineHeights) {
+			break
+		}
+		h := lineHeights[i]
+		if h <= 2*fontH {
+			continue
+		}
+		if docY >= y && docY < y+h {
+			return i, docY - y, true
+		}
+	}
+	return 0, 0, false
+}
+
 // ScrollToPixelY scrolls to an absolute pixel Y position in the document.
 // Converts the pixel position to a (line, offset) pair and sets both the
 // origin rune and pixel offset. Returns the new rune origin.

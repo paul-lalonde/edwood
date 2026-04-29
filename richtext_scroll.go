@@ -156,21 +156,38 @@ func (m *richScrollModel) scrollByClickY(button, clickY int) int {
 	// B1 uses round-up line mapping (smallest M with lineYs[M] >=
 	// target), B3 and B2 use round-down (largest L with lineYs[L]
 	// <= target). The asymmetry is what makes B3+B1 round-trips
-	// exact: B3 may snap *down* to a line boundary, leaving a
-	// residual; B1 then rounds *up* across the same residual to
-	// land back on the original line.
+	// exact on text-only documents: B3 may snap *down* to a line
+	// boundary, leaving a residual; B1 then rounds *up* across the
+	// same residual to land back on the original line.
+	//
+	// For tall lines (images, large code blocks) the asymmetry is
+	// wrong for B1: round-up would skip past the image to the line
+	// below, leaving the image unreachable as a viewport top. When
+	// targetTopDocY falls within a tall line, override with a
+	// sub-line offset on that line. For B3/B2 this override is a
+	// no-op (round-down already lands inside the tall line).
+	fontH := rt.frame.DefaultFontHeight()
 	var newLine, newOffset int
-	if button == 1 {
+	if line, off, ok := landWithinTallLine(targetTopDocY, lineYs, lineHeights, fontH); ok {
+		newLine, newOffset = line, off
+	} else if button == 1 {
 		newLine, newOffset = lineAtDocYRoundUp(targetTopDocY, lineYs)
 	} else {
 		newLine, newOffset = lineAtDocY(targetTopDocY, lineYs, lineHeights)
 	}
-	fontH := rt.frame.DefaultFontHeight()
 	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
 
 	newOrigin := lineStarts[newLine]
 	rt.frame.SetOrigin(newOrigin)
 	rt.frame.SetOriginYOffset(newOffset)
 	rt.frame.SetScrollSnap(snap)
+	// Repaint the frame body so each latch tick is visible. Text
+	// mode gets this for free via Text.SetOrigin's internal
+	// fill/ScrDraw; rich mode's frame.SetOrigin only mutates state,
+	// so without this call the body stays static throughout a held
+	// scrollbar press while only the thumb moves. frame.Redraw is
+	// idempotent and no-ops if the frame has no display attached
+	// (the test path), so it's safe to call unconditionally here.
+	rt.frame.Redraw()
 	return newOrigin
 }
