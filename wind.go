@@ -197,7 +197,7 @@ func (w *Window) Init(clone *Window, r image.Rectangle, dis draw.Display) {
 	if w.display != nil {
 		w.display.ScreenImage().Draw(r1, global.tagcolors[frame.ColBord], nil, image.Point{})
 	}
-	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+	w.body.ScrDraw()
 	w.r = r
 	var br image.Rectangle
 	br.Min = w.tag.scrollr.Min
@@ -369,7 +369,7 @@ func (w *Window) Resize(r image.Rectangle, safe, keepextra bool) int {
 		if (w.previewMode || w.styledMode) && w.richBody != nil {
 			w.richBody.Render(w.body.all)
 		} else {
-			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+			w.body.ScrDraw()
 		}
 	}
 	w.maxlines = util.Min(w.body.fr.GetFrameFillStatus().Nlines, util.Max(w.maxlines, w.body.fr.GetFrameFillStatus().Maxlines))
@@ -947,7 +947,7 @@ func (w *Window) SetPreviewMode(enabled bool) {
 		// Force a full redraw of the body by resizing it
 		if w.display != nil {
 			w.body.Resize(w.body.all, true, false)
-			w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+			w.body.ScrDraw()
 			w.display.Flush()
 		}
 	}
@@ -2501,7 +2501,7 @@ func (w *Window) exitStyledMode() {
 
 	if w.display != nil {
 		w.body.Resize(w.body.all, true, false)
-		w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+		w.body.ScrDraw()
 		w.display.Flush()
 	}
 }

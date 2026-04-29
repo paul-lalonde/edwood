@@ -485,7 +485,7 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 	// sequence of modifications to the file.Buffer, not here per action.
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	}
 	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
 		t.w.UpdateStyledView()
@@ -656,7 +656,7 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 
 	t.SetSelect(t.q0, t.q1)
 	if t.fr != nil && t.display != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	}
 	if t.what == Body && t.w != nil && t.w.IsStyledMode() {
 		t.w.UpdateStyledView()
@@ -1184,12 +1184,7 @@ func getP1(fr frame.Frame) int {
 // must remain at the call site (not in the widget) because the
 // widget does not know which Text it is attached to or whether the
 // window is in preview mode.
-//
-// The nchars parameter is unused — the widget's textScrollModel
-// adapter reads frame Nchars itself via Geometry. The parameter
-// remains for backward compatibility with existing call sites; a
-// follow-up cleanup will drop it.
-func (t *Text) ScrDraw(nchars int) {
+func (t *Text) ScrDraw() {
 	if t.w == nil || t != &t.w.body {
 		return
 	}
@@ -1346,7 +1341,7 @@ func (t *Text) Select() {
 					}
 				}
 			}
-			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+			t.ScrDraw()
 			clearmouse()
 		}
 		t.display.Flush()
@@ -1418,7 +1413,7 @@ func (t *Text) Show(q0, q1 int, doselect bool) {
 		}
 	}
 	if tsd {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 	} else {
 		if t.w.nopen[QWevent] > 0 {
 			nl = 3 * t.fr.GetFrameFillStatus().Maxlines / 4
@@ -1804,7 +1799,7 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 	}
 	t.org = org
 	t.fill(fr)
-	t.ScrDraw(fr.GetFrameFillStatus().Nchars)
+	t.ScrDraw()
 
 	if !calledfromscroll {
 		t.SetSelect(t.q0, t.q1)

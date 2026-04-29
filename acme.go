@@ -173,7 +173,7 @@ func readfile(c *Column, filename string) {
 	w.body.Load(0, filename, true)
 	w.body.file.Clean()
 	w.Resize(w.r, false, true)
-	w.body.ScrDraw(w.body.fr.GetFrameFillStatus().Nchars)
+	w.body.ScrDraw()
 	w.tag.SetSelect(w.tag.file.Nr(), w.tag.file.Nr())
 	xfidlog(w, "new")
 	maybeRunFileHook(w)

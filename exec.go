@@ -403,7 +403,7 @@ func cut(et *Text, t *Text, _ *Text, dosnarf bool, docut bool, _ string) {
 		t.Delete(t.q0, t.q1, true)
 		t.SetSelect(t.q0, t.q0)
 		if t.w != nil {
-			t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+			t.ScrDraw()
 			t.w.Commit(t)
 		}
 	} else {
@@ -475,7 +475,7 @@ func paste(et *Text, t *Text, _ *Text, selectall bool, tobody bool, _ string) {
 		t.SetSelect(q1, q1)
 	}
 	if t.w != nil {
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 		t.w.Commit(t)
 	}
 }

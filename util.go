@@ -246,7 +246,7 @@ func flushwarnings() {
 
 		// TODO(rjk): Code inspection of Show suggests that this might
 		// be redundant.
-		t.ScrDraw(t.fr.GetFrameFillStatus().Nchars)
+		t.ScrDraw()
 		w.owner = owner
 		t.file.TreatAsClean()
 		w.Unlock()
