@@ -200,6 +200,16 @@ type frameImpl struct {
 	cachedBaseLines []Line // cached result of layoutBoxes
 	layoutDirty     bool   // true when cache needs recomputation
 	cachedWidth     int    // frame width used for cached layout
+
+	// Color image cache. Plan 9 image handles are scarce server-side
+	// resources, not just memory; allocColorImage was previously
+	// hitting display.AllocImage on every call (per styled span, per
+	// redraw, per keystroke), leaking handles for the lifetime of a
+	// styled window. Keyed by the packed RGBA byte representation so
+	// equal colors expressed as different color.Color implementations
+	// (e.g. RGBA vs NRGBA) share an entry. Cache size is bounded by
+	// the number of unique colors a document uses; lazily initialized.
+	colorCache map[edwooddraw.Color]edwooddraw.Image
 }
 
 // maxtabPixels returns the tab width in pixels.
@@ -1882,22 +1892,33 @@ func (f *frameImpl) runeWidthInBox(box *Box, n int) int {
 	return f.fontForStyle(box.Style).BytesWidth(text[:byteOffset])
 }
 
-// allocColorImage allocates (or retrieves from cache) an image for the given color.
+// allocColorImage returns a 1x1 replicated image for the given color,
+// caching by packed RGBA so repeated calls (and equal colors expressed
+// as different color.Color implementations) reuse the same handle.
+//
+// The cache lives for the frame's lifetime; entries are bounded by the
+// number of unique colors the document uses. See colorCache field
+// comment for the leak history this fixes.
 func (f *frameImpl) allocColorImage(c color.Color) edwooddraw.Image {
 	if f.display == nil {
 		return nil
 	}
 
-	// Convert color.Color to draw.Color
 	r, g, b, a := c.RGBA()
-	// RGBA returns values in 0-65535 range, scale to 0-255
+	// RGBA returns 0-65535; scale to 0-255 to match draw.Color packing.
 	drawColor := edwooddraw.Color(uint32(r>>8)<<24 | uint32(g>>8)<<16 | uint32(b>>8)<<8 | uint32(a>>8))
 
-	// Allocate a replicated 1x1 image with this color
+	if img, ok := f.colorCache[drawColor]; ok {
+		return img
+	}
 	img, err := f.display.AllocImage(image.Rect(0, 0, 1, 1), f.display.ScreenImage().Pix(), true, drawColor)
 	if err != nil {
 		return nil
 	}
+	if f.colorCache == nil {
+		f.colorCache = make(map[edwooddraw.Color]edwooddraw.Image)
+	}
+	f.colorCache[drawColor] = img
 	return img
 }
 

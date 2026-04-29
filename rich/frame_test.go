@@ -4636,3 +4636,56 @@ func TestLayoutCacheSameWidthNoInvalidate(t *testing.T) {
 		t.Error("ensureBaseLayout should reuse cache when only height changes")
 	}
 }
+
+// TestAllocColorImageCachesByColor pins down the P0 leak fix:
+// allocColorImage must return the same draw.Image instance for repeated
+// calls with the same color, and a distinct instance for a different
+// color. Without caching, every redraw allocated a fresh 1x1 Plan 9
+// image per styled span — leaking image handles for the lifetime of a
+// styled window.
+func TestAllocColorImageCachesByColor(t *testing.T) {
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 100, 100))
+	f := NewFrame().(*frameImpl)
+	f.Init(image.Rect(0, 0, 100, 100), WithDisplay(display))
+
+	red := color.RGBA{R: 255, A: 255}
+	blue := color.RGBA{B: 255, A: 255}
+
+	r1 := f.allocColorImage(red)
+	r2 := f.allocColorImage(red)
+	b1 := f.allocColorImage(blue)
+	r3 := f.allocColorImage(red)
+
+	if r1 == nil || r2 == nil || b1 == nil || r3 == nil {
+		t.Fatalf("allocColorImage returned nil unexpectedly: r1=%v r2=%v b1=%v r3=%v", r1, r2, b1, r3)
+	}
+	if r1 != r2 || r1 != r3 {
+		t.Errorf("allocColorImage(red) returned different instances on repeat calls: r1=%p r2=%p r3=%p", r1, r2, r3)
+	}
+	if r1 == b1 {
+		t.Errorf("allocColorImage(red) and allocColorImage(blue) returned the same instance: %p", r1)
+	}
+}
+
+// TestAllocColorImageEqualColorsShareCacheEntry ensures that two
+// color.Color values that pack to the same RGBA byte representation
+// share a cache entry. This is what makes the cache size bounded
+// (O(unique-colors) regardless of how many color.Color implementations
+// the caller plumbs through).
+func TestAllocColorImageEqualColorsShareCacheEntry(t *testing.T) {
+	display := edwoodtest.NewDisplay(image.Rect(0, 0, 100, 100))
+	f := NewFrame().(*frameImpl)
+	f.Init(image.Rect(0, 0, 100, 100), WithDisplay(display))
+
+	rgba := color.RGBA{R: 64, G: 128, B: 192, A: 255}
+	nrgba := color.NRGBA{R: 64, G: 128, B: 192, A: 255}
+
+	a := f.allocColorImage(rgba)
+	b := f.allocColorImage(nrgba)
+	if a == nil || b == nil {
+		t.Fatalf("allocColorImage returned nil")
+	}
+	if a != b {
+		t.Errorf("equal colors should share cache entry; got distinct instances %p vs %p", a, b)
+	}
+}
