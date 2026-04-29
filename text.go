@@ -73,8 +73,9 @@ type Text struct {
 	tabexpand bool
 	w         *Window
 	scrollr   image.Rectangle
-	lastsr    image.Rectangle
+	lastsr    image.Rectangle // unused; legacy scrl.go cache. Removed in Phase 2.4 cleanup.
 	all       image.Rectangle
+	scrollbar *Scrollbar
 	row       *Row
 	col       *Column
 
@@ -109,6 +110,8 @@ func (t *Text) Init(r image.Rectangle, rf string, cols [frame.NumColours]draw.Im
 	t.tabstop = int(global.maxtab)
 	t.tabexpand = global.tabexpand
 	t.fr = frame.NewFrame(r, fontget(rf, t.display), t.display.ScreenImage(), cols)
+	t.scrollbar = NewScrollbar(dis, &textScrollModel{t: t}, cols[frame.ColBord], cols[frame.ColBack])
+	t.scrollbar.SetRect(t.scrollr)
 	t.Redraw(r, -1, false /* noredraw */)
 	return t
 }
@@ -182,6 +185,9 @@ func (t *Text) Resize(r image.Rectangle, keepextra, noredraw bool) int {
 	t.scrollr = r
 	t.scrollr.Max.X = r.Min.X + t.display.ScaleSize(Scrollwid)
 	t.lastsr = image.Rectangle{}
+	if t.scrollbar != nil {
+		t.scrollbar.SetRect(t.scrollr)
+	}
 	r.Min.X += t.display.ScaleSize(Scrollwid + Scrollgap)
 	t.fr.Clear(false)
 	// TODO(rjk): Remove this Font accessor.
@@ -191,6 +197,10 @@ func (t *Text) Resize(r image.Rectangle, keepextra, noredraw bool) int {
 
 func (t *Text) Close() {
 	t.fr.Clear(true)
+	if t.scrollbar != nil {
+		t.scrollbar.Free()
+		t.scrollbar = nil
+	}
 	if err := t.file.DelObserver(t); err != nil {
 		util.AcmeError(err.Error(), nil)
 	}

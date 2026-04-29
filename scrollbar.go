@@ -130,6 +130,17 @@ func (s *Scrollbar) SetRect(r image.Rectangle) {
 	s.lastDrawnThumb = image.Rectangle{}
 }
 
+// Free releases the scratch image. Call when the owning component
+// is destroyed (e.g. Text.Close, Window.Close). Idempotent: safe to
+// call repeatedly or before any Draw.
+func (s *Scrollbar) Free() {
+	if s.tmp != nil {
+		_ = s.tmp.Free()
+		s.tmp = nil
+	}
+	s.lastDrawnThumb = image.Rectangle{}
+}
+
 // Draw renders the scrollbar (track, thumb, edge) into its current
 // rect on the display's screen image. Cheap: skips the blit if the
 // thumb rectangle is identical to the last drawn one.

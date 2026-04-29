@@ -344,6 +344,29 @@ func TestScrollbar_KeepsScratchWhenAdequateSize(t *testing.T) {
 	}
 }
 
+func TestScrollbar_FreeReleasesScratch(t *testing.T) {
+	// On widget shutdown (e.g. when the owning Text is closed),
+	// Free must release the scratch image and null the field so
+	// later Draw calls can no-op safely.
+	s, _, _ := scrollbarTestHarness(t)
+	s.Draw() // populate s.tmp
+	if s.tmp == nil {
+		t.Fatal("expected s.tmp populated after Draw")
+	}
+	s.Free()
+	if s.tmp != nil {
+		t.Error("Free must null s.tmp")
+	}
+}
+
+func TestScrollbar_FreeIsIdempotent(t *testing.T) {
+	// Calling Free on a widget that never drew (no scratch) must
+	// not panic. Calling Free twice in a row must not panic.
+	s, _, _ := scrollbarTestHarness(t)
+	s.Free()
+	s.Free()
+}
+
 func TestClampMouseY_BelowRectClampsToMin(t *testing.T) {
 	rect := image.Rect(0, 100, 12, 200)
 	withGlobalMouseY(t, 50, func() {
