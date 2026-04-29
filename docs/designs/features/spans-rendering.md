@@ -521,47 +521,23 @@ for mode switching may use headless windows.
 
 ---
 
-## Interaction with Bottom-Line Snap (snapBottomLine)
+## Interaction with Scroll Snap
 
-### Problem
-
-The rich frame height is not always an exact multiple of line heights. When
-scrolling up and back down, the origin snaps to a line start and the remaining
-pixels at the bottom clip the last visible line, leaving it partially hidden
-under the window edge.
-
-The plain frame avoids this by shrinking `rect.Max.Y` to the nearest
-line-height multiple (`frame.go:315`: `f.rect.Max.Y -= ... % height`),
-wasting the extra pixels. For the rich frame, line heights vary (headings,
-images, paragraph gaps), so a single-height trim is not sufficient.
-
-### Fix
-
-A `snapBottomLine` flag on `frameImpl` enables a layout-level Y adjustment.
-After all other layout adjustments in `layoutFromOrigin()` (scrollbar heights,
-slide fills), `applySnapBottomLine()` shifts all line Y values up by the
-overflow of the last visible line:
-
-```
-overflow = lastLine.Y + lastLine.Height - frameHeight
-if overflow > 0:
-    for each line: line.Y -= overflow
-```
-
-This makes the last line end exactly at `frameHeight`, with the first line's
-top absorbing the clipping (hidden behind the scratch image boundary).
-
-### Cascade proof
-
-Line N+1 starts at `>= line[N].Y + line[N].Height`. After shifting by
-`line[N].Y + line[N].Height - frameHeight`, line N+1's Y becomes
-`>= frameHeight`. The `line.Y >= frameHeight` early-exit in drawing phases
-correctly skips it. All consumers of `layoutFromOrigin()` output
-(`drawTextTo`, `Charofpt`, `drawSelectionTo`) automatically get the shifted
-coordinates with no per-consumer fixups.
-
-### Enablement
-
-Enabled only in styled mode via `WithRichTextSnapBottomLine(true)` in
-`initStyledMode()`. Preview mode (markdown preview) is not affected.
-The flag is forwarded through `RichText.Init()` to `rich.WithSnapBottomLine`.
+> **Superseded.** The original `snapBottomLine` flag described in
+> earlier revisions of this section has been replaced by a
+> direction-aware `ScrollSnap` enum (`SnapTop` / `SnapBottom` /
+> `SnapPixel`) with edge-case overrides for file-top and tall
+> lines. Rationale, API, layout changes, and migration are now
+> documented in
+> [unified-scrollbar.md § "Scroll snap policy (rich mode)"](unified-scrollbar.md#scroll-snap-policy-rich-mode).
+>
+> Brief summary: the always-on bottom shift was wrong at file
+> top — the user could not see the first line aligned to the
+> viewport top. Snap is now per-scroll-action: B1 → SnapBottom,
+> B3 / B2 / programmatic → SnapTop. Origin=0 forces SnapTop;
+> tall origin lines force SnapPixel (no snap).
+>
+> The cascade proof for the shifted-Y consumers (drawTextTo /
+> Charofpt / drawSelectionTo) still applies because `applyBottomShift`
+> is the same code as the legacy `applySnapBottomLine`, only
+> renamed and gated by the snap enum.

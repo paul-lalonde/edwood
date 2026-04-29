@@ -106,6 +106,206 @@ widget boundary. Text mode's adapter rounds to `fontH` boundaries on
 the way out (preserving today's line-granular feel); rich mode's
 adapter passes pixels through.
 
+## Scroll snap policy (rich mode)
+
+### Problem
+
+The legacy `snapBottomLine` flag on `rich.frameImpl` (added in
+`3bb2bc0` originally to fix slide rendering) shifts every layout up so
+that the last visible line ends exactly at the frame bottom. The first
+visible line absorbs the overflow — its top is partially clipped.
+
+This is correct mid-document but **wrong at the file top**: at
+`origin=0, originYOffset=0` the user expects the first line's top
+aligned with the viewport top. With `snapBottomLine=true` (always on
+in styled mode) the first line is clipped by the residual
+`frameHeight % lineHeight` pixels and the user can never see the first
+line fully visible at top — the "can't scroll all the way back to the
+top of the first line" bug.
+
+The bug also applies to **tall lines** (e.g. an image taller than the
+viewport): the always-on shift can move the tall line's Y arbitrarily,
+breaking the sub-line pixel scrolling that `originYOffset` enables.
+
+### Policy
+
+Snap is a **per-scroll-action property** rather than a global flag:
+
+| Trigger | Snap |
+|---|---|
+| B1 click (drag-top-down-to-here, scrolling up = revealing earlier) | **Bottom** |
+| B3 click (drag-here-to-top, scrolling down = revealing later) | **Top** |
+| B2 click (jump to fraction) | **Top** |
+| Programmatic `SetOrigin` (Look, search, auto-scroll) | **Top** *(always reset)* |
+| Origin = 0, Offset = 0 (file top) | **Top** *(override)* |
+| Origin line height > frame height (tall line) | **Pixel** *(override, no snap)* |
+
+Rationale:
+
+- **B1** reveals content above the previous viewport. Anchoring the
+  bottom line of the new viewport keeps the relationship to the
+  previous frame visually obvious.
+- **B3** advances through the document. Anchoring the top line lets
+  the user read down without partial-line distractions.
+- **B2 / programmatic** lands on an arbitrary spot. Default to a
+  clean top edge for predictability and to match acme text-mode B2
+  (which lands at a line start via the `BackNL(p0, 2)` snap in
+  `scrl.go:127-131`).
+- Programmatic scrolls *always* reset to `SnapTop`. A `B1 → Look`
+  sequence puts the looked-up content at the top, not at the
+  bottom-anchored state from the prior B1. Confirmed in design
+  review.
+- **Edge cases** (file top, tall line) override the user's last
+  action because the snap that *would* apply has nowhere to anchor.
+
+### API
+
+New enum in `rich`:
+
+```go
+type ScrollSnap int
+
+const (
+    // SnapTop aligns the first visible line's top to the viewport
+    // top. Default; matches a freshly-loaded document.
+    SnapTop ScrollSnap = iota
+
+    // SnapBottom aligns the last visible line's bottom to the
+    // viewport bottom; the first line absorbs partial-line clipping.
+    // Equivalent to legacy snapBottomLine=true.
+    SnapBottom
+
+    // SnapPixel honors originYOffset literally with no
+    // line-boundary alignment. Used when the origin line is taller
+    // than the viewport (e.g. a large image), where line-level
+    // snapping would prevent the user scrolling within the line.
+    SnapPixel
+)
+```
+
+New method on `rich.Frame`:
+
+```go
+// SetScrollSnap configures snap behavior for subsequent layouts.
+// Callers (typically scroll handlers) set this immediately before
+// calling SetOrigin/SetOriginYOffset to record the user's intent.
+// Edge cases (origin at file top, tall origin line) override this
+// inside layoutFromOrigin.
+SetScrollSnap(s ScrollSnap)
+```
+
+Replace `WithSnapBottomLine(bool)` with
+`WithDefaultScrollSnap(ScrollSnap)`. The new default for steady
+state is `SnapTop`, not the legacy `SnapBottom`. Mid-document the
+last line may be partially clipped between scroll actions —
+acceptable cost, confirmed in design review, because the next B1
+immediately switches to bottom snap.
+
+### Layout changes
+
+`layoutFromOrigin` end:
+
+```go
+// Replaces f.applySnapBottomLine(visibleLines)
+f.applyScrollSnap(visibleLines, startLineIdx, allLines)
+```
+
+```go
+func (f *frameImpl) applyScrollSnap(visible []Line, startIdx int, all []Line) {
+    if len(visible) == 0 {
+        return
+    }
+    snap := f.scrollSnap
+
+    // Edge-case overrides.
+    switch {
+    case f.origin == 0 && f.originYOffset == 0:
+        snap = SnapTop
+    case startIdx < len(all) && all[startIdx].Height > f.rect.Dy():
+        snap = SnapPixel
+    }
+
+    switch snap {
+    case SnapTop, SnapPixel:
+        // Default layout already aligns the origin line's top to
+        // the viewport top (with originYOffset for SnapPixel
+        // sub-line scrolling). Nothing more to do.
+        return
+    case SnapBottom:
+        // Existing applySnapBottomLine logic, unchanged.
+        f.applyBottomShift(visible)
+    }
+}
+```
+
+`applyBottomShift` is the existing `applySnapBottomLine` body
+verbatim (extracted with no logic changes, renamed because the snap
+behavior is no longer a single flag).
+
+### Caller changes
+
+`richtext.go scrollClickAt` (`richtext.go:312`), at the top of each
+button branch:
+
+```go
+case 1:
+    rt.frame.SetScrollSnap(rich.SnapBottom)
+    // existing pixelsToMove + clamp + SetOrigin/Offset
+case 2:
+    rt.frame.SetScrollSnap(rich.SnapTop)
+    // existing jump
+case 3:
+    rt.frame.SetScrollSnap(rich.SnapTop)
+    // existing pixelsToMove + clamp
+```
+
+Programmatic entry points (`SetOrigin`, `SetOriginYOffset`, used by
+Look, address resolution, auto-scroll) reset snap to `SnapTop`
+internally so they don't inherit a stale `SnapBottom` from a prior
+B1.
+
+The future Phase 3 `richScrollModel` adapter inherits this:
+`DragTopToPixel` calls `SetScrollSnap(SnapBottom)`,
+`DragPixelToTop` and `JumpToFraction` call `SetScrollSnap(SnapTop)`.
+
+### Migration
+
+- `rich/frame.go`: replace `snapBottomLine bool` with
+  `scrollSnap ScrollSnap`, default `SnapTop`. Rename
+  `applySnapBottomLine` → `applyBottomShift`; add `applyScrollSnap`.
+  Add `SetScrollSnap` method.
+- `rich/options.go`: replace `WithSnapBottomLine` with
+  `WithDefaultScrollSnap`.
+- `richtext.go`: replace `snapBottomLine bool` with the new option
+  field; replace `WithRichTextSnapBottomLine` with
+  `WithRichTextDefaultScrollSnap`. Add `SetScrollSnap` method.
+  Update `scrollClickAt` to set per-button snap; update `SetOrigin`
+  / `SetOriginYOffset` to reset snap to `SnapTop`.
+- `wind.go`: `initStyledMode` and the preview-mode constructor:
+  drop `WithRichTextSnapBottomLine(true)`. The new default is what
+  we want for a freshly-displayed document.
+- `docs/designs/features/spans-rendering.md`: update
+  §"Interaction with Bottom-Line Snap" to point here.
+
+### Slides — explicitly out of scope
+
+The original `snapBottomLine` was added for slide rendering. Slide
+display has had unintended side effects elsewhere; the user has
+asked to defer slide-specific behavior. Slides are not addressed by
+this design — `adjustLayoutForSlides` in `rich/frame.go:1597`
+continues to run as before. If slide rendering regresses with
+`SnapTop` as the new default, that's a separate fix.
+
+### Risks
+
+- **`originYOffset` clamping** in `layoutFromOrigin` (lines
+  1556-1568) may interact with `SnapPixel` for tall lines. The
+  clamp logic already produces a valid offset; verify it cooperates
+  with `SnapPixel` (no shift on top of the clamp).
+- The new default (`SnapTop`) means freshly-displayed styled
+  documents look top-aligned rather than bottom-aligned. Acceptable
+  per design review.
+
 ## ScrollModel interface
 
 ```go
