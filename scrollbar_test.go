@@ -150,12 +150,22 @@ func scrollbarTestHarness(t *testing.T) (*Scrollbar, *fakeScrollModel, draw.Disp
 	return s, model, display
 }
 
-func TestScrollbar_FirstDrawProducesOps(t *testing.T) {
+// expectedFirstDrawOps is the count of Draw operations recorded by
+// the mock display for a non-cache-hit scrollbar paint:
+//   1. Track fill on the scratch image.
+//   2. Thumb fill on the scratch image.
+//   3. 1px right edge on the scratch image (when localThumb width
+//      ≥ 1, which is always true for a non-degenerate scrollbar).
+//   4. Blit from scratch image to screen.
+const expectedFirstDrawOps = 4
+
+func TestScrollbar_FirstDrawProducesExpectedOpCount(t *testing.T) {
 	s, _, display := scrollbarTestHarness(t)
 	display.(edwoodtest.GettableDrawOps).Clear()
 	s.Draw()
-	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got == 0 {
-		t.Error("first Draw produced no ops")
+	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got != expectedFirstDrawOps {
+		t.Errorf("first Draw recorded %d ops; want %d (track + thumb + edge + blit)",
+			got, expectedFirstDrawOps)
 	}
 }
 
@@ -175,8 +185,9 @@ func TestScrollbar_DrawAfterModelChangeRepaints(t *testing.T) {
 	display.(edwoodtest.GettableDrawOps).Clear()
 	model.originPx = 600 // changes thumb rect
 	s.Draw()
-	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got == 0 {
-		t.Error("Draw after model change produced no ops; want repaint")
+	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got != expectedFirstDrawOps {
+		t.Errorf("Draw after model change recorded %d ops; want %d (full repaint)",
+			got, expectedFirstDrawOps)
 	}
 }
 
@@ -230,11 +241,15 @@ func (m *recordingScrollModel) JumpToFraction(f float64) {
 }
 
 func TestScrollbar_DispatchB1CallsDragTopToPixel(t *testing.T) {
+	// Use 37/100 (asymmetric, non-fractional) so any off-by-track-
+	// height or off-by-mid-track error would produce an unambiguous
+	// wrong value (137 or 63), not coincidentally match.
 	model := &recordingScrollModel{}
 	s := &Scrollbar{model: model}
-	s.dispatch(1, 50, 100)
-	if len(model.dragTopCalls) != 1 || model.dragTopCalls[0] != 50 {
-		t.Errorf("dragTopCalls=%v, want [50]", model.dragTopCalls)
+	s.dispatch(1, 37, 100)
+	s.dispatch(1, 88, 200)
+	if got := model.dragTopCalls; len(got) != 2 || got[0] != 37 || got[1] != 88 {
+		t.Errorf("dragTopCalls=%v, want [37 88]", got)
 	}
 	if len(model.dragToTopCalls) != 0 || len(model.jumpFractCalls) != 0 {
 		t.Errorf("B1 should not call B2/B3 paths")
@@ -244,9 +259,10 @@ func TestScrollbar_DispatchB1CallsDragTopToPixel(t *testing.T) {
 func TestScrollbar_DispatchB3CallsDragPixelToTop(t *testing.T) {
 	model := &recordingScrollModel{}
 	s := &Scrollbar{model: model}
-	s.dispatch(3, 75, 100)
-	if len(model.dragToTopCalls) != 1 || model.dragToTopCalls[0] != 75 {
-		t.Errorf("dragToTopCalls=%v, want [75]", model.dragToTopCalls)
+	s.dispatch(3, 73, 100)
+	s.dispatch(3, 17, 50)
+	if got := model.dragToTopCalls; len(got) != 2 || got[0] != 73 || got[1] != 17 {
+		t.Errorf("dragToTopCalls=%v, want [73 17]", got)
 	}
 	if len(model.dragTopCalls) != 0 || len(model.jumpFractCalls) != 0 {
 		t.Errorf("B3 should not call B1/B2 paths")
@@ -257,11 +273,9 @@ func TestScrollbar_DispatchB2CallsJumpToFraction(t *testing.T) {
 	model := &recordingScrollModel{}
 	s := &Scrollbar{model: model}
 	s.dispatch(2, 25, 100) // 25% down the track
-	if len(model.jumpFractCalls) != 1 {
-		t.Fatalf("jumpFractCalls=%v, want one entry", model.jumpFractCalls)
-	}
-	if got := model.jumpFractCalls[0]; got != 0.25 {
-		t.Errorf("fraction=%v, want 0.25", got)
+	s.dispatch(2, 33, 99)  // exactly 1/3
+	if got := model.jumpFractCalls; len(got) != 2 || got[0] != 0.25 || got[1] != 1.0/3 {
+		t.Errorf("jumpFractCalls=%v, want [0.25 0.333...]", got)
 	}
 }
 
