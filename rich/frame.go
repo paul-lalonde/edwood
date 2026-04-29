@@ -934,13 +934,11 @@ func (f *frameImpl) LinePixelYs() []int {
 	if f.font == nil || f.content == nil {
 		return nil
 	}
-	base := f.ensureBaseLayout()
-	if len(base) == 0 {
+	lines := f.ensureBaseLayout()
+	if len(lines) == 0 {
 		return nil
 	}
-
-	// Clone because adjustLayoutForScrollbars mutates Y.
-	lines := cloneLines(base)
+	// ensureBaseLayout returns a fresh clone we may mutate.
 	frameWidth := f.rect.Dx()
 	scrollbarHeight := f.hscrollHeight // matches layoutFromOrigin
 	regions := findBlockRegions(lines)
@@ -1069,13 +1067,11 @@ func (f *frameImpl) TotalDocumentHeight() int {
 	if f.font == nil || f.content == nil {
 		return 0
 	}
-	base := f.ensureBaseLayout()
-	if len(base) == 0 {
+	lines := f.ensureBaseLayout()
+	if len(lines) == 0 {
 		return 0
 	}
-
-	// Clone because adjustLayoutForScrollbars/adjustLayoutForSlides mutate Y.
-	lines := cloneLines(base)
+	// ensureBaseLayout returns a fresh clone we may mutate.
 	frameWidth := f.rect.Dx()
 
 	// Apply the same scrollbar adjustments that layoutFromOrigin uses,
@@ -1670,34 +1666,29 @@ func (f *frameImpl) drawBlockquoteBorders(target edwooddraw.Image, line Line, of
 // first visible content starts at Y=0.
 // Returns the lines and the rune offset of the first visible content.
 func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
-	base := f.ensureBaseLayout()
-	if len(base) == 0 {
+	// ensureBaseLayout returns a fresh clone, so we may mutate Y
+	// freely without affecting the cache. Only one of the two
+	// branches below executes per call, so the single clone suffices.
+	allLines := f.ensureBaseLayout()
+	if len(allLines) == 0 {
 		return nil, 0
 	}
 
 	frameWidth := f.rect.Dx()
 
 	// If origin is 0 and no pixel offset, just return the normal layout.
-	// Clone because scrollbar/slide adjustments mutate Y.
 	if f.origin == 0 && f.originYOffset == 0 {
-		lines := cloneLines(base)
-		regions := findBlockRegions(lines)
+		regions := findBlockRegions(allLines)
 		f.syncHScrollState(len(regions))
 		f.hscrollRegionOffset = 0
 		// Apply scrollbar height adjustments so all callers get correct Y.
 		scrollbarHeight := f.hscrollHeight
-		adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
+		adjustLayoutForScrollbars(allLines, regions, frameWidth, scrollbarHeight)
 		// Apply slide fill adjustments.
-		slideRegions := findSlideRegions(lines)
-		adjustLayoutForSlides(lines, slideRegions, f.rect.Dy())
-		f.applyScrollSnap(lines, 0, lines)
-		return lines, 0
-	}
-
-	// Clone because scrollbar adjustments mutate Y.
-	allLines := cloneLines(base)
-	if len(allLines) == 0 {
-		return nil, 0
+		slideRegions := findSlideRegions(allLines)
+		adjustLayoutForSlides(allLines, slideRegions, f.rect.Dy())
+		f.applyScrollSnap(allLines, 0, allLines)
+		return allLines, 0
 	}
 
 	// Sync horizontal scroll state and apply scrollbar height adjustments
@@ -2610,14 +2601,23 @@ func (f *frameImpl) layoutBoxes(boxes []Box, frameWidth, maxtab int) []Line {
 	return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 }
 
-// ensureBaseLayout returns the base layout lines (before any scrollbar/slide Y
-// adjustments), using a cache when content and frame width are unchanged.
-// Callers that mutate the returned lines (e.g. adjustLayoutForScrollbars)
-// must clone the slice first via cloneLines.
+// ensureBaseLayout returns the base layout lines (before any
+// scrollbar / slide Y adjustments). The returned slice is ALWAYS a
+// fresh clone — callers may mutate Line.Y / Height / ContentWidth
+// without disturbing the cache. The expensive line-breaking
+// computation is still cached internally and reused when content and
+// frame width are unchanged; only the surface slice is freshly
+// allocated. Tests that need to verify cache reuse should read
+// f.cachedBaseLines directly.
+//
+// This replaces an earlier "cooperative" contract where callers had
+// to remember to call cloneLines themselves before any mutation.
+// That contract was enforced only by code review and a future edit
+// that forgot the clone would silently corrupt the cache.
 func (f *frameImpl) ensureBaseLayout() []Line {
 	frameWidth := f.rect.Dx()
 	if !f.layoutDirty && f.cachedBaseLines != nil && f.cachedWidth == frameWidth {
-		return f.cachedBaseLines
+		return cloneLines(f.cachedBaseLines)
 	}
 	boxes := contentToBoxes(f.content)
 	if len(boxes) == 0 {
@@ -2630,12 +2630,23 @@ func (f *frameImpl) ensureBaseLayout() []Line {
 	f.cachedBaseLines = f.layoutBoxes(boxes, frameWidth, maxtab)
 	f.cachedWidth = frameWidth
 	f.layoutDirty = false
-	return f.cachedBaseLines
+	return cloneLines(f.cachedBaseLines)
 }
 
-// cloneLines returns a shallow copy of the Line slice. This is sufficient
-// because adjustLayoutForScrollbars/adjustLayoutForSlides only modify Y
-// values on the Line structs, not the PositionedBox slices within them.
+// cloneLines returns a shallow copy of the Line slice. The shallow
+// copy is sufficient because the *consumers* of base layout
+// (adjustLayoutForScrollbars, adjustLayoutForSlides) only mutate the
+// Y / Height / ContentWidth fields on each Line — not the
+// PositionedBox slices, not anything reachable through them.
+//
+// IMMUTABILITY NOTE: this function's correctness depends on
+// PositionedBox and Box being treated as immutable once layout
+// emits them. If a future change adds a mutator on PositionedBox.X
+// (e.g. baking horizontal-scroll offset into layout time instead of
+// applying it at paint time), or any Box field, this clone is no
+// longer sufficient and all base-layout consumers will silently
+// share state. Update both this comment and the clone strategy
+// together if that boundary moves.
 func cloneLines(lines []Line) []Line {
 	clone := make([]Line, len(lines))
 	copy(clone, lines)
