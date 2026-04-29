@@ -253,8 +253,19 @@ The downscale guard from `scrl.go:37-41` (right-shift by 10 when
 `totalPx > 1<<20`) is preserved to avoid integer overflow on
 multi-megabyte documents.
 
-Dirty-cache check: if the new thumb rectangle equals `lastSR`, skip
-the blit. This matches `scrl.go:89-98`.
+**Intentional deviation from legacy thumb math.** The minimum
+thumb-height clamp (`clampThumbHeight`) uses `MinThumbHeightPx = 10`
+where `scrl.go:48-53` used the literal `2`. As a consequence, in
+the corner case where the legacy thumb just barely fits in the
+remaining track (`q.Max.Y + 2 ≤ r.Max.Y`) but the new minimum
+does not (`q.Max.Y + 10 > track.Max.Y`), the new code pins the
+thumb to the bottom edge while the legacy would extend it down by
+2 pixels. This is deliberate — the 10 px floor is the design's
+fix for sub-grabbable thumbs on hi-DPI displays. Otherwise the
+math is bit-for-bit equivalent to `scrpos`.
+
+Dirty-cache check: if the new thumb rectangle equals
+`lastDrawnThumb`, skip the blit. This matches `scrl.go:89-98`.
 
 ### Mouse latch
 
@@ -358,9 +369,16 @@ hoist into a subpackage once the API is stable.
   but this is deferred to a follow-up. The H-scrollbar's
   per-block-region indexing model (see
   `docs/horizontal-scrollbar-design.md`) makes this a non-trivial
-  separate effort. The unified V-scrollbar's `Scrollbar` widget
-  should be axis-agnostic *internally* so a future H-scrollbar
-  variant is small.
+  separate effort.
+  - **The V-scrollbar widget is not internally axis-agnostic.**
+    The Phase 1 implementation bakes vertical assumptions into
+    `clampMouseY`, `warpToCenter` (centerX/my split),
+    `computeThumbRect`, `clampThumbHeight`, and `dispatch`'s
+    pixel-Y semantics. An H-scrollbar variant would either share
+    code via per-axis adapters or require a non-trivial
+    parameterization pass. Treat the H-scrollbar follow-up as a
+    cleanup phase that revisits this trade-off; do not assume a
+    drop-in axis swap.
 - **Scroll wheel.** `RichText.ScrollWheel` (`richtext.go:719`) and
   text mode's wheel handling continue to operate independently of
   the latch widget. They call into the same `ScrollModel` adapters,
