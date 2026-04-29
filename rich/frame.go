@@ -201,6 +201,14 @@ type frameImpl struct {
 	layoutDirty     bool   // true when cache needs recomputation
 	cachedWidth     int    // frame width used for cached layout
 
+	// Horizontal scrollbar height in pixels. Defaults to
+	// DefaultHScrollHeight at NewFrame time; RichText.Init overrides
+	// via WithHScrollHeight so main's Scrollwid is the single source
+	// of truth in production. Used wherever per-block-region
+	// scrollbar geometry is computed (layoutFromOrigin, drawTextTo,
+	// HScrollBarAt, etc.).
+	hscrollHeight int
+
 	// Color image cache. Plan 9 image handles are scarce server-side
 	// resources, not just memory; allocColorImage was previously
 	// hitting display.AllocImage on every call (per styled span, per
@@ -223,8 +231,18 @@ func (f *frameImpl) maxtabPixels() int {
 }
 
 // NewFrame creates a new Frame.
+// DefaultHScrollHeight is the rich package's standalone fallback for
+// the horizontal scrollbar height in pixels. It exists so the rich
+// package can be tested in isolation without depending on the main
+// package; production code (RichText.Init) overrides this via
+// WithHScrollHeight, passing main's Scrollwid through. Match the value
+// to main.Scrollwid (currently 12) until the option is wired through.
+const DefaultHScrollHeight = 12
+
 func NewFrame() Frame {
-	return &frameImpl{}
+	return &frameImpl{
+		hscrollHeight: DefaultHScrollHeight,
+	}
 }
 
 // Init initializes the frame with the given rectangle and options.
@@ -614,6 +632,17 @@ func isExpandWordChar(r rune) bool {
 // initial mouse-down event. It tracks the mouse drag and returns the
 // selection range (p0, p1) where p0 <= p1. The frame's internal
 // selection state is also updated.
+//
+// Teardown contract: this method blocks on `<-mc.C` until a mouse
+// event arrives with all buttons released. There is no context,
+// timeout, or display-close signal — the caller MUST guarantee that
+// `mc.C` continues to deliver events for the lifetime of the call,
+// including in error/teardown paths. If the display is destroyed
+// while a Select is in flight (e.g. window torn down mid-drag) the
+// goroutine will block on the channel read forever. This matches the
+// acme/Plan 9 idiom: window teardown waits for the active drag to
+// release before reaching the destruction code path. Same constraint
+// applies to SelectWithChord and the *WithColor variants below.
 func (f *frameImpl) Select(mc *draw.Mousectl, m *draw.Mouse) (p0, p1 int) {
 	// Get the initial position from the mouse-down event
 	anchor := f.Charofpt(m.Point)
@@ -656,6 +685,9 @@ func (f *frameImpl) Select(mc *draw.Mousectl, m *draw.Mouse) (p0, p1 int) {
 // but also detects when additional buttons (B2, B3) are pressed during
 // the drag. Returns the selection range and the button state at chord
 // time (0 if no chord was detected, i.e. only B1 was held).
+//
+// Same teardown contract as Select: callers must keep `mc.C`
+// delivering until all buttons release.
 func (f *frameImpl) SelectWithChord(mc *draw.Mousectl, m *draw.Mouse) (p0, p1 int, chordButtons int) {
 	anchor := f.Charofpt(m.Point)
 	current := anchor
@@ -870,7 +902,7 @@ func (f *frameImpl) LinePixelYs() []int {
 	// Clone because adjustLayoutForScrollbars mutates Y.
 	lines := cloneLines(base)
 	frameWidth := f.rect.Dx()
-	scrollbarHeight := 12 // Scrollwid; matches layoutFromOrigin
+	scrollbarHeight := f.hscrollHeight // matches layoutFromOrigin
 	regions := findBlockRegions(lines)
 	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
 
@@ -1008,7 +1040,7 @@ func (f *frameImpl) TotalDocumentHeight() int {
 
 	// Apply the same scrollbar adjustments that layoutFromOrigin uses,
 	// so the total height accounts for horizontal scrollbar space.
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 	regions := findBlockRegions(lines)
 	adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
 
@@ -1127,7 +1159,7 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	// so we use the read-only computeScrollbarMetadata rather than
 	// adjustLayoutForScrollbars which would double-adjust Y.
 	regions := findBlockRegions(lines)
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 	adjustedRegions := computeScrollbarMetadata(lines, regions, frameWidth, scrollbarHeight)
 
 	// Cache the adjusted regions for hit-testing (HScrollBarAt).
@@ -1569,7 +1601,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 		f.syncHScrollState(len(regions))
 		f.hscrollRegionOffset = 0
 		// Apply scrollbar height adjustments so all callers get correct Y.
-		scrollbarHeight := 12 // Scrollwid
+		scrollbarHeight := f.hscrollHeight
 		adjustLayoutForScrollbars(lines, regions, frameWidth, scrollbarHeight)
 		// Apply slide fill adjustments.
 		slideRegions := findSlideRegions(lines)
@@ -1589,7 +1621,7 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	// for scrollbar heights of blocks above the viewport.
 	regions := findBlockRegions(allLines)
 	f.syncHScrollState(len(regions))
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 	adjustLayoutForScrollbars(allLines, regions, frameWidth, scrollbarHeight)
 
 	// Find which line contains the origin position.
@@ -2169,7 +2201,7 @@ func (f *frameImpl) GetHScrollOrigin(regionIndex int) int {
 // scrollbar rectangle. Returns the region index and true if hit, or (0, false)
 // if the point is not on a scrollbar.
 func (f *frameImpl) HScrollBarAt(pt image.Point) (regionIndex int, ok bool) {
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 	frameWidth := f.rect.Dx()
 
 	// Convert screen point to frame-relative coordinates
@@ -2193,7 +2225,7 @@ func (f *frameImpl) HScrollBarAt(pt image.Point) (regionIndex int, ok bool) {
 // scrollbar for the given block region. Returns the zero rectangle if the
 // region index is out of range or the region has no scrollbar.
 func (f *frameImpl) HScrollBarRect(regionIndex int) image.Rectangle {
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 	if regionIndex < 0 || regionIndex >= len(f.hscrollRegions) {
 		return image.Rectangle{}
 	}
@@ -2305,7 +2337,7 @@ func (f *frameImpl) PointInBlockRegion(pt image.Point) (regionIndex int, ok bool
 		// Block region spans [LeftIndent, frameWidth) x [RegionTopY, ScrollbarY + scrollbarHeight).
 		// The scrollbar is at the bottom; include it in the region.
 		// The gutter to the left of LeftIndent is excluded so vertical swipes pass through.
-		scrollbarHeight := 12 // Scrollwid
+		scrollbarHeight := f.hscrollHeight
 		if relX >= ar.LeftIndent && relX < frameWidth &&
 			relY >= ar.RegionTopY && relY < ar.ScrollbarY+scrollbarHeight {
 			return i, true
@@ -2358,7 +2390,7 @@ var HScrollThumbColor = color.RGBA{R: 255, G: 255, B: 170, A: 255} // pale yello
 // the visible fraction of content, with a minimum of 10 pixels.
 // Thumb position is proportional to hscrollOrigin for that region.
 func (f *frameImpl) drawHScrollbarsTo(target edwooddraw.Image, offset image.Point, lines []Line, adjustedRegions []AdjustedBlockRegion, frameWidth int) {
-	scrollbarHeight := 12 // Scrollwid
+	scrollbarHeight := f.hscrollHeight
 
 	for i, ar := range adjustedRegions {
 		if !ar.HasScrollbar {

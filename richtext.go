@@ -86,6 +86,12 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	frameOpts := []rich.Option{
 		rich.WithDisplay(display),
 		rich.WithFont(font),
+		// Pass main's Scrollwid through so rich's per-block-region
+		// scrollbar geometry agrees with main's vertical scrollbar
+		// width. Without this, rich falls back to its own
+		// DefaultHScrollHeight constant, which is set to 12 to
+		// match Scrollwid but is not compile-time linked to it.
+		rich.WithHScrollHeight(Scrollwid),
 	}
 	if rt.background != nil {
 		frameOpts = append(frameOpts, rich.WithBackground(rt.background))
