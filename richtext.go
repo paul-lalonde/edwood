@@ -54,6 +54,13 @@ type RichText struct {
 
 	// Shift content up so last visible line is fully visible
 	defaultScrollSnap rich.ScrollSnap // forwarded to frame on Init
+
+	// scrollbar is the shared Scrollbar widget that owns drawing,
+	// dirty caching, and the click-and-hold latch loop. Constructed
+	// in Init once the bg/thumb colors have been resolved from
+	// options. Driven by a richScrollModel adapter (see
+	// richtext_scroll.go).
+	scrollbar *Scrollbar
 }
 
 // NewRichText creates a new RichText component.
@@ -125,6 +132,14 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 
 	// Initialize frame with empty rectangle - will be set on first Render() call
 	rt.frame.Init(image.Rectangle{}, frameOpts...)
+
+	// Construct the shared Scrollbar widget driven by the rich-text
+	// adapter. SetRect is called by Render() each time the scroll
+	// rectangle is recomputed; the widget's own dirty-cache
+	// invalidates on rect change.
+	if rt.scrollBg != nil && rt.scrollThumb != nil {
+		rt.scrollbar = NewScrollbar(display, &richScrollModel{rt: rt}, rt.scrollBg, rt.scrollThumb)
+	}
 }
 
 // All returns the full rectangle area of the RichText component.
@@ -209,7 +224,9 @@ func (rt *RichText) GetOriginYOffset() int {
 // Redraw redraws the RichText component using the last rendered rectangle.
 func (rt *RichText) Redraw() {
 	// Draw scrollbar first (behind frame)
-	rt.scrDraw()
+	if rt.scrollbar != nil {
+		rt.scrollbar.Draw()
+	}
 
 	// Draw the frame content
 	if rt.frame != nil {
@@ -258,8 +275,15 @@ func (rt *RichText) Render(r image.Rectangle) {
 		rt.frame.SetRect(frameRect)
 	}
 
-	// Draw scrollbar
-	rt.scrDraw()
+	// Draw scrollbar via the shared widget. The widget's SetRect is
+	// the canonical way to invalidate its dirty cache, defending
+	// against the rare path where Render is called after a frame
+	// redraw that clobbered the scrollbar pixels (the same contract
+	// that text mode relies on — see scrollbar.go SetRect godoc).
+	if rt.scrollbar != nil {
+		rt.scrollbar.SetRect(rt.lastScrollRect)
+		rt.scrollbar.Draw()
+	}
 
 	// Fill the gap with the frame background color
 	if rt.display != nil && rt.background != nil {

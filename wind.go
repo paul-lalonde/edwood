@@ -1033,7 +1033,18 @@ func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			button = 3
 		}
 		if button != 0 && mc != nil {
-			w.previewVScrollLatch(rt, mc, button, scrRect)
+			if rt.scrollbar != nil {
+				rt.scrollbar.HandleClick(button)
+				w.Draw()
+				if w.display != nil {
+					w.display.Flush()
+				}
+			} else {
+				// Fallback path: should not happen in practice
+				// because Init constructs scrollbar whenever bg/thumb
+				// colors are configured.
+				w.previewVScrollLatch(rt, mc, button, scrRect)
+			}
 			return true
 		}
 	}
@@ -2777,7 +2788,18 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			button = 3
 		}
 		if button != 0 && mc != nil {
-			w.previewVScrollLatch(rt, mc, button, scrRect)
+			if rt.scrollbar != nil {
+				rt.scrollbar.HandleClick(button)
+				w.Draw()
+				if w.display != nil {
+					w.display.Flush()
+				}
+			} else {
+				// Fallback path: should not happen in practice
+				// because Init constructs scrollbar whenever bg/thumb
+				// colors are configured.
+				w.previewVScrollLatch(rt, mc, button, scrRect)
+			}
 			return true
 		}
 	}
