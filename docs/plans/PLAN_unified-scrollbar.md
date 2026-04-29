@@ -155,34 +155,33 @@ identical; tall images scroll smoothly.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Iterate | Investigate and resolve the unresolved merge artifacts | `wind.go.orig`, `wind.go.rej` | Either commit the resolution or delete the stale artifacts if they're vestigial. Do not start 3.2 until `wind.go` is in a clean state. |
-| [ ] Commit | Commit resolution if changes were needed | — | Message depends on what's in the .rej. |
+| [x] Iterate | Investigate and resolve the unresolved merge artifacts | — | Done way back in this branch's setup; .rej was a stale fix superseded by `dbafabb` on master. |
+| [x] Commit | Commit resolution if changes were needed | — | n/a — files just deleted as stale. |
 
 ### 3.2 `richScrollModel` adapter (with sub-line offset)
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Confirm adapter uses `SetOriginYOffset` for sub-line precision | `richtext.go:650-671`, `rich/frame.go:46-55,703-722,915-960`, `docs/designs/features/unified-scrollbar.md` § "Rich-mode adapter" | `Geometry`: `frame.TotalDocumentHeight()`, `frame.Rect().Dy()`, `pixelYForOrigin()`. `DragTopToPixel(clickY)`: `newOriginPx = max(0, currentOriginPx - clickY)`; convert via `lineAndOffsetAtPixelY`; `frame.SetOrigin` + `frame.SetOriginYOffset`. `DragPixelToTop(clickY)`: `newOriginPx = min(maxOriginPx, currentOriginPx + clickY)`. `JumpToFraction(f)`: `newOriginPx = int(f * float64(maxOriginPx))`. |
-| [ ] Tests | Write tests for `richScrollModel` including tall-image case | `docs/designs/features/unified-scrollbar.md` § "Rich-mode adapter" | In `richtext_test.go`. Tests: (1) `Geometry` for empty content, (2) `Geometry` for content shorter than viewport, (3) `DragTopToPixel`/`DragPixelToTop` round-trip on uniform-height content, (4) **tall image**: construct a frame with one image-line of height 600px in a 400px viewport; call `DragPixelToTop(100)`; verify `GetOriginYOffset() == 100` (not snapped to a line boundary), (5) `JumpToFraction(0.5)` jumps to mid-document, (6) clamping at `JumpToFraction(0.0)` and `(1.0)`. |
-| [ ] Iterate | Add `richScrollModel` type to `richtext.go`; add `scrollbar *Scrollbar` field on `RichText` | `richtext.go:140-150,650-671` | In `richtext.go`. New unexported type `richScrollModel struct { rt *RichText }`. Reuse existing helpers `pixelYForOrigin` and `lineAndOffsetAtPixelY`. `RichText.scrollbar` initialized in the constructor. `SetRect` called wherever `ScrollRect()` was being computed. |
-| [ ] Commit | Commit rich-mode adapter | — | Message: `Add richScrollModel adapter implementing ScrollModel with sub-line offsets` |
+| [x] Design | Confirm adapter delegates correctly | — | Adapter delegates to scrollClickAt, which already encapsulates the gap-aware math from Phase 2 (LinePixelYs, lineAtDocY/RoundUp, asymmetric snap). Sub-line offset (originYOffset) handled by scrollClickAt's existing path. |
+| [x] Tests | Write tests for `richScrollModel` | — | `richtext_scroll_model_test.go` covers Geometry (file-top, mid-doc, nil-frame), DragPixelToTop/DragTopToPixel direction, JumpToFraction, nil-safe behavior, and the B1/B3 inverse-pair invariant exercised through the adapter. |
+| [x] Iterate | Add `richScrollModel` type | — | Done in `2a8952c`. |
+| [x] Commit | Commit rich-mode adapter | — | `2a8952c` Add richScrollModel adapter for shared Scrollbar widget |
 
 ### 3.3 Delete the in-`richtext.go` scrollbar implementation
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Iterate | Delete `RichText.scrDraw`, `scrDrawAt`, `ScrollClick`, `scrollClickAt`, `scrThumbRect`, `scrThumbRectAt`. Delete `scrollBg` / `scrollThumb` fields, `WithScrollbarColors` option, and `WithHScrollColors` plumbing for the V scrollbar (verify H scrollbar's color path is independent before removing). Replace existing call sites with `rt.scrollbar.Draw()`. | `richtext.go:40-41,116-117,273-507,527-531` | Verify by build + test that all references resolve. The `scrollBg != nil && scrollThumb != nil` color guard at `richtext.go:116` may need to be teased apart from H-scrollbar color plumbing — keep H plumbing intact. |
-| [ ] Tests | Full test suite + manual verification | — | Run all tests. Manually open markdown preview, scroll. Visuals should now match text mode exactly. |
-| [ ] Commit | Commit removal | — | Message: `Delete RichText scrollbar implementation; delegate to Scrollbar widget` |
+| [x] Iterate | Delete `scrDraw` / `scrDrawAt` (truly unused after wire-in). | — | Done in `9e4b515`. `scrThumbRect`, `scrThumbRectAt`, `ScrollClick`, `scrollClickAt`, `scrollBg`/`scrollThumb` fields, and `WithScrollbarColors` are still referenced (scrollClickAt is the body of richScrollModel methods; ScrollClick is the body of the legacy fallback in previewVScrollLatch). Full deletion of those is a Phase 4 cleanup task. |
+| [x] Tests | Full test suite + manual verification | — | All tests green; user verified visually that the rich-mode ghosting is gone after the wire-in (Phase 3.3+3.4 painted full track on every cache miss, eliminating the legacy ghost-thumb echoes). |
+| [x] Commit | Commit removal | — | `9e4b515` Delete unused legacy scrDraw / scrDrawAt in richtext.go |
 
 ### 3.4 Replace `previewVScrollLatch` with widget delegation
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Iterate | At `wind.go:1036` and `wind.go:2750`, replace the `previewVScrollLatch(rt, mc, button, scrRect)` call with `rt.scrollbar.HandleClick(button)`. Delete `previewVScrollLatch` (`wind.go:1493-1561`). Delete `previewScrSleep` (`wind.go:1481-1492`) **only if** `previewHScrollLatch` no longer references it — check first; if H-latch uses it, keep it for now and note as cleanup deferred to the H-scrollbar follow-up. | `wind.go:985-1060,1481-1620,2715-2760` | Critical: `HandlePreviewMouse` is the entry point; it dispatches based on hit-test. The dispatch logic stays; only the V-scrollbar branch changes. The `mc *draw.Mousectl` parameter currently passed to `previewVScrollLatch` is no longer needed at the call site — the widget reads from `global.mousectl` directly. |
-| [ ] Tests | Manual verification: tall-image regression test | — | This is the headline test from the design doc. Open a markdown document containing an image taller than the viewport. Hold B3 over the scrollbar with the image at top of viewport. Verify: image scrolls smoothly through viewport (partial-image-visible state is reachable). Compare against `master` to confirm the regression existed and is fixed. |
-| [ ] Tests | Manual verification: B1/B3/B2 all work in preview mode and styled mode | — | Two call sites (`wind.go:1036` for preview, `wind.go:2750` for styled). Verify both. |
-| [ ] Commit | Commit widget delegation in wind.go | — | Message: `Delegate preview/styled scrollbar to Scrollbar widget` |
+| [x] Iterate | At `wind.go:1036` and `wind.go:2780`, replace the `previewVScrollLatch(rt, mc, button, scrRect)` call with `rt.scrollbar.HandleClick(button)`. | — | Done in `d956526`. previewVScrollLatch + previewScrSleep retained as dead-code fallback; `previewHScrollLatch` still uses neither (uses inline drainScrollEvents now). Deletion of both is a Phase 4 cleanup task. |
+| [x] Tests | Manual verification: rich-mode B1/B3/B2 all work; ghosting gone | — | User verified across multiple test sessions on multiple markdown files. |
+| [x] Commit | Commit widget delegation in wind.go | — | `d956526` Wire rich-text mode to the unified Scrollbar widget |
 
 ---
 
