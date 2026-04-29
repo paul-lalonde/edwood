@@ -118,14 +118,24 @@ func NewScrollbar(display draw.Display, model ScrollModel, track, thumb draw.Ima
 	}
 }
 
-// SetRect updates the scrollbar's on-screen rectangle. Idempotent:
-// passing the existing rect leaves the dirty cache intact so a
-// re-draw is a true cache hit. Passing a different rect invalidates
-// the cache so the next Draw definitely repaints.
+// SetRect updates the scrollbar's on-screen rectangle and ALWAYS
+// invalidates the dirty cache, even if the rect is unchanged.
+//
+// The "always invalidate" semantic is load-bearing. Callers reach for
+// SetRect when they know the screen pixels in the scrollbar area may
+// have been clobbered — most importantly when the body's frame
+// Redraw repaints an "enclosing" rectangle that intentionally extends
+// LEFT into the scrollbar area to reset its background. After such a
+// clobber, the widget's lastDrawnThumb cache is still consistent with
+// the *computed* thumb but stale with respect to the *screen pixels*,
+// and a naive cache hit would leave the scrollbar visually erased.
+// The legacy scrl.go encoded this contract by unconditionally
+// clearing t.lastsr in Text.Resize; this method is its replacement.
+//
+// Consequence for callers: do NOT call SetRect from per-paint
+// codepaths (e.g. Text.ScrDraw on every Insert). Geometry only
+// changes during Init and Resize; those are the right callers.
 func (s *Scrollbar) SetRect(r image.Rectangle) {
-	if r.Eq(s.rect) {
-		return
-	}
 	s.rect = r
 	s.lastDrawnThumb = image.Rectangle{}
 }

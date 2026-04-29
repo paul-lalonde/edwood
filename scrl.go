@@ -70,6 +70,12 @@ func ScrlResize(display draw.Display) {
 // implementation. Both guards must remain at the call site (not in
 // the widget) because the widget does not know which Text it is
 // attached to or whether the window is in preview mode.
+//
+// Note: ScrDraw does not call SetRect. Geometry changes flow through
+// Text.Init and Text.Resize, which call SetRect themselves and (per
+// the contract on SetRect) invalidate the widget's dirty cache so
+// any post-resize body Redraw that clobbers the scrollbar area is
+// repainted by the next Draw.
 func (t *Text) ScrDraw(nchars int) {
 	if t.w == nil || t != &t.w.body {
 		return
@@ -81,7 +87,6 @@ func (t *Text) ScrDraw(nchars int) {
 	if t.scrollbar == nil {
 		return
 	}
-	t.scrollbar.SetRect(t.scrollr)
 	t.scrollbar.Draw()
 }
 

@@ -208,16 +208,60 @@ func TestScrollbar_SetRectInvalidatesCache(t *testing.T) {
 	}
 }
 
-func TestScrollbar_SetRectWithSameRectIsIdempotent(t *testing.T) {
-	// Window resize handlers can call SetRect with the existing rect
-	// (e.g. during font cache hits). The cache must not be
-	// invalidated; otherwise we force an unnecessary repaint.
-	s, _, _ := scrollbarTestHarness(t)
+// TestScrollbar_SetRectAlwaysInvalidatesEvenWithSameRect is a
+// regression test for a subtle visual bug observed in Phase 2.2/2.3
+// of the unified-scrollbar refactor.
+//
+// Scenario: Text.Resize sets up the scrollbar geometry, then triggers
+// the body's frame Redraw. The frame's "enclosing" rect deliberately
+// extends LEFT into the scrollbar area to repaint its background —
+// erasing the scrollbar pixels. After Redraw, ScrDraw fires and
+// delegates to widget.Draw. If the model state hasn't changed, the
+// computed thumb still equals lastDrawnThumb, so a naive cache check
+// would skip the paint and leave the scrollbar visually erased.
+//
+// The bug only manifests when nothing else changes the model state
+// between the last "real" paint and the post-clobber ScrDraw — which
+// is exactly the case for an initial directory listing that fits the
+// viewport and stops mutating once load completes. The user's first
+// scroll click is what made the scrollbar reappear, because that
+// changed t.org and triggered a cache miss.
+//
+// The contract this test pins down: SetRect ALWAYS invalidates the
+// cache, even if the rect is unchanged. SetRect is the caller's
+// signal "the screen state in my rect may have been clobbered;
+// repaint from scratch on the next Draw." If a future rewrite
+// reintroduces a same-rect short-circuit (an obvious-looking
+// optimization), this test should fail.
+func TestScrollbar_SetRectAlwaysInvalidatesEvenWithSameRect(t *testing.T) {
+	s, _, display := scrollbarTestHarness(t)
+	s.Draw() // populate cache
+	cachedThumb := s.lastDrawnThumb
+	if cachedThumb.Empty() {
+		t.Fatal("expected lastDrawnThumb populated after Draw")
+	}
+
+	// Caller signals possible clobber by re-issuing SetRect with the
+	// existing rect. The cache must drop.
+	s.SetRect(s.rect)
+	if !s.lastDrawnThumb.Empty() {
+		t.Fatal("SetRect with identical rect must invalidate cache " +
+			"(callers use SetRect to signal screen-pixel clobber)")
+	}
+
+	// And the next Draw must actually repaint, not cache-hit, even
+	// though the computed thumb is identical to the previously-drawn
+	// one.
+	display.(edwoodtest.GettableDrawOps).Clear()
 	s.Draw()
-	cached := s.lastDrawnThumb
-	s.SetRect(s.rect) // identical rect
-	if !s.lastDrawnThumb.Eq(cached) {
-		t.Error("SetRect with identical rect must not invalidate cache")
+	if got := len(display.(edwoodtest.GettableDrawOps).DrawOps()); got != expectedFirstDrawOps {
+		t.Errorf("Draw after SetRect-with-same-rect recorded %d ops; want %d "+
+			"(cache must be considered stale after SetRect)",
+			got, expectedFirstDrawOps)
+	}
+	if !s.lastDrawnThumb.Eq(cachedThumb) {
+		t.Errorf("repainted thumb=%v differs from prior %v (model unchanged)",
+			s.lastDrawnThumb, cachedThumb)
 	}
 }
 
