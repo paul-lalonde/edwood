@@ -100,19 +100,29 @@ command-line interface, error reporting) and proves the round-trip.
 Each round picks one markdown feature `md2spans` can't yet handle,
 adds the protocol primitive(s) needed, implements rendering in the
 lean frame, and ships `md2spans` support. Rounds are independent
-and merge separately. Likely sequence (cheapest first):
+and merge separately. The first few rounds are flat (per-rune /
+per-line scope); rounds from blockquote onward are *region-shaped*
+(see "Nested layout: regions, not line decorations" below for the
+underlying constraint). Likely sequence (cheapest first):
 
-1. Font scale (headings).
-2. Font family selector (inline code, code blocks).
-3. Inline rule / horizontal rule.
-4. Line-level indent (lists, blockquotes).
-5. Line-level background (block code).
-6. Left-edge decoration (blockquote bars).
-7. Slide-break / viewport-snap marker.
-8. Inline replaced images via the existing box mechanism (already
-   reachable; just needs `md2spans` support).
-9. Tables (largest; needs column-width handshake or pre-computed
-   layout).
+1. Font scale (headings) — flat.
+2. Font family selector (inline code, code blocks) — flat.
+3. Inline rule / horizontal rule — flat (line-level).
+4. Slide-break / viewport-snap marker — flat (document-level).
+5. Inline replaced images via the existing box mechanism (already
+   reachable; just needs `md2spans` support) — flat.
+6. Block code — region (`begin region code` ... `end region`):
+   adds the simplest region primitive, with full-line background
+   as the only decoration. A useful test bed before blockquote.
+7. Blockquote — region (`begin region blockquote` ... `end
+   region`): nested, with indent + left-edge bar. Validates the
+   push/pop semantics.
+8. Lists — region per list item, with indent + bullet/number
+   prefix. Often nested inside blockquotes.
+9. Tables — region with cells; the largest round, requires the
+   layout-space-introspection mechanism (window dimensions
+   exposed via 9P) and either two-pass cell measurement or
+   externally-computed column widths.
 
 Each round closes the gap between `md2spans` capability and the
 in-tree wrapper's capability. The internal markdown path keeps
@@ -144,14 +154,20 @@ What `rich.Frame` understands in the end state:
 | Vertical scrolling | unchanged |
 | Horizontal block-region scrolling | unchanged (the mechanism stays; the markdown trigger doesn't) |
 
-Plus a small set of *line/region decorations* (Phase 3 additions):
+Plus a set of layout primitives (Phase 3 additions, mix of
+flat and region-shaped):
 
-| Decoration | Purpose |
-|---|---|
-| Per-line indent (pixels) | Lists, blockquotes |
-| Per-line background (color, width) | Block code, table rows |
-| Per-line left-edge bar (color, width) | Blockquote depth |
-| Document-level slide-break marker | Slide preview viewport snap |
+| Primitive | Shape | Purpose |
+|---|---|---|
+| Inline rule (line-spanning) | flat (per-line) | `<hr>` / `***` markers |
+| Document-level slide-break marker | flat (per-document) | Slide preview viewport snap |
+| `begin region` / `end region` (with kind + params) | region (push/pop stack) | Blockquote, code block, list item, table — anything with reduced content width and bounding-box semantics |
+| Frame-dimension introspection | external read | Tables that need to know available width for column layout |
+
+The line-level "indent / background / left-bar" primitives are
+*emitted by the renderer* as side effects of region parameters,
+not directly by the external tool. See "Nested layout: regions,
+not line decorations" below.
 
 What moves out of `rich.Frame` into `rich/mdrender` in Phase 1, and
 out of edwood entirely in Phase 4:
@@ -193,25 +209,136 @@ type StyleAttrs struct {
 
 To express the lean-frame contract above, the protocol needs:
 
-| Primitive | Today | Phase 3 round | New protocol surface |
-|---|---|---|---|
-| Foreground / background | yes | — | — |
-| Bold / italic | yes | — | — |
-| Font scale | no | 1 | `Scale float32` on StyleAttrs (or new prefix) |
-| Font family | no | 2 | `Family string` on StyleAttrs (`""`/`"code"`/...) |
-| Inline replaced box | yes | — | — |
-| Inline image | yes (via box payload `image:...`) | — | — |
-| Inline rule | no | 3 | New box payload kind (`rule:width:height`) or new prefix |
-| Per-line indent | no | 4 | New per-line directive: `i offset indent_pixels` |
-| Per-line background | no | 5 | New per-line directive: `lbg offset bg_color [right_edge_pixels]` |
-| Left-edge bar | no | 6 | New per-line directive: `bar offset color width` |
-| Slide-break | no | 7 | New document-level directive: `slide offset` |
-| Tables | no | 9 | Open question — see Risks |
+| Primitive | Today | Phase 3 round | Shape | New protocol surface |
+|---|---|---|---|---|
+| Foreground / background | yes | — | flat | — |
+| Bold / italic | yes | — | flat | — |
+| Font scale | no | 1 | flat | `Scale float32` on StyleAttrs (or new prefix) |
+| Font family | no | 2 | flat | `Family string` on StyleAttrs (`""`/`"code"`/...) |
+| Inline replaced box | yes | — | flat | — |
+| Inline image | yes (via box payload `image:...`) | — | flat | — |
+| Inline rule | no | 3 | flat | New box payload kind (`rule:width:height`) or new prefix |
+| Slide-break | no | 4 | flat | New document-level directive: `slide offset` |
+| Inline image (md2spans support) | yes | 5 | flat | tool work only |
+| Block code | no | 6 | **region** | `begin region code` ... `end region`; first region primitive |
+| Blockquote | no | 7 | **region (nested)** | `begin region blockquote indent=N` with left-bar param |
+| Lists | no | 8 | **region per item** | `begin region listitem indent=N marker=...` |
+| Tables | no | 9 | **region with cells** | `begin region table` + cell sub-regions; needs frame-dimension introspection |
+| Frame-dimension introspection | no | 9 (paired with tables) | external read | new 9P file e.g. `/mnt/acme/<winid>/dim` |
 
 The exact wire format for each is a Phase-3-round design problem,
-not this doc's. But the *quantity* of new directives is small —
-roughly five new prefix kinds plus two field additions to existing
-prefixes. The protocol stays line-oriented and readable.
+not this doc's. The region-shaped rounds (6-9) all share a common
+`begin region <kind>` / `end region` mechanism with kind-specific
+parameters; designing that mechanism is part of round 6 (the
+simplest region) and reused in subsequent rounds. See the next
+section for why those entries can't be expressed as flat
+per-line primitives.
+
+## Nested layout: regions, not line decorations
+
+Most of the markdown rendering primitives map cleanly onto flat,
+linear protocol additions: per-rune attributes (font scale, font
+family), per-line directives (horizontal rule, slide-break
+marker), or document-level markers. Bold, italic, color, code
+font, headings, hrules, slide breaks, inline images — all flat.
+
+Three features are NOT flat: **blockquote, code block, table**
+(and arguably nested lists). They share a property the flat
+primitives can't express:
+
+- Their **content has a reduced layout width** — a blockquote at
+  indent 20px wraps inside the remaining width, not the frame
+  width.
+- Their **bounding box matters** to outer concerns — scroll
+  handles, hyperlink hit-tests on the region, alignment of
+  outer content relative to the block's actual height.
+- They **nest** — a blockquote inside a blockquote, a code
+  block or table inside a blockquote.
+
+A "per-line indent" decoration can't express any of these
+correctly. The renderer needs layout state that pushes when the
+block begins and pops when it ends, and the external tool emits
+content sequentially without computing wrap itself.
+
+### Proposed shape: region operations
+
+The protocol gains region directives:
+
+```
+begin region <kind> [params...]    (e.g.  begin region blockquote indent=20)
+... spans, boxes, nested begins ...
+end region
+```
+
+`begin region` pushes a layout context onto a stack:
+
+- The renderer reduces the available content width by the
+  region's left-indent.
+- The renderer remembers the region's decoration spec (left-bar
+  color/width for blockquote, full-line background for code
+  block, cell layout for table).
+- Subsequent spans inside the region are laid out inside the
+  pushed context — wrap honors the reduced width, font scale
+  remains in effect from outer state, etc.
+
+`end region` pops:
+
+- The renderer records the region's bounding box (start_y,
+  end_y, left_x, right_x) for any consumer that needs it
+  (scroll handles, region-level hyperlinks, table-column
+  alignment).
+- Layout state returns to the outer context.
+
+Regions nest. Two depths of blockquote → two pushes → indent
+adds up. A code block inside a blockquote → outer push for
+blockquote's indent + bar, inner push for code block's
+background.
+
+The external tool emits region begin/end semantically (markdown
+syntax already groups by region: `>` runs, ` ``` ` fences, `|`
+table cells). It does NOT compute wrap or pixel positions — that
+remains the renderer's job, which is the renderer's strength.
+
+### Layout-space introspection
+
+For tables specifically, the external tool benefits from knowing
+the available width — to decide column proportions, or to drop
+columns entirely on narrow displays. Expose window/frame
+dimensions via a new 9P file (e.g.,
+`/mnt/acme/<winid>/dim` returning `<width> <height>` in pixels,
+or extending the existing `info` file). Read-only, cheap,
+optional. Tables that don't need it (e.g., tables where md2spans
+trusts the renderer's two-pass layout) ignore it.
+
+### Implications for the gap analysis table above
+
+The line-level entries for "Per-line indent", "Per-line
+background", and "Left-edge bar" in the gap analysis table are
+*placeholders*. The actual Phase 3 design for blockquote / code
+block / lists / tables will introduce region operations
+instead. A region's per-line side effects (indent, bar, bg) are
+emitted by the renderer based on the region's parameters, not
+by the external tool per line.
+
+The table is honest about being placeholder; the underlying
+work is "what region kinds, what params, what wire format" —
+deferred to per-round Phase 3 design docs starting with code
+block (round 6).
+
+### Implications for Phase 1
+
+Phase 1 does NOT design the region protocol. The wrapper at
+Phase 1 still consumes the existing `Style.Blockquote*`,
+`Style.Block`, `Style.Table*`, `Style.ListItem`, `Style.HRule`
+fields the same way the in-tree path does today — those fields
+drive `rich/layout.go`'s width / indent / wrap decisions
+unchanged. Phase 1's blockquote-bar painting (row 1.2) is just
+a paint move; the blockquote layout (indent + reduced width)
+already works because `layout.go` reads those Style fields.
+
+Region protocol design begins at Phase 3 round 6 (block code,
+the simplest region) and is refined at rounds 7-9 as the
+abstraction proves itself.
 
 ## `md2spans` v1 scope
 
@@ -323,25 +450,38 @@ disappears at Phase 4.
    the wrapper-side migration to use the protocol primitive, so
    the wrapper actively shrinks. If a round lands the protocol
    support but skips the wrapper migration, the cruft persists.
-2. **Tables don't fit the spans model cleanly.** Real table
+2. **Region protocol design.** Blockquote, code block, lists,
+   and tables all need region (push/pop) semantics — see "Nested
+   layout: regions, not line decorations". The region protocol
+   is designed at round 6 (block code, the simplest region) and
+   refined through rounds 7-9. If round 6's design proves
+   insufficient when round 7 (blockquote, with nesting) lands, we
+   either revise the protocol or accept that early round 6
+   consumers see a small breaking change. Mitigation: design
+   round 6 with nesting and parameter extensibility in mind from
+   day one even though block code itself doesn't nest. Open
+   question: how parameter passing works on `begin region`
+   (positional vs. key-value) — settle at round 6.
+3. **Tables don't fit the region model trivially.** Real table
    layout needs column-width measurement that depends on
-   rendering metrics edwood owns. Either `md2spans` pre-computes
-   widths (assuming it knows the font metrics; possible if edwood
-   exposes them via a 9P file), or the protocol needs a
-   table-region directive that does layout server-side. This is
-   the highest-risk Phase 3 round and may require its own design
-   doc.
-3. **Source map / link map.** The current preview tracks markdown
+   rendering metrics edwood owns. The region model handles cells
+   as nested regions, but column widths must be agreed between
+   `md2spans` and edwood. Either `md2spans` pre-computes widths
+   using the frame-dimension introspection file (assuming it has
+   font metrics or queries them), or edwood does a two-pass cell
+   measurement during table region close. This is the highest-
+   risk Phase 3 round and will need its own design doc.
+4. **Source map / link map.** The current preview tracks markdown
    source ↔ rendered-rune mapping for click-to-source navigation.
    `md2spans` will need to emit this mapping (probably to an
    adjacent file or via a new protocol directive). Design TBD;
    Phase 3 may need an extra round for this if Look navigation
    regresses.
-4. **External tool installation friction.** `md2spans` needs to be
+5. **External tool installation friction.** `md2spans` needs to be
    on the user's `$PATH` for preview to work post-Phase-4. The
    syntax-coloring story has this same constraint and it's
    accepted; markdown will follow the same pattern.
-5. **Round ordering.** The dependency graph between Phase 3 rounds
+6. **Round ordering.** The dependency graph between Phase 3 rounds
    isn't fully linear. Some rounds may unblock others (e.g., font
    scale is a prerequisite for proper heading rendering, which
    affects how lists-under-headings layout). Round ordering will
