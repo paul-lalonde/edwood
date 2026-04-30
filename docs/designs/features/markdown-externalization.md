@@ -19,17 +19,17 @@ markdown is no longer a special path.
 
 The internal markdown path has grown substantial cruft:
 
-- `rich.Style` carries 17 markdown-specific fields
+- `rich.Style` carries 16 markdown-specific fields
   (`Code`, `Block`, `Link`, `HRule`, `ParaBreak`, `ListItem`,
   `ListBullet`, `ListIndent`, `ListOrdered`, `ListNumber`, `Table`,
   `TableHeader`, `TableAlign`, `Blockquote`, `BlockquoteDepth`,
-  `SlideBreak`, plus image fields) on top of the universal
-  styling primitives. The styled-spans path uses none of them; only
-  the markdown preview path does.
+  plus image fields) on top of the universal styling primitives.
+  The styled-spans path uses none of them; only the markdown
+  preview path does. (`SlideBreak` is omitted from this list —
+  see the "Slides deprecated" note below.)
 - `rich.Frame.drawTextTo` has dedicated paint phases for blockquote
-  borders, horizontal rules, block backgrounds with markdown
-  semantics, and slide-break fills. Each phase is unreachable from
-  the spans protocol.
+  borders, horizontal rules, and block backgrounds with markdown
+  semantics. Each phase is unreachable from the spans protocol.
 - The `markdown/` package is non-trivial (parser, source map, link
   map, incremental preview), and every markdown feature added drops
   more state into `rich.Frame`. The architect review (April 2026)
@@ -64,7 +64,7 @@ Moving markdown handling external means:
 
 - `rich.Frame` understands styled spans, inline replaced boxes, and
   a small set of line/region decorations (indent, line background,
-  left-edge bar, slide-break). No markdown awareness.
+  left-edge bar). No markdown awareness.
 - The spans protocol can express everything the lean frame
   understands. External tools emit it; edwood renders it.
 - `markdown/` package and `rich.Style`'s markdown-specific fields
@@ -90,7 +90,7 @@ protocol. Its v1 capability is whatever the protocol can express
 today: paragraph text with bold/italic/colored runs, inline code
 (via `Code` styling once added), maybe inline links (via colored
 runs). It deliberately does NOT cover headings, lists, tables,
-blockquotes, block code, horizontal rules, images, or slides — those
+blockquotes, block code, horizontal rules, or images — those
 require protocol additions. Even with this restricted capability,
 `md2spans` is useful: simple markdown documents render through it
 end-to-end. It establishes the toolchain shape (invocation,
@@ -108,21 +108,23 @@ underlying constraint). Likely sequence (cheapest first):
 1. Font scale (headings) — flat.
 2. Font family selector (inline code, code blocks) — flat.
 3. Inline rule / horizontal rule — flat (line-level).
-4. Slide-break / viewport-snap marker — flat (document-level).
-5. Inline replaced images via the existing box mechanism (already
+4. Inline replaced images via the existing box mechanism (already
    reachable; just needs `md2spans` support) — flat.
-6. Block code — region (`begin region code` ... `end region`):
+5. Block code — region (`begin region code` ... `end region`):
    adds the simplest region primitive, with full-line background
    as the only decoration. A useful test bed before blockquote.
-7. Blockquote — region (`begin region blockquote` ... `end
+6. Blockquote — region (`begin region blockquote` ... `end
    region`): nested, with indent + left-edge bar. Validates the
    push/pop semantics.
-8. Lists — region per list item, with indent + bullet/number
+7. Lists — region per list item, with indent + bullet/number
    prefix. Often nested inside blockquotes.
-9. Tables — region with cells; the largest round, requires the
+8. Tables — region with cells; the largest round, requires the
    layout-space-introspection mechanism (window dimensions
    exposed via 9P) and either two-pass cell measurement or
    externally-computed column widths.
+
+(Slide-break / viewport-snap is deprecated — see "Slides
+deprecated" note below — and removed from this round list.)
 
 Each round closes the gap between `md2spans` capability and the
 in-tree wrapper's capability. The internal markdown path keeps
@@ -160,7 +162,6 @@ flat and region-shaped):
 | Primitive | Shape | Purpose |
 |---|---|---|
 | Inline rule (line-spanning) | flat (per-line) | `<hr>` / `***` markers |
-| Document-level slide-break marker | flat (per-document) | Slide preview viewport snap |
 | `begin region` / `end region` (with kind + params) | region (push/pop stack) | Blockquote, code block, list item, table — anything with reduced content width and bounding-box semantics |
 | Frame-dimension introspection | external read | Tables that need to know available width for column layout |
 
@@ -175,20 +176,23 @@ out of edwood entirely in Phase 4:
 - Markdown-specific style fields (`Code`, `Link`, `Block`, `HRule`,
   `ParaBreak`, `ListItem`, `ListBullet`, `ListIndent`,
   `ListOrdered`, `ListNumber`, `Table`, `TableHeader`,
-  `TableAlign`, `Blockquote`, `BlockquoteDepth`, `SlideBreak`).
-  Some collapse into the universal primitives above (`Code` →
-  font-family selector; `HRule` → inline rule decoration); the
-  rest stop existing.
+  `TableAlign`, `Blockquote`, `BlockquoteDepth`). Some collapse
+  into the universal primitives above (`Code` → font-family
+  selector; `HRule` → inline rule decoration); the rest stop
+  existing.
 - Paint phases that interpret those fields:
   `paintPhaseHorizontalRules`, `paintPhaseBlockquoteBorders`, the
   block-background branch in `paintPhaseBlockBackgrounds` (the
   *mechanism* stays; the markdown semantic in the trigger moves
   to the wrapper / external tool).
-- Slide-region detection (`findSlideRegions`,
-  `adjustLayoutForSlides`) — slide-break becomes a protocol-level
-  marker, not a markdown-content discovery.
 - The `markdown/` package itself, and the source-map / link-map /
   incremental-preview code paths.
+
+(Slide-break related code — `Style.SlideBreak`,
+`findSlideRegions`, `adjustLayoutForSlides`,
+`HasSlideBreakBetween`, `SnapOriginToSlideStart` — is being
+deprecated as a separate concern; see the "Slides deprecated"
+note below. It does not move out via this work.)
 
 ## Spans protocol gap analysis
 
@@ -218,13 +222,12 @@ To express the lean-frame contract above, the protocol needs:
 | Inline replaced box | yes | — | flat | — |
 | Inline image | yes (via box payload `image:...`) | — | flat | — |
 | Inline rule | no | 3 | flat | New box payload kind (`rule:width:height`) or new prefix |
-| Slide-break | no | 4 | flat | New document-level directive: `slide offset` |
-| Inline image (md2spans support) | yes | 5 | flat | tool work only |
-| Block code | no | 6 | **region** | `begin region code` ... `end region`; first region primitive |
-| Blockquote | no | 7 | **region (nested)** | `begin region blockquote indent=N` with left-bar param |
-| Lists | no | 8 | **region per item** | `begin region listitem indent=N marker=...` |
-| Tables | no | 9 | **region with cells** | `begin region table` + cell sub-regions; needs frame-dimension introspection |
-| Frame-dimension introspection | no | 9 (paired with tables) | external read | new 9P file e.g. `/mnt/acme/<winid>/dim` |
+| Inline image (md2spans support) | yes | 4 | flat | tool work only |
+| Block code | no | 5 | **region** | `begin region code` ... `end region`; first region primitive |
+| Blockquote | no | 6 | **region (nested)** | `begin region blockquote indent=N` with left-bar param |
+| Lists | no | 7 | **region per item** | `begin region listitem indent=N marker=...` |
+| Tables | no | 8 | **region with cells** | `begin region table` + cell sub-regions; needs frame-dimension introspection |
+| Frame-dimension introspection | no | 8 (paired with tables) | external read | new 9P file e.g. `/mnt/acme/<winid>/dim` |
 
 The exact wire format for each is a Phase-3-round design problem,
 not this doc's. The region-shaped rounds (6-9) all share a common
@@ -238,9 +241,9 @@ per-line primitives.
 
 Most of the markdown rendering primitives map cleanly onto flat,
 linear protocol additions: per-rune attributes (font scale, font
-family), per-line directives (horizontal rule, slide-break
-marker), or document-level markers. Bold, italic, color, code
-font, headings, hrules, slide breaks, inline images — all flat.
+family), per-line directives (horizontal rule), or document-level
+markers. Bold, italic, color, code font, headings, hrules,
+inline images — all flat.
 
 Three features are NOT flat: **blockquote, code block, table**
 (and arguably nested lists). They share a property the flat
@@ -365,14 +368,15 @@ What v1 explicitly does NOT do:
 - Headings (need protocol round 1).
 - Inline code, code blocks (need round 2).
 - Horizontal rules (need round 3).
-- Lists with proper indent / bullets (need round 4 + render of
-  bullet glyph).
+- Images (could work today via the box protocol; deferred to
+  round 4 to keep v1 scope tight).
 - Block code with backgrounds (need round 5).
 - Blockquotes with bars (need round 6).
-- Slides (need round 7).
-- Images (could work today via the box protocol; deferred to
-  round 8 to keep v1 scope tight).
-- Tables (round 9).
+- Lists with proper indent / bullets (need round 7 + render of
+  bullet glyph).
+- Tables (round 8).
+- Slides — out of scope (deprecated; see "Slides deprecated"
+  note above).
 
 The point of v1 is to establish the toolchain. A markdown file
 that's mostly paragraph text with emphasis and links should render
@@ -422,6 +426,35 @@ against the spans protocol. As Phase 3 rounds land, each markdown
 feature in the wrapper migrates to "ask `md2spans` to emit the
 protocol primitive instead". The wrapper shrinks each round and
 disappears at Phase 4.
+
+## Slides deprecated (April 2026 revision)
+
+The slide-rendering feature (slide-break detection that expands
+horizontal-rule pairs into viewport-snapped sections, plus the
+associated UI affordances) is being **deprecated** as a separate
+concern from this work. It will not be carried forward into the
+externalized model.
+
+Affected code: `Style.SlideBreak`, `findSlideRegions`,
+`adjustLayoutForSlides`, `applyScrollSnap`'s slide override case,
+`HasSlideBreakBetween`, `SnapOriginToSlideStart`, and tests
+covering slide behavior. None of this moves into `rich/mdrender`
+in Phase 1; none gets a Phase 3 protocol primitive; `md2spans`
+will not produce slide-break markers.
+
+Phase 1 leaves the slide code dormant in `rich/`. Active removal
+(deletion of the methods, the Style field, the markdown-side
+producer, and the UI affordances) is a separate work item with
+its own design conversation. Until that work happens, slide-break
+markers in markdown source render the same way they do today —
+the existing path is untouched.
+
+The deprecation removes:
+- What was Phase 1.4 (move slide-break handling to wrapper) from
+  the Phase 1 plan. See `docs/plans/PLAN_markdown-externalization.md`.
+- What was the slide-break round from the Phase 3 round list.
+- The slide-break entry from the gap analysis table and lean-frame
+  contract above.
 
 ## Non-goals
 

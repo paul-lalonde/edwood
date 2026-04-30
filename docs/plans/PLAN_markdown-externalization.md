@@ -29,13 +29,27 @@ still works; the path through the code is one indirection longer
 but the rendering is identical.
 
 **High-level files touched**:
-- `rich/frame.go` — paint phases for blockquote borders, horizontal
-  rules, slide-break fills move out. `Init` drops `rect` parameter.
+- `rich/frame.go` — paint phases for blockquote borders and
+  horizontal rules move out. `Init` drops `rect` parameter.
 - `rich/mdrender/` (NEW) — wrapper package owning the moved phases.
 - `richtext.go` — preview mode constructs and uses the wrapper.
   Geometry: `RichText` is the sole `SetRect` caller.
 - Tests under `rich/` and `rich/mdrender/` — shift to follow the
   paint phases.
+
+**Slides deprecated** (April 2026 revision): the slide-rendering
+feature (`Style.SlideBreak`, `findSlideRegions`,
+`adjustLayoutForSlides`, slide-fill paint, slide-related Frame
+methods) is being deprecated as a separate concern from this
+work. Phase 1 will NOT move slide-break handling into the wrapper;
+slide-break is dropped from the lean-frame contract; the
+slide-related Phase 3 round is removed. The slide code stays in
+`rich/` for now (dormant); its removal is a follow-up work item
+with its own design conversation. As a consequence, what was Phase
+1.4 (slide-break move) is dropped, and what was Phase 1.5 (route
+preview through wrapper) was already done in lockstep with Phase
+1.2 per the option-(a) decision — so the only Phase 1 row left
+after 1.3 is the geometry-ownership cleanup.
 
 ---
 
@@ -95,47 +109,31 @@ height) but the *drawing* of the rule is post-paint.
 | [ ] Iterate | Move `paintPhaseHorizontalRules` and `drawHorizontalRuleTo` to wrapper. Frame's `drawTextTo` orchestrator drops the call. | `rich/frame.go` HRule paths | — |
 | [ ] Commit | — | — | `Move horizontal-rule painting to rich/mdrender wrapper` |
 
-## Phase 1.4: Move slide-break handling to wrapper
+## Phase 1.4 — DROPPED: Move slide-break handling to wrapper
 
-`findSlideRegions` + `adjustLayoutForSlides` + the slide-fill
-draw logic. Slightly trickier than 1.2-1.3 because slide-region
-detection runs during *layout*, not paint — `adjustLayoutForSlides`
-mutates line Y values to expand slide regions. Need to either
-(a) keep slide layout adjustments in frame but driven by a
-wrapper-supplied callback / region list, or (b) move the
-layout adjustment too and have the wrapper own that piece of
-the pipeline. (a) is smaller. Decide at Design.
+Slides are being deprecated as a separate concern; this row is
+removed from the plan. The slide-rendering code (`Style.SlideBreak`,
+`findSlideRegions`, `adjustLayoutForSlides`, slide-fill paint,
+`HasSlideBreakBetween`, `SnapOriginToSlideStart`) stays in `rich/`
+for now (dormant). Its actual removal is a follow-up work item
+with its own design conversation.
 
-| Stage | Description | Read | Notes |
-|-------|-------------|------|-------|
-| [ ] Design | Pick (a) wrapper provides slide-region offsets to frame as data, or (b) wrapper owns post-layout adjustment. Read both paths' costs. | `rich/frame.go:findSlideRegions`, `adjustLayoutForSlides`, `paintPhaseGutterRepaint` | Likely (a): smaller, keeps frame's layout pipeline intact. Frame exposes `SetSlideRegions([]SlideRegion)`; wrapper sets it before `Redraw`. |
-| [ ] Tests | Tests for slide-break expansion behavior driven via wrapper | `docs/designs/features/manual-markdown-mode.md` slide sections | Existing slide tests in `rich/` need to migrate or stay if frame retains the SetSlideRegions API. |
-| [ ] Iterate | Move slide-break detection into wrapper. Frame retains a `SetSlideRegions` setter. `adjustLayoutForSlides` either stays (if option a) or moves (b). | — | — |
-| [ ] Commit | — | — | `Move slide-break detection to rich/mdrender wrapper` |
+## Phase 1.5 — SUBSUMED: Route RichText preview mode through the wrapper
 
-## Phase 1.5: Route RichText preview mode through the wrapper
+Done as part of Phase 1.2 in lockstep with the blockquote-paint
+move (option-(a) decision in `rich/mdrender/blockquote.design.md`).
+`RichText.Init` constructs the wrapper unconditionally;
+`RichText.Redraw` and `Render` route through it. No separate
+row needed; remaining concern (styled mode bypassing the wrapper
+for cleanliness) is optional polish, deferred.
 
-`RichText` currently constructs a `rich.Frame` directly. After
-this row, preview mode constructs a `rich.Frame` AND a
-`mdrender.Renderer` wrapping it; preview-mode `Redraw` calls
-the wrapper. Styled mode keeps using the lean `rich.Frame`
-directly (styled mode never used the moved paint phases anyway).
-This row is the load-bearing wiring change — after it, the
-internal markdown path goes through the wrapper end-to-end.
+## Phase 1.4: Finalize geometry ownership (P1-6 = D)
 
-| Stage | Description | Read | Notes |
-|-------|-------------|------|-------|
-| [ ] Design | Confirm styled-mode path doesn't call any of the moved paint phases | `wind.go:initStyledMode`, `wind.go:HandleStyledMouse`, `richtext.go:Redraw` | Styled mode uses Fg/Bg/Bold/Italic only; no blockquote/HRule/slide. Safe to bypass wrapper. |
-| [ ] Tests | End-to-end test: preview mode renders blockquote/HRule/slide content correctly via wrapper | — | Use existing markdown test fixtures. |
-| [ ] Iterate | `RichText.Init` constructs `mdrender.Renderer` for preview mode. `RichText.Redraw` delegates to wrapper or frame depending on mode. | `richtext.go`, `wind.go:initPreviewMode` | Mode flag may live on RichText or be inferred from caller; design at this row. |
-| [ ] Commit | — | — | `Route preview mode through rich/mdrender wrapper` |
-
-## Phase 1.6: Finalize geometry ownership (P1-6 = D)
-
-After 1.5, `RichText` is the sole `SetRect` caller. Drop the
-`rect` parameter from `rich.Frame.Init`. The frame's rectangle
-is set exclusively via `SetRect` from the wrapper / `RichText`.
-Removes the dual-ownership ambiguity the architect flagged.
+(Renumbered from old 1.6.) `RichText` is the sole `SetRect`
+caller. Drop the `rect` parameter from `rich.Frame.Init`. The
+frame's rectangle is set exclusively via `SetRect` from the
+wrapper / `RichText`. Removes the dual-ownership ambiguity the
+architect flagged.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
@@ -150,12 +148,16 @@ Removes the dual-ownership ambiguity the architect flagged.
 
 Phase 1 leaves the system in this state:
 
-- `rich.Frame` no longer paints blockquote bars, horizontal rules,
-  or slide-fill regions. Those move to `rich/mdrender`.
-- `RichText` (preview mode) uses `rich/mdrender`. Styled mode
-  bypasses to `rich.Frame` directly.
+- `rich.Frame` no longer paints blockquote bars or horizontal
+  rules. Those move to `rich/mdrender`.
+- `RichText` uses `rich/mdrender` unconditionally; the wrapper's
+  extra paint pass is a no-op for styled mode (no blockquote /
+  HRule content there). Styled-mode bypass for cleanliness is
+  optional polish, deferred.
 - `rich.Style` still carries markdown-specific fields. Removing
   them is per-round work in Phase 3.
+- Slide-rendering code remains dormant in `rich/`; its removal
+  is a separate work item with its own design conversation.
 - `markdown/` package interface unchanged.
 - Spans protocol (`StyleAttrs`) unchanged.
 
@@ -167,21 +169,12 @@ spans protocol. That work has its own design doc and plan.
 ## Risks for Phase 1
 
 1. **Test fixture coverage gaps.** Existing rich-side tests cover
-   blockquote/HRule/slide rendering. If wrapper-driven rendering
+   blockquote and HRule rendering. If wrapper-driven rendering
    subtly differs (e.g., draw-call ordering), tests should catch
    it — but only if we run them on the FULL preview path, not
    just the wrapper in isolation. Each row's test stage must
    include the integrated path.
-2. **Slide layout adjustment is layout-touching.** Phase 1.4 will
-   need a clean abstraction so the wrapper drives slide-region
-   expansion without owning the whole layout pipeline. Wrong cut
-   here forces a bigger change in 1.5.
-3. **Mode flag plumbing.** Phase 1.5 needs `RichText` to know
-   whether it's in preview vs. styled mode. The current code has
-   this knowledge in `Window` but not directly in `RichText`. The
-   cleanest answer is probably an explicit flag on `RichText.Init`
-   options; design at row 1.5.
-4. **Backward-compat of Init signature.** Phase 1.6 drops a
+2. **Backward-compat of Init signature.** The renumbered Phase 1.4 drops a
    parameter. Any code outside this branch that calls `Init(rect, ...)`
    breaks. The surface is contained to `rich/` callers + a few in
    `richtext.go`; small impact.
@@ -190,4 +183,7 @@ spans protocol. That work has its own design doc and plan.
 
 ## Status
 
-Phase 1 not yet started. This plan is the next thing to be agreed.
+Rows 1.0 through 1.3 complete. Phase 1.4 (slide-break move)
+dropped due to slides deprecation. Phase 1.5 (preview routing)
+subsumed into 1.2. The renumbered Phase 1.4 (geometry ownership)
+remains as the only outstanding row before Phase 1 closes.
