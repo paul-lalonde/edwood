@@ -231,6 +231,36 @@ func parseFamilyFlag(flag string) (string, error) {
 	return val, nil
 }
 
+// validPlacements lists the placement-name values v1 accepts
+// on `b` directives. The empty/absent flag and the explicit
+// "replace" both denote the existing replacing semantic;
+// "below" is Phase 3 round 4's new layout mode (image
+// rendered below the line containing Offset, source runes
+// preserved). Future placements (above, center, etc.) extend
+// this set per their own Phase 3 rounds; the parser rejects
+// unknown values so producer mistakes surface loudly.
+var validPlacements = map[string]bool{
+	"replace": true,
+	"below":   true,
+}
+
+// parsePlacementFlag parses a "placement=NAME" flag token
+// and returns the validated placement name. Rejects empty
+// values and any name not in validPlacements. The legality
+// of length>0 with a particular placement is checked at the
+// caller (placement=below requires length=0). Added in
+// Phase 3 round 4.
+func parsePlacementFlag(flag string) (string, error) {
+	val := strings.TrimPrefix(flag, "placement=")
+	if val == "" {
+		return "", fmt.Errorf("placement flag missing value: %q", flag)
+	}
+	if !validPlacements[val] {
+		return "", fmt.Errorf("unknown placement name: %q", flag)
+	}
+	return val, nil
+}
+
 // parseScaleFlag parses a "scale=N.N" flag token and returns
 // the validated scale value. Rejects: empty, non-numeric,
 // non-finite (NaN/Inf), zero or negative, or above maxScale.
@@ -295,7 +325,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 	var fg, bg color.Color
 	var bold, italic, hidden, hrule bool
 	var scale float64
-	var family string
+	var family, placement string
 	var payloadParts []string
 	idx := 4
 	inPayload := false
@@ -366,6 +396,13 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			}
 			family = fam
 			idx++
+		case strings.HasPrefix(f, "placement="):
+			p, perr := parsePlacementFlag(f)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			placement = p
+			idx++
 		default:
 			// Start of payload — collect this and all remaining tokens.
 			inPayload = true
@@ -376,21 +413,26 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 
 	payload := strings.Join(payloadParts, " ")
 
+	if placement == "below" && length != 0 {
+		return 0, 0, StyleRun{}, fmt.Errorf("placement=below requires length=0, got %d", length)
+	}
+
 	run = StyleRun{
 		Len: length,
 		Style: StyleAttrs{
-			Fg:         fg,
-			Bg:         bg,
-			Bold:       bold,
-			Italic:     italic,
-			Hidden:     hidden,
-			Scale:      scale,
-			Family:     family,
-			HRule:      hrule,
-			IsBox:      true,
-			BoxWidth:   width,
-			BoxHeight:  height,
-			BoxPayload: payload,
+			Fg:           fg,
+			Bg:           bg,
+			Bold:         bold,
+			Italic:       italic,
+			Hidden:       hidden,
+			Scale:        scale,
+			Family:       family,
+			HRule:        hrule,
+			IsBox:        true,
+			BoxWidth:     width,
+			BoxHeight:    height,
+			BoxPayload:   payload,
+			BoxPlacement: placement,
 		},
 	}
 	return offset, length, run, nil
