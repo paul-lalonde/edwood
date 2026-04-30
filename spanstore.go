@@ -40,9 +40,21 @@ type StyleAttrs struct {
 
 	// Box fields (zero values = not a box)
 	IsBox      bool
-	BoxWidth   int    // pixels
-	BoxHeight  int    // pixels
-	BoxPayload string // opaque, e.g. "image:/path/to/img.png"
+	BoxWidth   int    // pixels; 0 means "renderer probes" (Phase 3 round 4)
+	BoxHeight  int    // pixels; 0 means "renderer probes" (Phase 3 round 4)
+	BoxPayload string // opaque, e.g. "image:/path/to/img.png [key=value...]"
+	// BoxPlacement is the layout-mode discriminator for box
+	// rendering. Empty string is the default (existing
+	// replacing semantic — the box's `length` runes are
+	// replaced by the box at render time). v1 also recognizes
+	// "below" (the box does not consume runes; the renderer
+	// anchors it to the line containing Offset and paints
+	// below the line text). The protocol uses a namespaced
+	// `placement=NAME` flag to keep future placements from
+	// expanding the wire-format flag set; the parser
+	// validates against a closed set. Added in Phase 3 round
+	// 4 for inline-image rendering with source kept visible.
+	BoxPlacement string
 }
 
 // colorEqual compares two color.Color values, handling nil.
@@ -77,7 +89,8 @@ func (a StyleAttrs) Equal(b StyleAttrs) bool {
 		a.IsBox == b.IsBox &&
 		a.BoxWidth == b.BoxWidth &&
 		a.BoxHeight == b.BoxHeight &&
-		a.BoxPayload == b.BoxPayload
+		a.BoxPayload == b.BoxPayload &&
+		a.BoxPlacement == b.BoxPlacement
 }
 
 // StyleRun is a contiguous range of runes sharing the same style.
