@@ -1,3 +1,8 @@
+// Spans-protocol parser. The wire format is documented in
+// docs/designs/spans-protocol.md — that doc is authoritative; the
+// implementation here MUST match it. Producers are
+// cmd/edcolor and cmd/md2spans.
+
 package main
 
 import (

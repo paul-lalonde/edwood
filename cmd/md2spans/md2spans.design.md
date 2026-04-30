@@ -86,9 +86,14 @@ R1. **Invocation.**
     - Any other invocation: print usage to stderr, exit 2.
     - Missing `$winid`: print error to stderr, exit 1.
 
-R2. **Spans-protocol output.** v1 emits zero or more `s` lines
-    written to the window's `spans` file in a single write,
-    matching `spanparse.go:parseSpanLine`'s expected format:
+R2. **Spans-protocol output.** v1 emits a `c\n` clear write
+    followed by zero or more `s` lines in a separate write to
+    the window's `spans` file. The protocol contract is
+    documented authoritatively in
+    [`docs/designs/spans-protocol.md`](../../docs/designs/spans-protocol.md);
+    this requirement is the v1-specific subset of that.
+
+    Span line format (matches `spanparse.go:parseSpanLine`):
 
     ```
     s <offset> <length> <fg> [bg] [flags...]
