@@ -51,7 +51,7 @@ current body and exits.
 var editDebounce = 200 * time.Millisecond
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Getenv, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
 // run is the testable core of main. argv is the program's
@@ -62,7 +62,7 @@ func main() {
 //
 // Return values: 0 success, 1 runtime/environment error, 2
 // invocation error (bad args).
-func run(argv []string, getenv func(string) string, stderr io.Writer) int {
+func run(argv []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("md2spans", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	help := fs.Bool("h", false, "print help and exit")
@@ -74,7 +74,7 @@ func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 	if *help {
 		// POSIX convention: -h goes to stdout. Errors go to
 		// stderr (the bad-args branch below).
-		fmt.Fprint(os.Stdout, usage)
+		fmt.Fprint(stdout, usage)
 		return 0
 	}
 	if fs.NArg() != 0 {
@@ -100,6 +100,31 @@ func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 	return 0
 }
 
+// bodyReader is the renderOnce contract for fetching the source
+// to render. *acme.Win satisfies this via its ReadAll method.
+// Tests inject a fake to feed canned bodies without 9P.
+type bodyReader interface {
+	ReadAll(file string) ([]byte, error)
+}
+
+// spansOpener is the writeSpans contract for opening the
+// window's spans file. *client.Fsys's Open returns a
+// *client.Fid which satisfies io.WriteCloser; this interface
+// lets tests inject a fake that captures writes without 9P.
+type spansOpener interface {
+	OpenSpans(winid int) (io.WriteCloser, error)
+}
+
+// fsysOpener is the production spansOpener: a thin wrapper over
+// *client.Fsys that opens "<winid>/spans" for write.
+type fsysOpener struct {
+	fsys *client.Fsys
+}
+
+func (o fsysOpener) OpenSpans(winid int) (io.WriteCloser, error) {
+	return o.fsys.Open(fmt.Sprintf("%d/spans", winid), plan9.OWRITE)
+}
+
 // attachAndRender opens the window, mounts the acme service for
 // the spans file, renders once, and (unless once is true)
 // watches the body for edits with debounce, re-rendering on each.
@@ -118,8 +143,9 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("mount acme: %w", err)
 	}
+	opener := fsysOpener{fsys: fsys}
 
-	if err := renderOnce(win, fsys, winid); err != nil {
+	if err := renderOnce(win, opener, winid); err != nil {
 		fmt.Fprintf(stderr, "md2spans: render: %v\n", err)
 		// Continue to watch loop anyway; transient errors shouldn't
 		// take down the watcher.
@@ -140,7 +166,7 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 		fmt.Fprintf(stderr, "md2spans: ctl menu: %v\n", err)
 	}
 
-	watchEdits(win, fsys, winid, stderr)
+	watchEdits(win, opener, winid, stderr)
 	return nil
 }
 
@@ -155,15 +181,15 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 // v1 accepts the transient mismatch; an interlock here would
 // require coordination with edwood's event stream that doesn't
 // fit the v1 architecture.
-func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
-	body, err := win.ReadAll("body")
+func renderOnce(reader bodyReader, opener spansOpener, winid int) error {
+	body, err := reader.ReadAll("body")
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
 	src := string(body)
 	spans := Parse(src)
 	totalRunes := utf8.RuneCountInString(src)
-	return writeSpans(fsys, winid, spans, totalRunes)
+	return writeSpans(opener, winid, spans, totalRunes)
 }
 
 // watchEdits is the v1 body-edit watch loop. Mirrors
@@ -181,7 +207,7 @@ func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
 // allocated a fresh runtime timer for every edit, leaving the
 // prior one to expire and be GC'd. Reset reuses the timer's
 // underlying state.
-func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
+func watchEdits(win *acme.Win, opener spansOpener, winid int, stderr io.Writer) {
 	events := win.EventChan()
 	editTimer := newStoppedTimer()
 	defer editTimer.Stop()
@@ -201,7 +227,7 @@ func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
 				win.WriteEvent(e)
 			}
 		case <-editTimer.C:
-			if err := renderOnce(win, fsys, winid); err != nil {
+			if err := renderOnce(win, opener, winid); err != nil {
 				fmt.Fprintf(stderr, "md2spans: render after edit: %v\n", err)
 			}
 		}
@@ -253,8 +279,8 @@ func resetTimer(t *time.Timer, d time.Duration) {
 //
 // If `spans` is empty, writeSpans only issues the clear. The
 // window goes plain.
-func writeSpans(fsys *client.Fsys, winid int, spans []Span, totalRunes int) error {
-	fid, err := fsys.Open(fmt.Sprintf("%d/spans", winid), plan9.OWRITE)
+func writeSpans(opener spansOpener, winid int, spans []Span, totalRunes int) error {
+	fid, err := opener.OpenSpans(winid)
 	if err != nil {
 		return fmt.Errorf("open spans: %w", err)
 	}

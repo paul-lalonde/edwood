@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -16,7 +17,7 @@ func envFunc(m map[string]string) func(string) string {
 // stderr.
 func TestRunRejectsUnknownArgs(t *testing.T) {
 	var stderr bytes.Buffer
-	code := run([]string{"--bogus"}, envFunc(nil), &stderr)
+	code := run([]string{"--bogus"}, envFunc(nil), io.Discard, &stderr)
 	if code != 2 {
 		t.Errorf("run with unknown arg returned %d, want 2", code)
 	}
@@ -25,15 +26,20 @@ func TestRunRejectsUnknownArgs(t *testing.T) {
 	}
 }
 
-// TestRunHelpExitsZero covers R1: -h prints usage and exits 0.
+// TestRunHelpExitsZero covers R1: -h prints usage to stdout (POSIX)
+// and exits 0. stderr remains empty.
 func TestRunHelpExitsZero(t *testing.T) {
-	var stderr bytes.Buffer
-	code := run([]string{"-h"}, envFunc(nil), &stderr)
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-h"}, envFunc(nil), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("run -h returned %d, want 0", code)
 	}
-	// Usage may go to stderr or stdout depending on convention; we
-	// don't pin which here. Just check the exit code.
+	if !strings.Contains(stdout.String(), "usage") {
+		t.Errorf("stdout did not contain usage; got %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr should be empty for -h; got %q", stderr.String())
+	}
 }
 
 // TestRunMissingWinidExitsOne covers R1: with no -h and no
@@ -43,7 +49,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 // with $winid in scope, e.g. as a B2 command from edwood).
 func TestRunMissingWinidExitsOne(t *testing.T) {
 	var stderr bytes.Buffer
-	code := run([]string{}, envFunc(nil), &stderr)
+	code := run([]string{}, envFunc(nil), io.Discard, &stderr)
 	if code != 1 {
 		t.Errorf("run without $winid returned %d, want 1", code)
 	}
@@ -57,7 +63,7 @@ func TestRunMissingWinidExitsOne(t *testing.T) {
 // $winid, not from a file path or stdin).
 func TestRunRejectsExtraPositionalArgs(t *testing.T) {
 	var stderr bytes.Buffer
-	code := run([]string{"some-file.md"}, envFunc(map[string]string{"winid": "1"}), &stderr)
+	code := run([]string{"some-file.md"}, envFunc(map[string]string{"winid": "1"}), io.Discard, &stderr)
 	if code != 2 {
 		t.Errorf("run with positional arg returned %d, want 2", code)
 	}
@@ -67,7 +73,7 @@ func TestRunRejectsExtraPositionalArgs(t *testing.T) {
 // but not parseable as an integer. Exit 1 with a useful message.
 func TestRunBadWinidExitsOne(t *testing.T) {
 	var stderr bytes.Buffer
-	code := run([]string{}, envFunc(map[string]string{"winid": "not-a-number"}), &stderr)
+	code := run([]string{}, envFunc(map[string]string{"winid": "not-a-number"}), io.Discard, &stderr)
 	if code != 1 {
 		t.Errorf("run with non-integer $winid returned %d, want 1", code)
 	}
