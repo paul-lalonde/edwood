@@ -17,6 +17,11 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"time"
+
+	"9fans.net/go/acme"
+	"9fans.net/go/plan9"
+	"9fans.net/go/plan9/client"
 )
 
 const usage = `usage: md2spans [-h] [-once]
@@ -33,6 +38,12 @@ current body and exits.
   -once     render once and exit; do not watch for edits
 `
 
+// editDebounce is the delay between a body edit and the next
+// re-render. Mirrors cmd/edcolor's 300 ms; v1 uses 200 ms to
+// match the "fast feedback" feel of preview mode without
+// overloading on rapid typing.
+var editDebounce = 200 * time.Millisecond
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Getenv, os.Stderr))
 }
@@ -44,11 +55,6 @@ func main() {
 //
 // Return values: 0 success, 1 runtime/environment error, 2
 // invocation error (bad args).
-//
-// At Phase 2.1, run only handles arg parsing and $winid lookup.
-// The acme-attach + watch-loop logic is added in row 2.5; for
-// now the placeholder path returns 0 immediately after
-// validating $winid.
 func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("md2spans", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -78,12 +84,120 @@ func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 		return 1
 	}
 
-	// Phase 2.1 scaffold: $winid validated, args parsed. The
-	// acme-attach / read-body / write-spans pipeline lands in
-	// rows 2.2-2.4 (parser + emit) and row 2.5 (watch loop).
-	// Suppress unused-variable warnings now that we're returning
-	// early.
-	_ = winid
-	_ = once
+	if err := attachAndRender(winid, *once, stderr); err != nil {
+		fmt.Fprintf(stderr, "md2spans: %v\n", err)
+		return 1
+	}
 	return 0
+}
+
+// attachAndRender opens the window, mounts the acme service for
+// the spans file, renders once, and (unless once is true)
+// watches the body for edits with debounce, re-rendering on each.
+func attachAndRender(winid int, once bool, stderr io.Writer) error {
+	win, err := acme.Open(winid, nil)
+	if err != nil {
+		return fmt.Errorf("open window %d: %w", winid, err)
+	}
+
+	fsys, err := client.MountService("acme")
+	if err != nil {
+		return fmt.Errorf("mount acme: %w", err)
+	}
+
+	if err := renderOnce(win, fsys, winid); err != nil {
+		fmt.Fprintf(stderr, "md2spans: render: %v\n", err)
+		// Continue to watch loop anyway; transient errors shouldn't
+		// take down the watcher.
+	}
+
+	if once {
+		return nil
+	}
+
+	// Open the event file and re-enable the menu so user
+	// commands (Undo / Redo / Put) stay in the tag — same
+	// pattern as cmd/edcolor.
+	win.OpenEvent()
+	win.Ctl("menu")
+
+	watchEdits(win, fsys, winid, stderr)
+	return nil
+}
+
+// renderOnce reads the body, parses it, and writes the
+// spans-protocol output to the window's spans file.
+func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
+	body, err := win.ReadAll("body")
+	if err != nil {
+		return fmt.Errorf("read body: %w", err)
+	}
+	spans := Parse(string(body))
+	return writeSpans(fsys, winid, FormatSpans(spans))
+}
+
+// watchEdits is the v1 body-edit watch loop. Mirrors
+// cmd/edcolor's eventLoop simplified to just body edits + a
+// debounce. Selection events, command interception, and
+// auto-indent are NOT handled by md2spans v1.
+//
+// The loop exits when the window's event channel closes (the
+// window was deleted).
+func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
+	events := win.EventChan()
+	var editTimer <-chan time.Time
+	for {
+		select {
+		case e, ok := <-events:
+			if !ok {
+				return
+			}
+			switch e.C2 {
+			case 'I', 'D':
+				editTimer = time.After(editDebounce)
+			case 'x', 'X', 'l', 'L':
+				// Pass user-issued commands through unchanged
+				// so edwood handles them normally.
+				win.WriteEvent(e)
+			}
+		case <-editTimer:
+			editTimer = nil
+			if err := renderOnce(win, fsys, winid); err != nil {
+				fmt.Fprintf(stderr, "md2spans: render after edit: %v\n", err)
+			}
+		}
+	}
+}
+
+// writeSpans writes the spans-protocol bytes to the window's
+// spans file in chunks that stay under the 9P msize limit.
+// Chunks split on newline boundaries so the server parses each
+// write as a complete batch of directives.
+func writeSpans(fsys *client.Fsys, winid int, payload string) error {
+	fid, err := fsys.Open(fmt.Sprintf("%d/spans", winid), plan9.OWRITE)
+	if err != nil {
+		return fmt.Errorf("open spans: %w", err)
+	}
+	defer fid.Close()
+
+	const maxChunk = 4000
+	for len(payload) > 0 {
+		end := len(payload)
+		if end > maxChunk {
+			// Cap at maxChunk and back off to the last newline so
+			// each write is a complete set of directives.
+			end = maxChunk
+			for end > 0 && payload[end-1] != '\n' {
+				end--
+			}
+			if end == 0 {
+				return fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
+			}
+		}
+		if _, err := fid.Write([]byte(payload[:end])); err != nil {
+			return fmt.Errorf("write spans: %w", err)
+		}
+		payload = payload[end:]
+	}
+	return nil
 }
