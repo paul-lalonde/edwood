@@ -1452,3 +1452,34 @@ func TestBoxStyleToRichStyle_FamilyAlsoMapped(t *testing.T) {
 		t.Error("box Code should be true for Family=\"code\"")
 	}
 }
+
+// --- HRule mapping tests (Phase 3 round 3) -------------------------------
+
+// TestStyleAttrsToRichStyle_HRulePassedThrough: HRule=true →
+// rich.Style.HRule=true.
+func TestStyleAttrsToRichStyle_HRulePassedThrough(t *testing.T) {
+	sa := StyleAttrs{HRule: true}
+	got := styleAttrsToRichStyle(sa)
+	if !got.HRule {
+		t.Error("rich.Style.HRule should be true for StyleAttrs.HRule=true")
+	}
+}
+
+// TestStyleAttrsToRichStyle_HRuleFalsePassedThrough: HRule=false
+// → rich.Style.HRule=false.
+func TestStyleAttrsToRichStyle_HRuleFalsePassedThrough(t *testing.T) {
+	sa := StyleAttrs{HRule: false}
+	got := styleAttrsToRichStyle(sa)
+	if got.HRule {
+		t.Error("rich.Style.HRule should be false for StyleAttrs.HRule=false")
+	}
+}
+
+// TestBoxStyleToRichStyle_HRuleAlsoMapped: box path honors HRule.
+func TestBoxStyleToRichStyle_HRuleAlsoMapped(t *testing.T) {
+	sa := StyleAttrs{HRule: true, IsBox: true, BoxWidth: 100, BoxHeight: 1}
+	got := boxStyleToRichStyle(sa, "alt")
+	if !got.HRule {
+		t.Error("box rich.Style.HRule should be true for StyleAttrs.HRule=true")
+	}
+}

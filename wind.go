@@ -2676,6 +2676,11 @@ func (w *Window) buildStyledContent() rich.Content {
 // rejects unknown family names upstream, so this branch never
 // sees them in production; the defensive ignore prevents a
 // stale span store from breaking the rendering.
+//
+// HRule: passes through directly. The wrapping renderer
+// (rich/mdrender's paintPhaseHorizontalRules from Phase 1.3)
+// suppresses the span's text and draws a 1px line spanning the
+// frame width. Added in Phase 3 round 3.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
@@ -2690,6 +2695,7 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	if sa.Family == "code" {
 		s.Code = true
 	}
+	s.HRule = sa.HRule
 	return s
 }
 
@@ -2714,6 +2720,7 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 	if sa.Family == "code" {
 		s.Code = true
 	}
+	s.HRule = sa.HRule
 
 	// Parse payload: if it starts with "image:", set Image + ImageURL.
 	if strings.HasPrefix(sa.BoxPayload, "image:") {
