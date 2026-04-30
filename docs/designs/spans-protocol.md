@@ -92,16 +92,23 @@ Defines a styled run of text. Fields:
 - Single-token boolean flag. Indicates that the span is a
   horizontal-rule line. The renderer keeps the span's text
   visible (the source markers `---`/`***`/`___` render
-  normally) and `rich/mdrender`'s
-  `paintPhaseHorizontalRules` draws a thin line spanning
-  the frame width on the line — the user sees both the
-  markers and the rule. This matches the "markup remains
-  visible" stance of every other md2spans-emitted markdown
-  feature in v1; a future WYSIWYG mode may hide markers
-  globally.
+  normally) and `rich/mdrender.Renderer.paintHorizontalRules`
+  draws a thin line on the line containing the span — the
+  user sees both the markers and the rule. This matches the
+  "markup remains visible" stance of every other
+  md2spans-emitted markdown feature in v1; a future WYSIWYG
+  mode may hide markers globally.
+- The rule spans the **full frame width** regardless of the
+  span's offset or length. A short `hrule` span (e.g. one
+  rune) and a long one produce identical rule geometry; only
+  the marker text differs. Producers do not need to size the
+  span to the rule's visual extent — sizing it to the marker
+  characters is canonical.
 - No coexistence restrictions; `hrule` plus `bold` /
-  `italic` is valid and the styling applies to the visible
-  marker text.
+  `italic` / `scale=` / `family=` is valid and the styling
+  applies to the visible marker text. v1 does not pin the
+  visual semantics of these combinations beyond "the markers
+  inherit the styling."
 
 **`family=NAME`** (added Phase 3 round 2):
 - NAME is a semantic font-family name from the v1-recognized

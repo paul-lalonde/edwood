@@ -21,13 +21,16 @@ field, new flag in the parser, new mapping in
 s 5 3 - hrule
 ```
 
-Adds a new boolean flag `hrule`. When set, the span's text
-content is NOT drawn — instead, the `rich/mdrender` wrapper's
-existing horizontal-rule painter draws a thin horizontal line
-spanning the frame width on the line containing the span.
-Position-in-flag-list doesn't matter; coexists with other
-flags (though `hrule` plus `bold` is semantically odd; v1
-doesn't reject the combination, just renders the rule).
+Adds a new boolean flag `hrule`. When set, the
+`rich/mdrender` wrapper's existing horizontal-rule painter
+draws a thin horizontal line spanning the frame width on the
+line containing the span. The span's text content is also
+rendered normally — i.e. the source markers stay visible
+alongside the rule (see "Markers stay visible" below for the
+rationale). Position-in-flag-list doesn't matter; coexists
+with other flags (though `hrule` plus `bold` is semantically
+odd; v1 doesn't reject the combination — the marker text
+inherits the styling and the rule still draws).
 
 Constraints (parser):
 - `hrule` is a single token, no value.
@@ -64,9 +67,10 @@ if sa.HRule {
 
 `rich.Style.HRule` already exists (was used by the in-tree
 markdown path; now exclusively consumed by `rich/mdrender`'s
-post-paint phase). The existing `paintPhaseText` skip for
-HRule-styled boxes (still in `rich/frame.go`) means the span's
-TEXT is not drawn; only the rule line is drawn by the wrapper.
+post-paint phase). After the kept-visible flip (see "Markers
+stay visible" below), `paintPhaseText` no longer skips
+HRule-styled boxes — the markers render as ordinary text and
+the wrapper draws the rule on top.
 
 This is a clean reuse — no new rendering machinery; the
 wrapper's existing HRule paint phase handles it.
@@ -89,15 +93,28 @@ markers at line start, no internal spaces, optional trailing
 whitespace. Internal-space form (`- - -`) deferred.
 
 Emit: an `s` directive over the marker runes with the `hrule`
-flag. The text-skip in `paintPhaseText` causes the markers
-NOT to be drawn; the wrapper draws the rule. Visually: the
-line shows only the horizontal rule, no `---` characters.
+flag. The wrapper draws the rule line; the marker text renders
+through normally (see "Markers stay visible").
 
-This is a slight divergence from v1's "markup remains visible"
-stance — for HRule, hiding the markers IS the rendering. The
-other markdown features (emphasis, code, headings, links) keep
-their markers visible because the styled content needs to be
-readable; an HRule has no styled content per se, just the rule.
+## Markers stay visible
+
+The first cut of round 3 suppressed the marker text via a
+skip in `rich/frame.go`'s `paintPhaseText` — visually, the
+line showed only a rule with no `---` characters. Smoke-test
+feedback (April 2026) flipped this: every other v1 feature
+(emphasis, code, headings, links) keeps its source markers
+visible alongside the styling, and HRule was the lone
+exception. Removing the skip restores consistency: users
+see both the markers and the rule line. A future WYSIWYG
+mode may hide markup globally (round 9+); v1 does not.
+
+Renderer behavior after the flip:
+- `paintPhaseText` renders HRule-styled boxes as ordinary
+  text (no skip).
+- `rich/mdrender.Renderer.paintHorizontalRules` draws a 1-px
+  rule across the **full frame width** (not the span's X
+  range) at the line containing the HRule-styled box.
+- The user sees marker text plus the rule.
 
 ## Detection rules (md2spans)
 
@@ -185,12 +202,39 @@ Each HRule is its own one-line paragraph.
    the rule. Our span carries the flag through StyleAttrs →
    rich.Style → mdrender. Same path the in-tree markdown
    package uses today.
-3. **No test for visually-clean rendering.** The "markers
-   skipped, rule drawn" assertion is a function of two
-   separate rendering paths (paintPhaseText's skip, mdrender's
-   draw). Unit tests can pin StyleAttrs.HRule=true plumbs
-   through; visual correctness is smoke-tested.
+3. **No test for visually-clean rendering.** Unit tests pin
+   that `StyleAttrs.HRule=true` plumbs through and that the
+   marker text renders (`rich/frame_test.go`); the rule-line
+   draw itself is exercised by `rich/mdrender` tests and
+   smoke-tested visually.
+
+## Composition risk for region rounds (rounds 5-7)
+
+`paintHorizontalRules` draws a rule across the **full frame
+width** (`rich/mdrender/hrule.go:62-66`). When round 6 adds
+blockquote regions (left indent + bg color) and round 7 adds
+list regions (indent), an HRule inside such a region will
+draw the rule THROUGH the indent gutter and outside the
+bg-shaded area. Two options when those rounds land:
+- (a) Make the painter region-aware (rule clipped to the
+  region's content rect).
+- (b) Declare HRule-inside-region a non-goal in v1.
+
+Not a round-3 bug; record here so the round 5/6 design picks
+it up.
+
+## Phase 4 deletion checklist (forward note)
+
+When Phase 4 deletes the in-tree `markdown/` package:
+- The in-tree path renders an HRule as a single `─`
+  (`HRuleRune`); md2spans renders the literal `---`/`***`/`___`.
+  After Phase 4, only the literal-marker form remains. No
+  user-visible regression for md2spans-rendered content;
+  legacy preview output disappears with the rest of the
+  in-tree path.
 
 ## Status
 
-Design — drafted. Awaiting review.
+Round complete. All six plan rows landed plus the
+kept-visible follow-up; see
+[`docs/plans/PLAN_phase3-r3-hrule.md`](../../plans/PLAN_phase3-r3-hrule.md).

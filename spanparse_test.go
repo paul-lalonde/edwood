@@ -1123,6 +1123,8 @@ func TestParseSpanHRuleWithOtherFlags(t *testing.T) {
 		"s 0 3 - hrule bold",
 		"s 0 3 - bold hrule",
 		"s 0 3 - scale=1.0 hrule",
+		"s 0 3 - family=code hrule",
+		"s 0 3 - hrule family=code",
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {

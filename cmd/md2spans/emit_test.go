@@ -284,6 +284,21 @@ func TestFormatSpansHRuleOmittedWhenFalse(t *testing.T) {
 	}
 }
 
+// TestFormatSpansHRuleSurvivesGapClipping: a styled HRule span
+// whose start is clipped by fillGaps (overlap-defense path)
+// must keep HRule=true on the emitted run. Pins the
+// HRule-passthrough field copy in fillGaps.
+func TestFormatSpansHRuleSurvivesGapClipping(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 5, Italic: true},
+		{Offset: 3, Length: 4, HRule: true}, // overlaps; clips to [5, 7).
+	}, 10)
+	want := "s 0 5 - italic\ns 5 2 - hrule\ns 7 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {

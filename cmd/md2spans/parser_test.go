@@ -259,6 +259,21 @@ func TestParseHRuleTrailingWhitespace(t *testing.T) {
 	assertSpansEqual(t, Parse(src), want)
 }
 
+// TestParseHRuleCRLF: `\r` is allowed as trailing whitespace.
+// Pins the CRLF-input case so a Windows-edited markdown file
+// still recognizes its rule lines. The `\r` is the line
+// terminator's first byte; scanParagraphs strips the `\n` and
+// detectHRule's whitespace check accepts the trailing `\r`.
+func TestParseHRuleCRLF(t *testing.T) {
+	src := "---\r\nafter"
+	// Paragraph rune offsets:
+	//   --- = 0..2 (3)   \r = 3   \n = 4
+	//   after = 5..9
+	// HRule span over the marker runes only.
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
 // TestParseHRuleNotAList: `- item` is a list (later round),
 // NOT an HRule. v1 leaves it as plain text — emphasis tokenizer
 // ignores `-`. No spans.

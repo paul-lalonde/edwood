@@ -283,6 +283,11 @@ func detectHRule(src string, start, end int) int {
 			return 0
 		}
 	}
+	// Safe to return n as a rune count: the marker characters
+	// (`-`, `*`, `_`) are all 1-byte ASCII, enforced by the
+	// equality check on src[start+n] above. If the recognized
+	// marker set is ever broadened to include a multi-byte rune,
+	// this must convert n from bytes to runes before returning.
 	return n
 }
 

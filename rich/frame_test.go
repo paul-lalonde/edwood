@@ -2220,7 +2220,7 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 
 // TestHRuleRenderedAsText covers the frame-side behavior: HRule-
 // styled boxes are NOT skipped by paintPhaseText. Their text
-// (whether HRuneRune from the in-tree markdown path or `---`/`***`/
+// (whether HRuleRune from the in-tree markdown path or `---`/`***`/
 // `___` from md2spans) renders normally. The rich/mdrender
 // wrapper draws the rule line on top — the user sees both the
 // source markers AND the rule, matching the "markup remains
@@ -2276,6 +2276,48 @@ func TestHRuleRenderedAsText(t *testing.T) {
 	// New invariant: HRule-styled boxes' text DOES render now.
 	if !foundDashes {
 		t.Errorf("Redraw did not render '---' text (HRule skip should be removed)\nops: %v", ops)
+	}
+}
+
+// TestHRuleRuneRenderedAsText is the dual of
+// TestHRuleRenderedAsText for the in-tree markdown path: the
+// markdown package emits HRuleRune (a single horizontal-bar
+// rune) under StyleHRule, and Phase 3 round 3's removal of the
+// paintPhaseText skip applies to that path too. This test pins
+// the in-tree contract independently of md2spans's literal-
+// marker output.
+func TestHRuleRuneRenderedAsText(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage := edwoodtest.NewImage(display, "frame-background", image.Rect(0, 0, 1, 1))
+	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
+
+	f := NewFrame()
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
+
+	content := Content{
+		{Text: "above\n", Style: DefaultStyle()},
+		{Text: string(HRuleRune) + "\n", Style: StyleHRule},
+		{Text: "below", Style: DefaultStyle()},
+	}
+	f.SetContent(content)
+
+	display.(edwoodtest.GettableDrawOps).Clear()
+	f.Redraw()
+	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
+
+	foundHRune := false
+	for _, op := range ops {
+		if strings.Contains(op, `string "`) && strings.Contains(op, string(HRuleRune)) {
+			foundHRune = true
+			break
+		}
+	}
+	if !foundHRune {
+		t.Errorf("Redraw did not render HRuleRune as text (in-tree HRule path broken)\nops: %v", ops)
 	}
 }
 
