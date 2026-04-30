@@ -133,7 +133,7 @@ func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
 		return fmt.Errorf("read body: %w", err)
 	}
 	spans := Parse(string(body))
-	return writeSpans(fsys, winid, FormatSpans(spans))
+	return writeSpans(fsys, winid, spans)
 }
 
 // watchEdits is the v1 body-edit watch loop. Mirrors
@@ -169,17 +169,37 @@ func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
 	}
 }
 
-// writeSpans writes the spans-protocol bytes to the window's
-// spans file in chunks that stay under the 9P msize limit.
-// Chunks split on newline boundaries so the server parses each
-// write as a complete batch of directives.
-func writeSpans(fsys *client.Fsys, winid int, payload string) error {
+// writeSpans replaces the window's spans with the supplied list.
+// Issues TWO writes to the spans file:
+//
+//  1. A `c\n` (clear). The spans-protocol parser at
+//     spanparse.go:parseSpanMessage requires that a `c` directive
+//     be the only command in its write — it returns isClear=true
+//     immediately on seeing one and ignores any following lines.
+//     The clear ALSO resets the `styledSuppressed` flag on the
+//     window (xfid.go:611), so a window the user previously took
+//     out of styled mode (e.g. via the Markdown tag command) will
+//     re-enter styled mode on the subsequent span write.
+//
+//  2. The `s` lines (one per Span), chunked under the 9P msize
+//     limit at newline boundaries. parseSpanMessage parses these
+//     in a single batch and the auto-switch to styled mode at
+//     xfid.go:642 fires.
+//
+// If `spans` is empty, writeSpans only issues the clear. The
+// window goes plain.
+func writeSpans(fsys *client.Fsys, winid int, spans []Span) error {
 	fid, err := fsys.Open(fmt.Sprintf("%d/spans", winid), plan9.OWRITE)
 	if err != nil {
 		return fmt.Errorf("open spans: %w", err)
 	}
 	defer fid.Close()
 
+	if _, err := fid.Write([]byte("c\n")); err != nil {
+		return fmt.Errorf("write clear: %w", err)
+	}
+
+	payload := FormatSpans(spans)
 	const maxChunk = 4000
 	for len(payload) > 0 {
 		end := len(payload)
