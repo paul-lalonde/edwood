@@ -220,6 +220,96 @@ func TestParseEmphasisDoesNotSpanParagraphs(t *testing.T) {
 	}
 }
 
+// --- Horizontal rule tests (Phase 3 round 3) ---------------------------
+
+// TestParseHRuleDash covers basic `---` recognition: a span over
+// the marker runes with HRule=true, no other styling.
+func TestParseHRuleDash(t *testing.T) {
+	src := "---"
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleAsterisk and Underscore: the other two ATX
+// rule markers also work.
+func TestParseHRuleAsterisk(t *testing.T) {
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse("***"), want)
+}
+
+func TestParseHRuleUnderscore(t *testing.T) {
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse("___"), want)
+}
+
+// TestParseHRuleLongerRun: 4+ markers also count as a rule.
+func TestParseHRuleLongerRun(t *testing.T) {
+	src := "-----"
+	want := []Span{{Offset: 0, Length: 5, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleTrailingWhitespace: trailing whitespace allowed.
+func TestParseHRuleTrailingWhitespace(t *testing.T) {
+	src := "---   "
+	// The Span covers only the marker runes (not the trailing
+	// spaces). HRule=true; mdrender draws the rule across the
+	// whole frame width regardless of span length.
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleNotAList: `- item` is a list (later round),
+// NOT an HRule. v1 leaves it as plain text — emphasis tokenizer
+// ignores `-`. No spans.
+func TestParseHRuleNotAList(t *testing.T) {
+	if got := Parse("- item"); len(got) != 0 {
+		t.Errorf("Parse(\"- item\") = %v, want empty (list, not HRule)", got)
+	}
+}
+
+// TestParseHRuleNotMixedMarkers: `--*` (mixed) is not a rule.
+func TestParseHRuleNotMixedMarkers(t *testing.T) {
+	// `--*` has 2 dashes then a star. The HRule detector
+	// requires 3+ same character. So no rule. The trailing `*`
+	// is a single-rune emphasis opener with nothing to close →
+	// no emphasis span either. Result: empty.
+	if got := Parse("--*"); len(got) != 0 {
+		t.Errorf("Parse(\"--*\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleNotShort: `--` (2 markers) is not an HRule.
+func TestParseHRuleNotShort(t *testing.T) {
+	if got := Parse("--"); len(got) != 0 {
+		t.Errorf("Parse(\"--\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleNotWithContent: `--- title` is not an HRule
+// per v1 (markers followed by content). v1 leaves as plain.
+func TestParseHRuleNotWithContent(t *testing.T) {
+	if got := Parse("--- title"); len(got) != 0 {
+		t.Errorf("Parse(\"--- title\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleBetweenParagraphs: an HRule line ends the prior
+// paragraph and is its own one-line paragraph. Subsequent
+// non-blank lines start a new paragraph.
+func TestParseHRuleBetweenParagraphs(t *testing.T) {
+	src := "intro\n\n---\n\nafter"
+	// Runes:
+	//   intro=0..4 (5)  \n=5
+	//   blank=6 (\n)
+	//   ---=7..9 (3)    \n=10
+	//   blank=11 (\n)
+	//   after=12..16 (5)
+	// HRule span at offset 7, length 3. No other spans.
+	want := []Span{{Offset: 7, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
 // --- Inline code tests (Phase 3 round 2) -------------------------------
 
 // TestParseInlineCode covers basic backtick-delimited inline

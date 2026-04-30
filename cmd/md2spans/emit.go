@@ -62,6 +62,9 @@ func FormatSpans(styled []Span, totalRunes int) string {
 		if s.Family != "" {
 			fmt.Fprintf(&b, " family=%s", s.Family)
 		}
+		if s.HRule {
+			b.WriteString(" hrule")
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -107,6 +110,7 @@ func fillGaps(styled []Span, totalRunes int) []Span {
 			Italic: s.Italic,
 			Scale:  s.Scale,
 			Family: s.Family,
+			HRule:  s.HRule,
 		})
 		cursor = end
 	}

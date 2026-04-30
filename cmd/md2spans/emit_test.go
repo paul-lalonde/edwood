@@ -262,6 +262,28 @@ func TestFormatSpansFamilyWithFlags(t *testing.T) {
 	}
 }
 
+// --- HRule emission tests (Phase 3 round 3) -----------------------------
+
+// TestFormatSpansHRuleEmitted: HRule=true produces an `hrule`
+// flag; absent when HRule=false.
+func TestFormatSpansHRuleEmitted(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 3, HRule: true}}, 3)
+	want := "s 0 3 - hrule\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansHRuleOmittedWhenFalse: HRule=false → no
+// `hrule` flag.
+func TestFormatSpansHRuleOmittedWhenFalse(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 3}}, 3)
+	want := "s 0 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {

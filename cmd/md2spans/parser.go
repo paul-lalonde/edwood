@@ -29,6 +29,11 @@ type Span struct {
 	// emits Family="code"; inside a heading, the merge attaches
 	// the heading's Scale alongside (see phase3-r2-font-family.md).
 	Family string
+	// HRule signals that this span represents a horizontal-rule
+	// line (`---` / `***` / `___` markdown form). emit() formats
+	// it as the `hrule` flag; the consumer suppresses the
+	// span's text and draws a rule line. See phase3-r3-hrule.md.
+	HRule bool
 }
 
 // Parse takes the markdown source and returns the list of styled
@@ -40,13 +45,39 @@ type Span struct {
 func Parse(src string) []Span {
 	var spans []Span
 	for _, p := range scanParagraphs(src) {
-		if p.HeadingLevel > 0 {
+		switch {
+		case p.IsHRule:
+			spans = append(spans, parseHRuleParagraph(src, p)...)
+		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
-		} else {
+		default:
 			spans = append(spans, parseParagraph(src, p)...)
 		}
 	}
 	return spans
+}
+
+// parseHRuleParagraph emits a single Span over the HRule
+// marker runes with HRule=true. The wrapper renderer
+// (rich/mdrender) suppresses the span's text and draws a
+// horizontal line spanning the frame width on the line.
+//
+// Trailing whitespace (allowed after the markers) is NOT part
+// of the emitted span — the rule visually overlays the marker
+// region; the trailing whitespace gets a default-styled fill
+// from emit.go's fillGaps.
+func parseHRuleParagraph(src string, p paragraphRange) []Span {
+	n := detectHRule(src, p.ByteStart, p.ByteEnd)
+	if n <= 0 {
+		// Defensive: scanParagraphs only sets IsHRule when
+		// detectHRule returns > 0, so this shouldn't happen.
+		return nil
+	}
+	return []Span{{
+		Offset: p.RuneStart,
+		Length: n,
+		HRule:  true,
+	}}
 }
 
 // parseHeadingParagraph emits scaled spans for an ATX heading
@@ -191,10 +222,16 @@ func tryCode(runes []rune, i, runeStart int) (Span, int, bool) {
 // (`# h1` through `###### h6`). Heading paragraphs are exactly
 // one source line; scanParagraphs splits a heading line into
 // its own paragraph regardless of surrounding blank lines.
+//
+// IsHRule is true for horizontal-rule lines (`---` / `***` /
+// `___` per phase3-r3-hrule.md). Like headings, HRule lines
+// are split into their own one-line paragraphs by
+// scanParagraphs regardless of surrounding blank lines.
 type paragraphRange struct {
 	ByteStart, ByteEnd int
 	RuneStart          int
 	HeadingLevel       int
+	IsHRule            bool
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -209,6 +246,44 @@ var headingScale = [7]float64{
 	4:   1.1,  // H4
 	5:   1.05, // H5
 	6:   1.0,  // H6 (visually distinct via bold; same scale as body)
+}
+
+// detectHRule returns the rune-length of an HRule line, or 0
+// if the line is not a horizontal rule. An HRule line consists
+// of 3+ identical marker characters (`-`, `*`, or `_`) at the
+// line start, optionally followed by trailing whitespace, with
+// no other content.
+//
+// `start` and `end` are byte offsets bracketing the line (no
+// trailing newline). The returned length is the number of
+// marker runes (which equals byte count for these ASCII
+// markers) — used by parseHRuleParagraph to size the emitted
+// span.
+func detectHRule(src string, start, end int) int {
+	if start >= end {
+		return 0
+	}
+	c := src[start]
+	if c != '-' && c != '*' && c != '_' {
+		return 0
+	}
+	// Count the run of identical markers.
+	n := 0
+	for start+n < end && src[start+n] == c {
+		n++
+	}
+	if n < 3 {
+		return 0
+	}
+	// Anything after the marker run must be whitespace.
+	for i := start + n; i < end; i++ {
+		switch src[i] {
+		case ' ', '\t', '\r':
+		default:
+			return 0
+		}
+	}
+	return n
 }
 
 // detectHeadingLevel returns the ATX heading level (1-6) for a
@@ -293,6 +368,18 @@ func scanParagraphs(src string) []paragraphRange {
 				ByteEnd:      lineEnd,
 				RuneStart:    lineRuneStart,
 				HeadingLevel: level,
+			})
+			return
+		}
+		// HRule line: same handling as a heading — own
+		// one-line paragraph, ends any prior plain paragraph.
+		if detectHRule(src, lineStart, lineEnd) > 0 {
+			commit(lineStart)
+			out = append(out, paragraphRange{
+				ByteStart: lineStart,
+				ByteEnd:   lineEnd,
+				RuneStart: lineRuneStart,
+				IsHRule:   true,
 			})
 			return
 		}
