@@ -1004,3 +1004,87 @@ func TestParseBoxScale(t *testing.T) {
 		t.Errorf("BoxPayload = %q, want image:foo.png", runs[0].Style.BoxPayload)
 	}
 }
+
+// --- Family flag tests (Phase 3 round 2) ---------------------------------
+
+// TestParseSpanFamilyCode: `family=code` parses to Family="code".
+func TestParseSpanFamilyCode(t *testing.T) {
+	data := "s 0 5 - family=code"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.Family != "code" {
+		t.Errorf("Family = %q, want %q", runs[0].Style.Family, "code")
+	}
+}
+
+// TestParseSpanFamilyAbsentMeansEmpty: omitting family leaves
+// Family at its zero value ("").
+func TestParseSpanFamilyAbsentMeansEmpty(t *testing.T) {
+	data := "s 0 5 - bold"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.Family != "" {
+		t.Errorf("Family = %q, want \"\" (unset)", runs[0].Style.Family)
+	}
+}
+
+// TestParseSpanFamilyWithOtherFlags: family coexists with bold,
+// italic, scale in any order.
+func TestParseSpanFamilyWithOtherFlags(t *testing.T) {
+	cases := []string{
+		"s 0 5 - bold family=code",
+		"s 0 5 - family=code bold",
+		"s 0 5 - italic family=code scale=1.5",
+		"s 0 5 - scale=2 family=code bold",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			runs, _, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Fatalf("parseSpanMessage: %v", err)
+			}
+			if runs[0].Style.Family != "code" {
+				t.Errorf("Family not parsed; line was %q", data)
+			}
+		})
+	}
+}
+
+// TestParseSpanFamilyErrors: empty value and unknown family
+// names are errors.
+func TestParseSpanFamilyErrors(t *testing.T) {
+	cases := []struct {
+		data string
+		why  string
+	}{
+		{"s 0 5 - family=", "empty rejected"},
+		{"s 0 5 - family=serif", "unknown family rejected"},
+		{"s 0 5 - family=GoMono", "Plan 9 path rejected"},
+		{"s 0 5 - family=Code", "case-sensitive rejected (only lowercase 'code')"},
+		{"s 0 5 - family=fancy", "arbitrary name rejected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.why, func(t *testing.T) {
+			_, _, _, err := parseSpanMessage(tc.data, 100)
+			if err == nil {
+				t.Errorf("%q: expected error (%s), got nil", tc.data, tc.why)
+			}
+		})
+	}
+}
+
+// TestParseBoxFamily: family flag also applies to b-lines.
+func TestParseBoxFamily(t *testing.T) {
+	data := "b 0 1 100 50 - - family=code"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.Family != "code" {
+		t.Errorf("Family = %q, want code", runs[0].Style.Family)
+	}
+}

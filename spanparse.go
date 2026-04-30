@@ -158,6 +158,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 
 	var bold, italic, hidden bool
 	var scale float64
+	var family string
 	for _, flag := range fields[flagStart:] {
 		switch {
 		case flag == "bold":
@@ -172,6 +173,12 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 				return 0, 0, StyleRun{}, perr
 			}
 			scale = s
+		case strings.HasPrefix(flag, "family="):
+			f, perr := parseFamilyFlag(flag)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			family = f
 		default:
 			return 0, 0, StyleRun{}, fmt.Errorf("unknown span flag: %q", flag)
 		}
@@ -186,6 +193,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			Italic: italic,
 			Hidden: hidden,
 			Scale:  scale,
+			Family: family,
 		},
 	}
 	return offset, length, run, nil
@@ -196,6 +204,29 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 // rejects them to surface producer bugs rather than silently
 // degrade.
 const maxScale = 10.0
+
+// validFamilies lists the family-name values v1 accepts. Adding
+// a new family is a Phase 3 round of its own (each requires
+// edwood-side font registry support); the parser deliberately
+// rejects unknown names so producer mistakes surface loudly
+// rather than silently rendering at the default font.
+var validFamilies = map[string]bool{
+	"code": true,
+}
+
+// parseFamilyFlag parses a "family=NAME" flag token and returns
+// the validated family name. Rejects empty values and any name
+// not in validFamilies. Per Phase 3 round 2 design.
+func parseFamilyFlag(flag string) (string, error) {
+	val := strings.TrimPrefix(flag, "family=")
+	if val == "" {
+		return "", fmt.Errorf("family flag missing value: %q", flag)
+	}
+	if !validFamilies[val] {
+		return "", fmt.Errorf("unknown family name: %q", flag)
+	}
+	return val, nil
+}
 
 // parseScaleFlag parses a "scale=N.N" flag token and returns
 // the validated scale value. Rejects: empty, non-numeric,
@@ -261,6 +292,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 	var fg, bg color.Color
 	var bold, italic, hidden bool
 	var scale float64
+	var family string
 	var payloadParts []string
 	idx := 4
 	inPayload := false
@@ -321,6 +353,13 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			}
 			scale = s
 			idx++
+		case strings.HasPrefix(f, "family="):
+			fam, perr := parseFamilyFlag(f)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			family = fam
+			idx++
 		default:
 			// Start of payload — collect this and all remaining tokens.
 			inPayload = true
@@ -340,6 +379,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			Italic:     italic,
 			Hidden:     hidden,
 			Scale:      scale,
+			Family:     family,
 			IsBox:      true,
 			BoxWidth:   width,
 			BoxHeight:  height,
