@@ -220,6 +220,101 @@ func TestParseEmphasisDoesNotSpanParagraphs(t *testing.T) {
 	}
 }
 
+// --- Heading tests (Phase 3 round 1) -----------------------------------
+
+// TestParseATXHeadingH1 covers basic H1 detection: `# title`
+// produces one scaled span over the heading text. The `# `
+// markup runes remain in the body (not part of the span).
+func TestParseATXHeadingH1(t *testing.T) {
+	src := "# Hello"
+	// Runes: #=0 ' '=1 H=2 e=3 l=4 l=5 o=6
+	// Heading span: offset 2, length 5, Scale=2.0.
+	want := []Span{{Offset: 2, Length: 5, Scale: 2.0}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseATXHeadingLevels: H1-H6 produce the documented
+// scale values (mirrors rich/style.go's StyleH1/H2/H3 and
+// extrapolates for H4-H6).
+func TestParseATXHeadingLevels(t *testing.T) {
+	cases := []struct {
+		src   string
+		scale float64
+	}{
+		{"# H1", 2.0},
+		{"## H2", 1.5},
+		{"### H3", 1.25},
+		{"#### H4", 1.1},
+		{"##### H5", 1.05},
+		{"###### H6", 1.0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.src, func(t *testing.T) {
+			spans := Parse(tc.src)
+			if len(spans) != 1 {
+				t.Fatalf("got %d spans, want 1: %+v", len(spans), spans)
+			}
+			if spans[0].Scale != tc.scale {
+				t.Errorf("Scale = %v, want %v", spans[0].Scale, tc.scale)
+			}
+		})
+	}
+}
+
+// TestParseHeadingNeedsSpaceAfterHash: `#abc` is NOT a heading
+// (no space after #). v1 treats it as plain text.
+func TestParseHeadingNeedsSpaceAfterHash(t *testing.T) {
+	if got := Parse("#nospace"); len(got) != 0 {
+		t.Errorf("Parse(%q) = %v, want empty (no heading without space)", "#nospace", got)
+	}
+}
+
+// TestParseHeadingTooManyHashes: 7+ `#`s is not a heading
+// (CommonMark caps at 6); v1 treats as plain text.
+func TestParseHeadingTooManyHashes(t *testing.T) {
+	if got := Parse("####### too many"); len(got) != 0 {
+		t.Errorf("Parse(7-hash line) = %v, want empty", got)
+	}
+}
+
+// TestParseHeadingMidParagraph: `#` mid-line isn't a heading.
+// Heading detection is line-anchored.
+func TestParseHeadingMidParagraph(t *testing.T) {
+	if got := Parse("foo # bar"); len(got) != 0 {
+		t.Errorf("Parse(mid-line #) = %v, want empty", got)
+	}
+}
+
+// TestParseHeadingBreaksPriorParagraph: a heading line ends the
+// prior paragraph even without a blank line between. After the
+// heading, a non-blank line is its own new paragraph.
+func TestParseHeadingBreaksPriorParagraph(t *testing.T) {
+	src := "intro\n# Title\nafter"
+	// Runes: i=0 n=1 t=2 r=3 o=4 \n=5 #=6 ' '=7 T=8 i=9 t=10 l=11 e=12 \n=13 a=14 f=15 t=16 e=17 r=18
+	// Heading span: offset 8, length 5 ("Title"), Scale=2.0.
+	want := []Span{{Offset: 8, Length: 5, Scale: 2.0}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseEmphasisInsideHeading: emphasis runs inside a
+// heading carry both their flag and the heading's Scale (the
+// Parse-time merge decision from the design doc).
+func TestParseEmphasisInsideHeading(t *testing.T) {
+	src := "## *important* title"
+	// Runes: #=0 #=1 ' '=2 *=3 i=4 m=5 p=6 o=7 r=8 t=9 a=10 n=11 t=12 *=13 ' '=14 t=15 i=16 t=17 l=18 e=19
+	// Heading content: offset 3..20 (length 17). Scale=1.5 over the whole.
+	// Emphasis: italic over "important" at offset 4 length 9.
+	// Per the merge decision: the heading-scaled regions
+	// outside the emphasis emit ONE span with Scale only;
+	// the emphasis emits with both Scale AND italic.
+	want := []Span{
+		{Offset: 3, Length: 1, Scale: 1.5},  // "*"
+		{Offset: 4, Length: 9, Scale: 1.5, Italic: true}, // "important"
+		{Offset: 13, Length: 7, Scale: 1.5}, // "* title"
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
 // TestParseEmphasisAcrossParagraphs: spans in separate
 // paragraphs preserve correct body-relative offsets (rune
 // counts include the blank-line newlines between paragraphs).

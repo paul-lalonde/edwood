@@ -1373,3 +1373,39 @@ func TestZeroxFontInheritance(t *testing.T) {
 		t.Error("parent fontTables should be nil — cache must not be shared")
 	}
 }
+
+// --- Scale mapping tests (Phase 3 round 1) -------------------------------
+
+// TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne: StyleAttrs.Scale=0
+// (the unset sentinel) maps to rich.Style.Scale=1.0 (body baseline).
+func TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne(t *testing.T) {
+	sa := StyleAttrs{Scale: 0}
+	got := styleAttrsToRichStyle(sa)
+	if got.Scale != 1.0 {
+		t.Errorf("Scale = %v, want 1.0 (Scale=0 must map to 1.0 baseline)", got.Scale)
+	}
+}
+
+// TestStyleAttrsToRichStyle_ScalePassedThrough: positive Scale
+// values pass through directly (no transformation, no clamp).
+// The parser already clamped/validated.
+func TestStyleAttrsToRichStyle_ScalePassedThrough(t *testing.T) {
+	cases := []float64{0.5, 1.0, 1.25, 1.5, 2.0, 5.0}
+	for _, scale := range cases {
+		sa := StyleAttrs{Scale: scale}
+		got := styleAttrsToRichStyle(sa)
+		if got.Scale != scale {
+			t.Errorf("Scale=%v passed through as %v", scale, got.Scale)
+		}
+	}
+}
+
+// TestBoxStyleToRichStyle_ScaleAlsoPassedThrough: the box-style
+// path also honors Scale (consistency with span path).
+func TestBoxStyleToRichStyle_ScaleAlsoPassedThrough(t *testing.T) {
+	sa := StyleAttrs{Scale: 1.5, IsBox: true, BoxWidth: 100, BoxHeight: 50}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.Scale != 1.5 {
+		t.Errorf("box Scale = %v, want 1.5", got.Scale)
+	}
+}

@@ -17,23 +17,128 @@ type Span struct {
 	// simultaneously (bold-italic).
 	Bold   bool
 	Italic bool
+	// Scale is the font-size multiplier (1.0 = body baseline).
+	// 0 is the unset sentinel — emit() omits the `scale=` flag.
+	// Headings emit Scale=2.0 (H1) through 1.0 (H6); emphasis
+	// inside a heading inherits the heading's Scale per the
+	// Parse-time merge decision (see phase3-r1-font-scale.md).
+	Scale float64
 }
 
 // Parse takes the markdown source and returns the list of styled
 // runs that should be emitted to the spans file. Plain text
 // produces no spans (default styling suffices); styled runs come
-// from emphasis (`*x*`, `**x**`, ...) and inline links
-// (`[text](url)`).
-//
-// At Phase 2.2 (paragraph parsing scaffold) Parse returns an
-// empty slice for any input. The paragraph-walk machinery is in
-// place for rows 2.3 (emphasis) and 2.4 (links) to plug into.
+// from emphasis, inline links, and ATX headings.
 //
 // Offsets and lengths are in runes (R7 of md2spans.design.md).
 func Parse(src string) []Span {
 	var spans []Span
 	for _, p := range scanParagraphs(src) {
-		spans = append(spans, parseParagraph(src, p)...)
+		if p.HeadingLevel > 0 {
+			spans = append(spans, parseHeadingParagraph(src, p)...)
+		} else {
+			spans = append(spans, parseParagraph(src, p)...)
+		}
+	}
+	return spans
+}
+
+// parseHeadingParagraph emits scaled spans for an ATX heading
+// paragraph. Per the Phase 3 round 1 design, the entire heading
+// content (the runes after the `# ` opener) is covered by a
+// span at the heading's scale; emphasis runs inside the heading
+// emit additional spans that carry BOTH their flag and the
+// heading's scale (the Parse-time merge).
+//
+// The `#` opener runes themselves are NOT covered by any span
+// — they remain at body baseline, consistent with v1's
+// "markup runes visible at body scale" stance. (CommonMark hides
+// the opener in rendered HTML; v1 leaves it visible to make
+// Markdown editing self-consistent. Hiding via the `Hidden`
+// protocol flag is future work.)
+func parseHeadingParagraph(src string, p paragraphRange) []Span {
+	scale := headingScale[p.HeadingLevel]
+	if scale == 0 {
+		// Defensive: H6's scale is 1.0, which we still want as
+		// a rendered scale to keep the line height computation
+		// consistent. headingScale[6] == 1.0 already; the only
+		// path to scale==0 here is HeadingLevel out of range.
+		return nil
+	}
+
+	runes := []rune(src[p.ByteStart:p.ByteEnd])
+	// Locate the heading content: skip the leading `#`s and the
+	// single space (if present). detectHeadingLevel guarantees
+	// 1-6 `#` runes followed by a space or end-of-line.
+	contentStart := p.HeadingLevel
+	if contentStart < len(runes) && runes[contentStart] == ' ' {
+		contentStart++
+	}
+	if contentStart >= len(runes) {
+		// Empty heading (`#` with nothing after). No span.
+		return nil
+	}
+
+	// Run the inline tokenizer over the heading content. Each
+	// emphasis / link span gets the heading's Scale layered on
+	// top of its existing flags. Default-content gaps are filled
+	// with Scale-only spans so the line height is consistent.
+	contentRuneStart := p.RuneStart + contentStart
+	innerSpans := parseInlineSpans(runes[contentStart:], contentRuneStart)
+
+	// Compose the contiguous heading-content output. Walk the
+	// inner spans (sorted by Offset, non-overlapping) and emit
+	// a Scale-only span for each gap, then the inner span with
+	// Scale added.
+	var out []Span
+	cursor := contentRuneStart
+	contentEnd := p.RuneStart + len(runes)
+	for _, s := range innerSpans {
+		if s.Offset > cursor {
+			out = append(out, Span{
+				Offset: cursor,
+				Length: s.Offset - cursor,
+				Scale:  scale,
+			})
+		}
+		s.Scale = scale
+		out = append(out, s)
+		cursor = s.Offset + s.Length
+	}
+	if cursor < contentEnd {
+		out = append(out, Span{
+			Offset: cursor,
+			Length: contentEnd - cursor,
+			Scale:  scale,
+		})
+	}
+	return out
+}
+
+// parseInlineSpans runs the emphasis and link tokenizers over
+// `runes` (a paragraph's content), returning Span values whose
+// Offsets are body-absolute (runeStart + per-paragraph index).
+// Identical to parseParagraph's inner logic but as a reusable
+// helper that parseHeadingParagraph also calls.
+func parseInlineSpans(runes []rune, runeStart int) []Span {
+	var spans []Span
+	for i := 0; i < len(runes); {
+		switch c := runes[i]; {
+		case c == '*' || c == '_':
+			s, advance, ok := tryEmphasis(runes, i, runeStart)
+			if ok {
+				spans = append(spans, s)
+			}
+			i += advance
+		case c == '[':
+			s, advance, ok := tryLink(runes, i, runeStart)
+			if ok {
+				spans = append(spans, s)
+			}
+			i += advance
+		default:
+			i++
+		}
 	}
 	return spans
 }
@@ -42,14 +147,69 @@ func Parse(src string) []Span {
 // ByteStart / ByteEnd are byte offsets into src (used by the
 // scanner internally); RuneStart is the paragraph's rune
 // position in the body (the unit emitted to the spans protocol).
+//
+// HeadingLevel is 0 for plain paragraphs, 1-6 for ATX headings
+// (`# h1` through `###### h6`). Heading paragraphs are exactly
+// one source line; scanParagraphs splits a heading line into
+// its own paragraph regardless of surrounding blank lines.
 type paragraphRange struct {
 	ByteStart, ByteEnd int
 	RuneStart          int
+	HeadingLevel       int
+}
+
+// headingScale maps an ATX heading level (1-6) to its font
+// scale multiplier. Values for H1-H3 mirror rich/style.go's
+// StyleH1/H2/H3; H4-H6 extrapolate gently rather than reverting
+// to body size at H4.
+var headingScale = [7]float64{
+	0:   0,    // plain paragraph (sentinel; not used)
+	1:   2.0,  // H1
+	2:   1.5,  // H2
+	3:   1.25, // H3
+	4:   1.1,  // H4
+	5:   1.05, // H5
+	6:   1.0,  // H6 (visually distinct via bold; same scale as body)
+}
+
+// detectHeadingLevel returns the ATX heading level (1-6) for a
+// line whose [start, end) range in src spans the line's
+// content (no trailing newline). Returns 0 if the line is not
+// a heading.
+//
+// ATX heading rules per md2spans v1 / Phase 3 round 1:
+//   - 1-6 leading `#` characters.
+//   - Followed by a space character, OR end of line.
+//   - No leading whitespace (CommonMark allows up to 3 leading
+//     spaces; v1 doesn't bother).
+//
+// Trailing `#` stripping (CommonMark close-form) is NOT
+// implemented in v1: `## title ##` produces a heading with
+// content "title ##" rather than "title".
+func detectHeadingLevel(src string, start, end int) int {
+	n := 0
+	for i := start; i < end && i < start+6 && src[i] == '#'; i++ {
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	// Must be followed by a space or end-of-line.
+	if start+n == end {
+		return n
+	}
+	if src[start+n] == ' ' {
+		return n
+	}
+	return 0
 }
 
 // scanParagraphs walks src and returns one paragraphRange per
-// paragraph (a maximal run of consecutive non-blank lines). A
-// blank line is a line whose contents are whitespace-only.
+// paragraph. A plain paragraph is a maximal run of consecutive
+// non-blank lines; a blank line is a line whose contents are
+// whitespace-only. ATX heading lines (`# title` … `###### `)
+// each form their own one-line paragraph regardless of
+// surrounding blank lines, with HeadingLevel set 1-6.
 //
 // Tracking RuneStart in lockstep with the byte cursor lets later
 // per-paragraph processing emit rune-indexed spans without
@@ -82,6 +242,19 @@ func scanParagraphs(src string) []paragraphRange {
 		}
 		if blank {
 			commit(lineStart)
+			return
+		}
+		// Heading line ends any prior plain paragraph and is its
+		// own one-line paragraph. Trailing newline (if any) is
+		// not part of the heading paragraph's bounds.
+		if level := detectHeadingLevel(src, lineStart, lineEnd); level > 0 {
+			commit(lineStart)
+			out = append(out, paragraphRange{
+				ByteStart:    lineStart,
+				ByteEnd:      lineEnd,
+				RuneStart:    lineRuneStart,
+				HeadingLevel: level,
+			})
 			return
 		}
 		if !inParagraph {
@@ -140,26 +313,7 @@ const linkBlue = "#0000cc"
 // color, not the bold. Documented divergence.
 func parseParagraph(src string, p paragraphRange) []Span {
 	runes := []rune(src[p.ByteStart:p.ByteEnd])
-	var spans []Span
-	for i := 0; i < len(runes); {
-		switch c := runes[i]; {
-		case c == '*' || c == '_':
-			s, advance, ok := tryEmphasis(runes, i, p.RuneStart)
-			if ok {
-				spans = append(spans, s)
-			}
-			i += advance
-		case c == '[':
-			s, advance, ok := tryLink(runes, i, p.RuneStart)
-			if ok {
-				spans = append(spans, s)
-			}
-			i += advance
-		default:
-			i++
-		}
-	}
-	return spans
+	return parseInlineSpans(runes, p.RuneStart)
 }
 
 // tryEmphasis attempts to parse an emphasis run starting at

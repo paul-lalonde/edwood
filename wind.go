@@ -2360,6 +2360,16 @@ func (w *Window) initStyledMode() {
 	italicFont := ft.italic
 	boldItalicFont := ft.boldItalic
 
+	// Scaled fonts for headings — same set previewcmd loads.
+	// Without these, fontForStyle in rich.Frame falls through to
+	// the base font for any Scale > 1, so spans-protocol scale=N
+	// directives (added in Phase 3 round 1) would render at body
+	// size despite the StyleAttrs.Scale field being plumbed
+	// through styleAttrsToRichStyle correctly.
+	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
+	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
+	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
+
 	rt := NewRichText()
 
 	rtOpts := []RichTextOption{
@@ -2385,6 +2395,15 @@ func (w *Window) initStyledMode() {
 	}
 	if boldItalicFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
+	}
+	if h1Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(2.0, h1Font))
+	}
+	if h2Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.5, h2Font))
+	}
+	if h3Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
 	}
 
 	// Create an image cache for box elements that reference images.
@@ -2633,9 +2652,18 @@ func (w *Window) buildStyledContent() rich.Content {
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
+//
+// Scale: StyleAttrs.Scale==0 is the "unset" sentinel and maps
+// to rich.Style.Scale=1.0 (body baseline). A positive Scale is
+// passed through directly. Per the spans-protocol round 1 design,
+// the parser rejects negative / zero / non-finite Scale values,
+// so this branch never sees them.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
+	}
+	if sa.Scale > 0 {
+		s.Scale = sa.Scale
 	}
 	s.Fg = sa.Fg
 	s.Bg = sa.Bg
@@ -2654,6 +2682,9 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 		ImageWidth:  sa.BoxWidth,
 		ImageHeight: sa.BoxHeight,
 		ImageAlt:    altText,
+	}
+	if sa.Scale > 0 {
+		s.Scale = sa.Scale
 	}
 	s.Fg = sa.Fg
 	s.Bg = sa.Bg

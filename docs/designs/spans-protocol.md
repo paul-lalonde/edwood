@@ -84,9 +84,21 @@ Defines a styled run of text. Fields:
   the field starts with `#` or is `-`, it's parsed as `<bg>`;
   any other token is the first flag. (Discriminated by
   appearance, not by position.)
-- `<flag>...`: zero or more of `bold`, `italic`, `hidden`.
-  Order doesn't matter; each is a single token. Unknown flags
-  are an error.
+- `<flag>...`: zero or more of `bold`, `italic`, `hidden`,
+  `scale=N.N`. Order doesn't matter; each is a single token.
+  Unknown flags are an error.
+
+**`scale=N.N`** (added Phase 3 round 1):
+- Value is a positive float in standard `strconv.ParseFloat`
+  syntax (e.g. `scale=2.0`, `scale=1.5`, `scale=1.25`,
+  `scale=0.875`, `scale=2`). Renders the run at N× the body
+  font size.
+- Validation: must parse as finite, > 0, and ≤ 10.0. Negative,
+  zero, NaN, Inf, and values above the cap are errors.
+- Absent flag = unset = renders at 1.0 (body baseline). The
+  unset case is a distinct StyleAttrs from explicit
+  `scale=1.0` (the span store treats them as different runs);
+  consumers should prefer omitting the flag when scale is 1.0.
 
 **Examples**:
 ```
@@ -95,6 +107,8 @@ s 0 5 - bold
 s 0 5 - - italic            ; explicit default fg, default bg, italic
 s 5 3 #ff0000 #ffff00 bold  ; red on yellow bold
 s 7 4 - bold italic
+s 0 12 - scale=2.0          ; H1 heading text
+s 13 6 - bold scale=1.5     ; bold H2 content
 ```
 
 ### `b` — Box
@@ -236,8 +250,8 @@ The following extensions are planned per
 `docs/designs/features/markdown-externalization.md`. Each will
 update this spec in lockstep:
 
-- **Round 1 — font scale**: new `<flag>` `scale=N.N` (e.g.
-  `scale=2.0` for H1).
+- **Round 1 — font scale**: ✓ landed (April 2026). New `<flag>`
+  `scale=N.N` (e.g. `scale=2.0` for H1). See above.
 - **Round 2 — font family**: new `<flag>` `family=code` (etc.).
 - **Round 3 — inline rule**: new directive (or new box payload
   kind `rule:width:height`).

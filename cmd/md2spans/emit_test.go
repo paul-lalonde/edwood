@@ -189,6 +189,47 @@ func TestFormatSpansOverlapDefense(t *testing.T) {
 	}
 }
 
+// --- Scale emission tests (Phase 3 round 1) -----------------------------
+
+// TestFormatSpansScaleOmittedForZero: Scale=0 (unset sentinel)
+// produces no `scale=` flag on the wire.
+func TestFormatSpansScaleOmittedForZero(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 5, Italic: true, Scale: 0}}, 5)
+	want := "s 0 5 - italic\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansScaleEmitted: Scale > 0 produces a
+// `scale=N.N` flag.
+func TestFormatSpansScaleEmitted(t *testing.T) {
+	cases := []struct {
+		span Span
+		want string
+	}{
+		{Span{Offset: 0, Length: 5, Scale: 2.0}, "s 0 5 - scale=2\n"},
+		{Span{Offset: 0, Length: 5, Scale: 1.5}, "s 0 5 - scale=1.5\n"},
+		{Span{Offset: 0, Length: 5, Scale: 1.25}, "s 0 5 - scale=1.25\n"},
+	}
+	for _, tc := range cases {
+		got := FormatSpans([]Span{tc.span}, 5)
+		if got != tc.want {
+			t.Errorf("Span %+v: got %q, want %q", tc.span, got, tc.want)
+		}
+	}
+}
+
+// TestFormatSpansScaleWithFlags: scale coexists with bold/italic
+// on the wire.
+func TestFormatSpansScaleWithFlags(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 5, Bold: true, Italic: true, Scale: 1.5}}, 5)
+	want := "s 0 5 - bold italic scale=1.5\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {

@@ -11,6 +11,16 @@ type StyleAttrs struct {
 	Italic bool
 	Hidden bool // reserved for future use
 
+	// Scale is a font-size multiplier relative to the body font.
+	// 0 is the unset sentinel: it renders at 1.0 (body size) and
+	// indicates "no scaling requested." 1.0 explicit is a
+	// distinct value that compares not-equal to 0; downstream
+	// translation (styleAttrsToRichStyle) maps 0 → rich.Style.Scale
+	// = 1.0. Wire format: `scale=N.N` flag on s/b directives;
+	// omitted on the wire means 0 here. Added in Phase 3 round
+	// 1 of the markdown-externalization plan.
+	Scale float64
+
 	// Box fields (zero values = not a box)
 	IsBox      bool
 	BoxWidth   int    // pixels
@@ -32,12 +42,19 @@ func colorEqual(a, b color.Color) bool {
 }
 
 // Equal reports whether a and b have identical styling.
+//
+// Scale comparison is bit-exact (Go's `==`). Producers emit a
+// fixed string per scale value, so parsed floats round-trip
+// byte-exactly; no epsilon needed. NaN compares not-equal to
+// itself per IEEE-754, but parseSpanLine rejects NaN so it
+// can't reach Equal().
 func (a StyleAttrs) Equal(b StyleAttrs) bool {
 	return colorEqual(a.Fg, b.Fg) &&
 		colorEqual(a.Bg, b.Bg) &&
 		a.Bold == b.Bold &&
 		a.Italic == b.Italic &&
 		a.Hidden == b.Hidden &&
+		a.Scale == b.Scale &&
 		a.IsBox == b.IsBox &&
 		a.BoxWidth == b.BoxWidth &&
 		a.BoxHeight == b.BoxHeight &&
