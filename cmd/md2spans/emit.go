@@ -46,6 +46,15 @@ func FormatSpans(styled []Span, totalRunes int) string {
 		if s.Italic {
 			b.WriteString(" italic")
 		}
+		// Scale==0 is the unset sentinel (renders at 1.0
+		// baseline). Omit the flag in that case so plain text
+		// produces minimal wire output. A producer that
+		// chooses to emit explicit scale=1.0 (Span.Scale=1.0)
+		// will get that on the wire — it round-trips through
+		// the parser as Scale=1.0, distinct from unset.
+		if s.Scale != 0 {
+			fmt.Fprintf(&b, " scale=%g", s.Scale)
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -89,6 +98,7 @@ func fillGaps(styled []Span, totalRunes int) []Span {
 			Fg:     s.Fg,
 			Bold:   s.Bold,
 			Italic: s.Italic,
+			Scale:  s.Scale,
 		})
 		cursor = end
 	}
