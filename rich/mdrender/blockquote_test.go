@@ -35,12 +35,12 @@ func buildFrameWithContent(t *testing.T, d draw.Display, rect image.Rectangle, c
 	bg, _ := d.AllocImage(image.Rect(0, 0, 1, 1), d.ScreenImage().Pix(), true, 0xFFFFFFFF)
 	fg, _ := d.AllocImage(image.Rect(0, 0, 1, 1), d.ScreenImage().Pix(), true, 0x000000FF)
 	f := rich.NewFrame()
-	f.Init(rect,
-		rich.WithDisplay(d),
+	f.Init(rich.WithDisplay(d),
 		rich.WithFont(font),
 		rich.WithBackground(bg),
 		rich.WithTextColor(fg),
 	)
+	f.SetRect(rect)
 	f.SetContent(content)
 	return f
 }
@@ -84,7 +84,7 @@ func hasFillRectWidth(op string, want int) bool {
 	if close2 < 0 {
 		return false
 	}
-	first := op[open1+1 : open1+dash]   // "x0,y0"
+	first := op[open1+1 : open1+dash]                // "x0,y0"
 	second := op[open1+dash+3 : open1+dash+3+close2] // "x1,y1"
 	x0, ok := parseFirstInt(first)
 	if !ok {

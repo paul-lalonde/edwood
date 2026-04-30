@@ -270,10 +270,10 @@ func TestTabBoxWidth(t *testing.T) {
 	maxtab := 80 // Tab stop every 80 pixels (8 characters * 10 pixels)
 
 	tests := []struct {
-		name   string
-		xPos   int   // Current X position on the line
-		minX   int   // Left edge of frame (for tab alignment)
-		want   int   // Expected tab width
+		name string
+		xPos int // Current X position on the line
+		minX int // Left edge of frame (for tab alignment)
+		want int // Expected tab width
 	}{
 		{
 			name: "tab at start of line",

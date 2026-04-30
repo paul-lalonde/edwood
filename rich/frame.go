@@ -22,7 +22,16 @@ type Option func(*frameImpl)
 // Frame renders styled text content with selection support.
 type Frame interface {
 	// Initialization
-	Init(r image.Rectangle, opts ...Option)
+	// Init applies options to a freshly-constructed frame. The
+	// frame's rectangle is left at its zero value; callers must
+	// drive geometry via SetRect afterward (typically a wrapper
+	// like RichText that knows the parent layout's coordinate
+	// system). Phase 1.4 of the markdown-externalization plan
+	// removed the rect from Init's signature to settle the
+	// architect-review finding P1-6 (geometry ownership
+	// ambiguity) on side D — RichText / wrapper owns geometry,
+	// frame is passive.
+	Init(opts ...Option)
 	Clear()
 
 	// Content
@@ -60,11 +69,11 @@ type Frame interface {
 	ScrollSnap() ScrollSnap
 	MaxLines() int
 	VisibleLines() int
-	TotalLines() int         // Total number of layout lines in the content
-	LineStartRunes() []int     // Rune offset at the start of each visual line
-	LinePixelHeights() []int   // Pixel height of each visual line (accounts for images)
-	LinePixelYs() []int        // Rendered Y of each visual line, with inter-line gaps + scrollbar adjustments
-	TotalDocumentHeight() int  // Total rendered height including all inter-line gaps (paragraph, heading, scrollbar)
+	TotalLines() int          // Total number of layout lines in the content
+	LineStartRunes() []int    // Rune offset at the start of each visual line
+	LinePixelHeights() []int  // Pixel height of each visual line (accounts for images)
+	LinePixelYs() []int       // Rendered Y of each visual line, with inter-line gaps + scrollbar adjustments
+	TotalDocumentHeight() int // Total rendered height including all inter-line gaps (paragraph, heading, scrollbar)
 	// LayoutLines returns the laid-out lines from the current
 	// origin (a fresh clone, mutable by the caller). Empty content
 	// returns nil. Transitional accessor consumed by rich/mdrender
@@ -291,9 +300,10 @@ func NewFrame() Frame {
 	}
 }
 
-// Init initializes the frame with the given rectangle and options.
-func (f *frameImpl) Init(r image.Rectangle, opts ...Option) {
-	f.rect = r
+// Init applies the supplied options to the frame. The rect is left
+// at its zero value; callers drive geometry via SetRect. See the
+// Frame interface godoc for the rationale.
+func (f *frameImpl) Init(opts ...Option) {
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -1292,15 +1302,15 @@ func buildLineRegionIndex(numLines int, adjustedRegions []AdjustedBlockRegion) [
 // The render is split into ordered phases. Order is load-bearing:
 // later phases assume earlier ones have laid down their pixels.
 //
-//	1.  block backgrounds       — full-line, behind everything else.
-//	2.  box backgrounds         — inline code etc., behind text.
-//	2b. selection highlight     — between backgrounds and text, so
-//	                              backgrounds don't overdraw it.
-//	4.  text                    — on top of backgrounds.
-//	5.  images and fixed boxes  — at their layout positions.
-//	5b. gutter repaint          — clips horizontal-scroll overflow
-//	                              that crossed into the gutter.
-//	6.  horizontal scrollbars   — on top of everything.
+//  1. block backgrounds       — full-line, behind everything else.
+//  2. box backgrounds         — inline code etc., behind text.
+//     2b. selection highlight     — between backgrounds and text, so
+//     backgrounds don't overdraw it.
+//  4. text                    — on top of backgrounds.
+//  5. images and fixed boxes  — at their layout positions.
+//     5b. gutter repaint          — clips horizontal-scroll overflow
+//     that crossed into the gutter.
+//  6. horizontal scrollbars   — on top of everything.
 //
 // Markdown-specific decoration phases (blockquote borders,
 // horizontal rules, slide-break fills) live in rich/mdrender and

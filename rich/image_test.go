@@ -2103,11 +2103,11 @@ func TestFrameWithImageCache(t *testing.T) {
 
 	// Initialize frame with the image cache option
 	// The frame should accept WithImageCache as a valid option
-	frame.Init(
-		image.Rect(0, 0, 400, 300),
-		WithFont(mockFont),
+	frame.Init(WithFont(mockFont),
 		WithImageCache(cache),
 	)
+	frame.SetRect(
+		image.Rect(0, 0, 400, 300))
 
 	// After init, the frame should have the cache stored
 	// We verify this indirectly by checking that frame operations
@@ -2124,11 +2124,11 @@ func TestFrameWithImageCacheNil(t *testing.T) {
 	mockFont := &testFont{width: 10, height: 14}
 
 	// Should not panic with nil cache
-	frame.Init(
-		image.Rect(0, 0, 400, 300),
-		WithFont(mockFont),
+	frame.Init(WithFont(mockFont),
 		WithImageCache(nil),
 	)
+	frame.SetRect(
+		image.Rect(0, 0, 400, 300))
 
 	// Frame should still work
 	if frame.Rect().Empty() {
@@ -2169,11 +2169,11 @@ func TestFrameWithImageCacheUsedInLayout(t *testing.T) {
 	frame := NewFrame()
 	mockFont := &testFont{width: 10, height: 14}
 
-	frame.Init(
-		image.Rect(0, 0, 400, 300),
-		WithFont(mockFont),
+	frame.Init(WithFont(mockFont),
 		WithImageCache(cache),
 	)
+	frame.SetRect(
+		image.Rect(0, 0, 400, 300))
 
 	// Set content with an image span
 	content := Content{
@@ -2242,11 +2242,11 @@ func TestFrameLayoutUsesCache(t *testing.T) {
 	frame := NewFrame()
 	mockFont := &testFont{width: 10, height: 14}
 
-	frame.Init(
-		image.Rect(0, 0, 300, 200),
-		WithFont(mockFont),
+	frame.Init(WithFont(mockFont),
 		WithImageCache(cache),
 	)
+	frame.SetRect(
+		image.Rect(0, 0, 300, 200))
 
 	// Set content with an image span
 	content := Content{

@@ -129,12 +129,12 @@ func TestRendererPaintsHRuleAtFullWidth(t *testing.T) {
 	textImage := edwoodtest.NewImage(d, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := rich.NewFrame()
-	f.Init(rect,
-		rich.WithDisplay(d),
+	f.Init(rich.WithDisplay(d),
 		rich.WithFont(font),
 		rich.WithBackground(bgImage),
 		rich.WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 	f.SetContent(rich.Content{
 		{Text: string(rich.HRuleRune) + "\n", Style: rich.StyleHRule},
 	})

@@ -18,12 +18,12 @@ func newTestFrameOnDisplay(t *testing.T, display draw.Display, rect image.Rectan
 	bg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
 	fg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
 	f := rich.NewFrame()
-	f.Init(rect,
-		rich.WithDisplay(display),
+	f.Init(rich.WithDisplay(display),
 		rich.WithFont(font),
 		rich.WithBackground(bg),
 		rich.WithTextColor(fg),
 	)
+	f.SetRect(rect)
 	f.SetContent(rich.Plain("hello world"))
 	return f
 }
@@ -115,12 +115,12 @@ func TestRedrawIsPassThrough(t *testing.T) {
 		bg, _ := d.AllocImage(image.Rect(0, 0, 1, 1), d.ScreenImage().Pix(), true, 0xFFFFFFFF)
 		fg, _ := d.AllocImage(image.Rect(0, 0, 1, 1), d.ScreenImage().Pix(), true, 0x000000FF)
 		ff := rich.NewFrame()
-		ff.Init(rect,
-			rich.WithDisplay(d),
+		ff.Init(rich.WithDisplay(d),
 			rich.WithFont(font),
 			rich.WithBackground(bg),
 			rich.WithTextColor(fg),
 		)
+		ff.SetRect(rect)
 		ff.SetContent(rich.Plain("hello world"))
 		return ff
 	}

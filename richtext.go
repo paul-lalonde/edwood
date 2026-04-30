@@ -144,8 +144,9 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 		frameOpts = append(frameOpts, rich.WithDefaultScrollSnap(rt.defaultScrollSnap))
 	}
 
-	// Initialize frame with empty rectangle - will be set on first Render() call
-	rt.frame.Init(image.Rectangle{}, frameOpts...)
+	// Initialize frame; rect is set on first Render() call via
+	// rt.frame.SetRect (see Render below).
+	rt.frame.Init(frameOpts...)
 
 	// Wrap the frame in a markdown-aware Renderer. As of Phase 1.2
 	// of the markdown-externalization plan, blockquote-bar painting
@@ -330,7 +331,6 @@ func (rt *RichText) Render(r image.Rectangle) {
 	}
 }
 
-
 // ScrollClick is the legacy public scrollbar-click API. It synthesizes
 // a click in scrollbar-relative coordinates and delegates to the
 // shared richScrollModel adapter (which is what the unified Scrollbar
@@ -417,7 +417,6 @@ func lineAtDocYRoundUp(docY int, lineYs []int) (lineIdx, offset int) {
 	// docY is past all line starts; clamp to the last line.
 	return len(lineYs) - 1, 0
 }
-
 
 // RichTextOption is a functional option for configuring RichText.
 type RichTextOption func(*RichText)

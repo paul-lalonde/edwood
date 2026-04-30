@@ -20,7 +20,8 @@ func TestSetOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set some content
 	f.SetContent(Plain("hello world\nline two\nline three"))
@@ -45,7 +46,8 @@ func TestGetOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Before setting content or origin, should return 0
 	org := f.GetOrigin()
@@ -73,7 +75,8 @@ func TestOriginZero(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -100,7 +103,8 @@ func TestOriginClear(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 	f.SetOrigin(8)
@@ -131,7 +135,8 @@ func TestOriginUpdateOverwrites(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world\nline two\nline three"))
 
@@ -161,7 +166,8 @@ func TestDisplayFromOrigin(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello\nworld" (hello + newline + world)
 	// Rune positions: h=0, e=1, l=2, l=3, o=4, \n=5, w=6, o=7, r=8, l=9, d=10
@@ -243,7 +249,8 @@ func TestMaxLines(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	maxLines := f.MaxLines()
 	// 300 / 14 = 21.4, so 21 full lines fit
@@ -264,7 +271,8 @@ func TestMaxLinesSmallFrame(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	maxLines := f.MaxLines()
 	if maxLines != 3 {
@@ -280,7 +288,8 @@ func TestMaxLinesNoFont(t *testing.T) {
 	bgImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage))
+	f.SetRect(rect)
 
 	// Without a font, MaxLines should return 0
 	maxLines := f.MaxLines()
@@ -299,7 +308,8 @@ func TestVisibleLines(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with 3 lines: "line1\nline2\nline3"
 	f.SetContent(Plain("line1\nline2\nline3"))
@@ -320,7 +330,8 @@ func TestVisibleLinesEmpty(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// No content set
 	visibleLines := f.VisibleLines()
@@ -339,7 +350,8 @@ func TestVisibleLinesWithOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with 3 lines: "line1\nline2\nline3"
 	// Rune positions: l=0, i=1, n=2, e=3, 1=4, \n=5, l=6, ...
@@ -368,7 +380,8 @@ func TestVisibleLinesSingleLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Single line content
 	f.SetContent(Plain("hello world"))
@@ -391,7 +404,8 @@ func TestVisibleLinesWrapped(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "helloworld" = 10 chars, wraps to 2 lines (hello, world)
 	f.SetContent(Plain("helloworld"))
@@ -414,7 +428,8 @@ func TestFullNotFull(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with only 3 lines - should not be full
 	f.SetContent(Plain("line1\nline2\nline3"))
@@ -435,7 +450,8 @@ func TestFullIsFull(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with 5 lines - should be full (only 3 fit)
 	f.SetContent(Plain("line1\nline2\nline3\nline4\nline5"))
@@ -455,7 +471,8 @@ func TestFullEmpty(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// No content
 	if f.Full() {
@@ -474,7 +491,8 @@ func TestFullExactFit(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with exactly 3 lines - should not be full (exact fit is not overfilled)
 	f.SetContent(Plain("line1\nline2\nline3"))
@@ -495,7 +513,8 @@ func TestFullWithOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with 5 lines
 	f.SetContent(Plain("line1\nline2\nline3\nline4\nline5"))
@@ -531,7 +550,8 @@ func TestOriginYOffset(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello\nworld\nthird"))
 
@@ -571,7 +591,8 @@ func TestOriginYOffsetLayout(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello\nworld\nthird"))
 
@@ -628,7 +649,8 @@ func TestOriginYOffsetClamp(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content with 3 lines, each 14px tall
 	f.SetContent(Plain("hello\nworld\nthird"))

@@ -19,9 +19,9 @@ import (
 
 // Image size limits to prevent memory exhaustion.
 const (
-	MaxImageWidth  = 4096              // Maximum width in pixels
-	MaxImageHeight = 4096              // Maximum height in pixels
-	MaxImageBytes  = 16 * 1024 * 1024  // 16MB uncompressed (RGBA at 4 bytes/pixel)
+	MaxImageWidth  = 4096             // Maximum width in pixels
+	MaxImageHeight = 4096             // Maximum height in pixels
+	MaxImageBytes  = 16 * 1024 * 1024 // 16MB uncompressed (RGBA at 4 bytes/pixel)
 )
 
 // URLImageTimeout is the maximum time to wait for URL image downloads.
@@ -219,10 +219,10 @@ func ConvertToPlan9(img image.Image) ([]byte, error) {
 				// Plan 9 RGBA32 uses little-endian byte order (ABGR in memory).
 				// Note: RGBA() already returns pre-multiplied values for most image types
 				// so we just convert from 16-bit to 8-bit here.
-				data[i] = a                  // byte 0: Alpha
-				data[i+1] = uint8(b32 >> 8)  // byte 1: Blue
-				data[i+2] = uint8(g32 >> 8)  // byte 2: Green
-				data[i+3] = uint8(r32 >> 8)  // byte 3: Red
+				data[i] = a                 // byte 0: Alpha
+				data[i+1] = uint8(b32 >> 8) // byte 1: Blue
+				data[i+2] = uint8(g32 >> 8) // byte 2: Green
+				data[i+3] = uint8(r32 >> 8) // byte 3: Red
 			}
 			i += 4
 		}
@@ -253,10 +253,10 @@ const DefaultMaxParallelLoads = 4
 type ImageCache struct {
 	mu          sync.RWMutex
 	images      map[string]*CachedImage
-	order       []string                    // LRU order (oldest first)
-	maxSize     int                         // Maximum number of cached images
-	maxParallel int                         // max concurrent loads (default 4)
-	sem         chan struct{}               // semaphore for concurrent downloads
+	order       []string                      // LRU order (oldest first)
+	maxSize     int                           // Maximum number of cached images
+	maxParallel int                           // max concurrent loads (default 4)
+	sem         chan struct{}                 // semaphore for concurrent downloads
 	cancelFuncs map[string]context.CancelFunc // per-path cancellation
 }
 
