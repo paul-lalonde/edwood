@@ -117,10 +117,82 @@ func scanParagraphs(src string) []paragraphRange {
 }
 
 // parseParagraph turns one paragraph's source bytes into a list
-// of styled spans. At Phase 2.2 it returns nil — emphasis and
-// link tokenization arrive in 2.3 and 2.4.
+// of styled spans. Emphasis (R4) is handled here; links (R5)
+// arrive in row 2.4.
+//
+// Emphasis matcher: greedy and non-CommonMark-compliant. The
+// matcher pairs delimiter runs by adjacency requiring the
+// CLOSING run to have exactly the same delimiter character and
+// the same count as the opener. `*x*` (count 1) → italic;
+// `**x**` (count 2) → bold; `***x***` (count 3) → bold+italic.
+// Runs of count > 3 are not recognized as emphasis. CommonMark's
+// flanking-rune rules are not applied; `5*x*` is treated as
+// emphasis on "x" the same as ` *x* `. Documented divergence
+// (md2spans.design.md § R4).
 func parseParagraph(src string, p paragraphRange) []Span {
-	_ = src
-	_ = p
-	return nil
+	runes := []rune(src[p.ByteStart:p.ByteEnd])
+	var spans []Span
+	i := 0
+	for i < len(runes) {
+		c := runes[i]
+		if c != '*' && c != '_' {
+			i++
+			continue
+		}
+		n := delimRunLen(runes, i, c)
+		if n > 3 {
+			// Beyond v1's recognized counts; advance past run as literal.
+			i += n
+			continue
+		}
+		closerIdx := findEmphasisCloser(runes, i+n, c, n)
+		if closerIdx < 0 {
+			// No matching closer — leave opener as literal text.
+			i += n
+			continue
+		}
+		spans = append(spans, Span{
+			Offset: p.RuneStart + i + n,
+			Length: closerIdx - (i + n),
+			Bold:   n == 2 || n == 3,
+			Italic: n == 1 || n == 3,
+		})
+		i = closerIdx + n
+	}
+	return spans
+}
+
+// delimRunLen returns the length of the maximal run of character
+// c starting at runes[start], capped at 4 (callers handle counts
+// of 1, 2, 3 specially; >3 is "beyond v1").
+func delimRunLen(runes []rune, start int, c rune) int {
+	n := 0
+	for start+n < len(runes) && runes[start+n] == c && n < 4 {
+		n++
+	}
+	return n
+}
+
+// findEmphasisCloser returns the rune index in runes of the next
+// run of exactly count copies of c, starting search at index
+// `start`. Returns -1 if no such run exists in the remainder.
+//
+// Skip-rule: if a run of c is encountered with a different
+// count, advance past it without matching. This is what makes
+// the matcher "equal-count required". Documented divergence
+// from CommonMark.
+func findEmphasisCloser(runes []rune, start int, c rune, count int) int {
+	i := start
+	for i < len(runes) {
+		if runes[i] != c {
+			i++
+			continue
+		}
+		n := delimRunLen(runes, i, c)
+		if n == count {
+			return i
+		}
+		i += n
+	}
+	return -1
 }
