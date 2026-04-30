@@ -85,8 +85,21 @@ Defines a styled run of text. Fields:
   any other token is the first flag. (Discriminated by
   appearance, not by position.)
 - `<flag>...`: zero or more of `bold`, `italic`, `hidden`,
-  `scale=N.N`. Order doesn't matter; each is a single token.
-  Unknown flags are an error.
+  `scale=N.N`, `family=NAME`. Order doesn't matter; each is a
+  single token. Unknown flags are an error.
+
+**`family=NAME`** (added Phase 3 round 2):
+- NAME is a semantic font-family name from the v1-recognized
+  set: `{code}`. `family=code` says "render this run with the
+  user's monospace font" — edwood maps the name to a loaded
+  font via its existing font registry (e.g.
+  `cmd/edcolor`-style `tryLoadCodeFont`). External tools
+  emit semantic names; they don't see Plan 9 font paths.
+- v1 valid values: `code` (lowercase, exact match).
+- Validation: empty value (`family=`) is an error. Unknown
+  names (e.g. `family=serif`, `family=GoMono`) are errors.
+  Future rounds may extend the recognized set.
+- Absent flag = unset = default font.
 
 **`scale=N.N`** (added Phase 3 round 1):
 - Value is a positive float in standard `strconv.ParseFloat`
@@ -252,7 +265,8 @@ update this spec in lockstep:
 
 - **Round 1 — font scale**: ✓ landed (April 2026). New `<flag>`
   `scale=N.N` (e.g. `scale=2.0` for H1). See above.
-- **Round 2 — font family**: new `<flag>` `family=code` (etc.).
+- **Round 2 — font family**: ✓ landed (April 2026). New `<flag>`
+  `family=NAME` with v1-recognized value `code`. See above.
 - **Round 3 — inline rule**: new directive (or new box payload
   kind `rule:width:height`).
 - **Round 4 — slide / images**: tool-side only; protocol
