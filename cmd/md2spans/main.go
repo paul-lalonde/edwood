@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"9fans.net/go/acme"
 	"9fans.net/go/plan9"
@@ -132,8 +133,10 @@ func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
-	spans := Parse(string(body))
-	return writeSpans(fsys, winid, spans)
+	src := string(body)
+	spans := Parse(src)
+	totalRunes := utf8.RuneCountInString(src)
+	return writeSpans(fsys, winid, spans, totalRunes)
 }
 
 // watchEdits is the v1 body-edit watch loop. Mirrors
@@ -188,7 +191,7 @@ func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
 //
 // If `spans` is empty, writeSpans only issues the clear. The
 // window goes plain.
-func writeSpans(fsys *client.Fsys, winid int, spans []Span) error {
+func writeSpans(fsys *client.Fsys, winid int, spans []Span, totalRunes int) error {
 	fid, err := fsys.Open(fmt.Sprintf("%d/spans", winid), plan9.OWRITE)
 	if err != nil {
 		return fmt.Errorf("open spans: %w", err)
@@ -199,7 +202,7 @@ func writeSpans(fsys *client.Fsys, winid int, spans []Span) error {
 		return fmt.Errorf("write clear: %w", err)
 	}
 
-	payload := FormatSpans(spans)
+	payload := FormatSpans(spans, totalRunes)
 	const maxChunk = 4000
 	for len(payload) > 0 {
 		end := len(payload)
