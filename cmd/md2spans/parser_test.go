@@ -220,6 +220,77 @@ func TestParseEmphasisDoesNotSpanParagraphs(t *testing.T) {
 	}
 }
 
+// --- Inline code tests (Phase 3 round 2) -------------------------------
+
+// TestParseInlineCode covers basic backtick-delimited inline
+// code: `text` produces one span with Family="code" over the
+// inner text. The backtick markup runes remain in the body.
+func TestParseInlineCode(t *testing.T) {
+	src := "`hello`"
+	// Runes: `=0 h=1 e=2 l=3 l=4 o=5 `=6
+	// Code span: offset 1, length 5.
+	want := []Span{{Offset: 1, Length: 5, Family: "code"}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseInlineCodeInSentence: code in plain text gets the
+// right offsets relative to the body.
+func TestParseInlineCodeInSentence(t *testing.T) {
+	src := "Run `make build` first."
+	// Runes: R=0 u=1 n=2 ' '=3 `=4 m=5 a=6 k=7 e=8 ' '=9 b=10 u=11 i=12 l=13 d=14 `=15 ...
+	want := []Span{{Offset: 5, Length: 10, Family: "code"}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseInlineCodeAdjacentToEmphasis: backticks coexist with
+// emphasis markers in the same paragraph; each produces its
+// own span.
+func TestParseInlineCodeAdjacentToEmphasis(t *testing.T) {
+	src := "*pre* `mid` *post*"
+	// Runes:
+	//   *=0 p=1 r=2 e=3 *=4 ' '=5 `=6 m=7 i=8 d=9 `=10 ' '=11 *=12 p=13 o=14 s=15 t=16 *=17
+	want := []Span{
+		{Offset: 1, Length: 3, Italic: true},
+		{Offset: 7, Length: 3, Family: "code"},
+		{Offset: 13, Length: 4, Italic: true},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseUnclosedInlineCodeFallsThrough: no closing backtick
+// → no span; the opening backtick remains literal.
+func TestParseUnclosedInlineCodeFallsThrough(t *testing.T) {
+	if got := Parse("`unclosed code"); len(got) != 0 {
+		t.Errorf("Parse(unclosed) = %v, want empty", got)
+	}
+}
+
+// TestParseInlineCodeInsideHeading: code inside a heading
+// carries BOTH Family="code" AND the heading's Scale (the
+// Parse-time merge for inline runs in heading context).
+func TestParseInlineCodeInsideHeading(t *testing.T) {
+	src := "## Use `make` here"
+	// Runes:
+	//   #=0 #=1 ' '=2 U=3 s=4 e=5 ' '=6 `=7 m=8 a=9 k=10 e=11 `=12 ' '=13 h=14 e=15 r=16 e=17
+	// Heading content: offset 3..18 (length 15). Scale=1.5.
+	// Code span: offset 8, length 4 ("make"), Family="code", Scale=1.5.
+	want := []Span{
+		{Offset: 3, Length: 5, Scale: 1.5},                                  // "Use `"
+		{Offset: 8, Length: 4, Family: "code", Scale: 1.5},                  // "make"
+		{Offset: 12, Length: 6, Scale: 1.5},                                 // "` here"
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseEmptyInlineCode: ` ` / `` is empty; produces no
+// span (zero-length code is protocol noise, same rule as
+// link with empty text).
+func TestParseEmptyInlineCode(t *testing.T) {
+	if got := Parse("``"); len(got) != 0 {
+		t.Errorf("Parse(``) = %v, want empty (zero-length code)", got)
+	}
+}
+
 // --- Heading tests (Phase 3 round 1) -----------------------------------
 
 // TestParseATXHeadingH1 covers basic H1 detection: `# title`

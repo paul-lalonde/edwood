@@ -23,6 +23,12 @@ type Span struct {
 	// inside a heading inherits the heading's Scale per the
 	// Parse-time merge decision (see phase3-r1-font-scale.md).
 	Scale float64
+	// Family is the semantic font-family name (e.g., "code" for
+	// monospace). Empty string is the unset sentinel — emit()
+	// omits the `family=` flag. Inline code (`` `text` ``)
+	// emits Family="code"; inside a heading, the merge attaches
+	// the heading's Scale alongside (see phase3-r2-font-family.md).
+	Family string
 }
 
 // Parse takes the markdown source and returns the list of styled
@@ -115,11 +121,11 @@ func parseHeadingParagraph(src string, p paragraphRange) []Span {
 	return out
 }
 
-// parseInlineSpans runs the emphasis and link tokenizers over
-// `runes` (a paragraph's content), returning Span values whose
-// Offsets are body-absolute (runeStart + per-paragraph index).
-// Identical to parseParagraph's inner logic but as a reusable
-// helper that parseHeadingParagraph also calls.
+// parseInlineSpans runs the emphasis, link, and inline-code
+// tokenizers over `runes` (a paragraph's content), returning
+// Span values whose Offsets are body-absolute (runeStart +
+// per-paragraph index). Reused by both parseParagraph and
+// parseHeadingParagraph.
 func parseInlineSpans(runes []rune, runeStart int) []Span {
 	var spans []Span
 	for i := 0; i < len(runes); {
@@ -136,11 +142,44 @@ func parseInlineSpans(runes []rune, runeStart int) []Span {
 				spans = append(spans, s)
 			}
 			i += advance
+		case c == '`':
+			s, advance, ok := tryCode(runes, i, runeStart)
+			if ok {
+				spans = append(spans, s)
+			}
+			i += advance
 		default:
 			i++
 		}
 	}
 	return spans
+}
+
+// tryCode attempts to parse an inline-code run starting at
+// runes[i] (which must be `` ` ``). On match, returns a span
+// over the inner text with Family="code", and the number of
+// runes consumed (`` `…` `` end-to-end). On no-match (no
+// closing backtick or zero-length content), returns ok=false
+// and 1 (skip past the opening backtick as literal).
+//
+// v1: only single-backtick form; double-backtick form (for
+// code containing single backticks) is deferred.
+func tryCode(runes []rune, i, runeStart int) (Span, int, bool) {
+	closeIdx := indexRune(runes, i+1, '`')
+	if closeIdx < 0 {
+		return Span{}, 1, false
+	}
+	textLen := closeIdx - (i + 1)
+	if textLen <= 0 {
+		// Empty content `` `` — skip the pair without emitting
+		// (zero-length span is protocol noise).
+		return Span{}, closeIdx + 1 - i, false
+	}
+	return Span{
+		Offset: runeStart + i + 1,
+		Length: textLen,
+		Family: "code",
+	}, closeIdx + 1 - i, true
 }
 
 // paragraphRange records a paragraph's bounds in the source.

@@ -55,6 +55,13 @@ func FormatSpans(styled []Span, totalRunes int) string {
 		if s.Scale != 0 {
 			fmt.Fprintf(&b, " scale=%g", s.Scale)
 		}
+		// Family=="" is the unset sentinel; omit the flag.
+		// v1's recognized values are {"code"}; the parser
+		// rejects anything else, so emitting an unknown name
+		// here would produce a write the consumer rejects.
+		if s.Family != "" {
+			fmt.Fprintf(&b, " family=%s", s.Family)
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -99,6 +106,7 @@ func fillGaps(styled []Span, totalRunes int) []Span {
 			Bold:   s.Bold,
 			Italic: s.Italic,
 			Scale:  s.Scale,
+			Family: s.Family,
 		})
 		cursor = end
 	}
