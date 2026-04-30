@@ -20,7 +20,8 @@ func TestSetSelection(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set some content
 	f.SetContent(Plain("hello world"))
@@ -45,7 +46,8 @@ func TestGetSelection(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Before setting content or selection, should return (0, 0)
 	p0, p1 := f.GetSelection()
@@ -73,7 +75,8 @@ func TestSelectionEmptyRange(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -96,7 +99,8 @@ func TestSelectionClear(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 	f.SetSelection(2, 8)
@@ -127,7 +131,8 @@ func TestSelectionFullContent(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "hello" = 5 characters
 	f.SetContent(Plain("hello"))
@@ -149,7 +154,8 @@ func TestSelectionUpdateOverwrites(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 
@@ -179,13 +185,13 @@ func TestDrawSelectionHighlightsRegion(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// Set content: "hello world" = 11 chars
 	f.SetContent(Plain("hello world"))
@@ -226,13 +232,13 @@ func TestDrawSelectionNoHighlightWhenEmpty(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -271,13 +277,13 @@ func TestDrawSelectionMultiLine(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello\nworld" = "hello" (5) + newline (1) + "world" (5)
 	f.SetContent(Plain("hello\nworld"))
@@ -319,13 +325,13 @@ func TestDrawSelectionWrappedLine(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "helloworld" wraps: "hello" on line 1, "world" on line 2
 	f.SetContent(Plain("helloworld"))
@@ -364,13 +370,13 @@ func TestDrawSelectionCorrectPosition(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -425,13 +431,13 @@ func TestDrawSelectionFullLine(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello\nworld"
 	f.SetContent(Plain("hello\nworld"))
@@ -487,13 +493,13 @@ func TestSelectWithMouseSimpleClick(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello world" with 10px per char
 	// Position 5 is at X=50 (the space)
@@ -535,13 +541,13 @@ func TestSelectWithMouseDragForward(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello world" - selecting "ello" (positions 1-5)
 	f.SetContent(Plain("hello world"))
@@ -585,13 +591,13 @@ func TestSelectWithMouseDragBackward(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello world"
 	f.SetContent(Plain("hello world"))
@@ -634,13 +640,13 @@ func TestSelectWithMouseDragMultiLine(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello\nworld" = 6 + 5 = 11 chars total
 	// Position 2 is "l" on first line
@@ -687,13 +693,13 @@ func TestSelectWithMouseSetsFrameSelection(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 
@@ -732,13 +738,13 @@ func TestSelectWithMouseAtFrameEdge(t *testing.T) {
 	selImage := edwoodtest.NewImage(display, "selection-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -773,13 +779,13 @@ func TestSelectWithColor(t *testing.T) {
 	sweepImage := edwoodtest.NewImage(display, "sweep-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// "hello world" with 10px per char
 	f.SetContent(Plain("hello world"))
@@ -835,13 +841,13 @@ func TestSelectWithChordAndColor(t *testing.T) {
 	sweepImage := edwoodtest.NewImage(display, "sweep-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 
@@ -901,13 +907,13 @@ func TestSweepColorCleared(t *testing.T) {
 	sweepImage := edwoodtest.NewImage(display, "sweep-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello world"))
 

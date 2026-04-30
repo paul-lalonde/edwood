@@ -26,17 +26,25 @@ func TestFrameInit(t *testing.T) {
 	f := NewFrame()
 	fi := f.(*frameImpl)
 
-	// Initialize with rect and display
-	f.Init(rect, WithDisplay(display))
+	// Init applies the supplied options. Phase 1.4 of the
+	// markdown-externalization plan removed the rect parameter
+	// from Init; geometry is set separately via SetRect.
+	f.Init(WithDisplay(display))
 
-	// Verify rect is stored
-	if got := f.Rect(); got != rect {
-		t.Errorf("Rect() = %v, want %v", got, rect)
+	// After Init alone, rect is at its zero value.
+	if got := f.Rect(); got != (image.Rectangle{}) {
+		t.Errorf("After Init alone, Rect() = %v, want zero", got)
 	}
 
-	// Verify display is stored
+	// Display option is applied.
 	if fi.display != display {
 		t.Errorf("display not stored correctly")
+	}
+
+	// SetRect updates geometry.
+	f.SetRect(rect)
+	if got := f.Rect(); got != rect {
+		t.Errorf("After SetRect, Rect() = %v, want %v", got, rect)
 	}
 }
 
@@ -48,7 +56,8 @@ func TestFrameInitWithOptions(t *testing.T) {
 	fi := f.(*frameImpl)
 
 	// Test that multiple options can be applied
-	f.Init(rect, WithDisplay(display))
+	f.Init(WithDisplay(display))
+	f.SetRect(rect)
 
 	if fi.display == nil {
 		t.Error("WithDisplay option not applied")
@@ -67,7 +76,8 @@ func TestFrameWithFont(t *testing.T) {
 	fi := f.(*frameImpl)
 
 	// Initialize with display and font
-	f.Init(rect, WithDisplay(display), WithFont(font))
+	f.Init(WithDisplay(display), WithFont(font))
+	f.SetRect(rect)
 
 	// Verify font is stored
 	if fi.font == nil {
@@ -95,7 +105,8 @@ func TestFrameRedrawFillsBackground(t *testing.T) {
 	}
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage))
+	f.SetRect(rect)
 
 	// Clear any draw ops from init
 	display.(edwoodtest.GettableDrawOps).Clear()
@@ -143,7 +154,8 @@ func TestDrawText(t *testing.T) {
 	}
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content
 	f.SetContent(Plain("hello"))
@@ -180,7 +192,8 @@ func TestDrawTextMultipleBoxes(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with two lines
 	f.SetContent(Plain("hello\nworld"))
@@ -219,7 +232,8 @@ func TestDrawTextAtCorrectPosition(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set simple content
 	f.SetContent(Plain("test"))
@@ -267,7 +281,8 @@ func TestDrawTextSecondLinePosition(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with newline
 	f.SetContent(Plain("line1\nline2"))
@@ -325,7 +340,8 @@ func TestDrawTextWithColor(t *testing.T) {
 	defaultTextImage := edwoodtest.NewImage(display, "default-text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.SetRect(rect)
 
 	// Create content with a colored span using blue foreground
 	// Style.Fg is image/color.Color, so we use color.RGBA
@@ -373,7 +389,8 @@ func TestDrawTextWithMultipleColors(t *testing.T) {
 	defaultTextImage := edwoodtest.NewImage(display, "default-text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.SetRect(rect)
 
 	// Create content with multiple colored spans using color.RGBA
 	blueColor := color.RGBA{R: 0, G: 0, B: 153, A: 255}
@@ -431,7 +448,8 @@ func TestDrawTextWithDefaultColor(t *testing.T) {
 	defaultTextImage := edwoodtest.NewImage(display, "default-text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(defaultTextImage))
+	f.SetRect(rect)
 
 	// Plain text with no Fg color specified should use the default text color
 	f.SetContent(Plain("default"))
@@ -467,13 +485,13 @@ func TestFontVariantsBoldText(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithBoldFont(boldFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with bold text
 	boldStyle := Style{Bold: true, Scale: 1.0}
@@ -519,13 +537,13 @@ func TestFontVariantsItalicText(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithItalicFont(italicFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with italic text
 	italicStyle := Style{Italic: true, Scale: 1.0}
@@ -573,8 +591,7 @@ func TestFontVariantsBoldItalicText(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithBoldFont(boldFont),
@@ -582,6 +599,7 @@ func TestFontVariantsBoldItalicText(t *testing.T) {
 		WithBoldItalicFont(boldItalicFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with bold+italic text
 	boldItalicStyle := Style{Bold: true, Italic: true, Scale: 1.0}
@@ -627,12 +645,12 @@ func TestFontVariantsFallbackToRegular(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	fi := f.(*frameImpl)
 
@@ -665,14 +683,14 @@ func TestFontVariantsMixedContent(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithBoldFont(boldFont),
 		WithItalicFont(italicFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with mixed styles
 	content := Content{
@@ -754,13 +772,13 @@ func TestFontScaleH1Text(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithScaledFont(2.0, h1Font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with H1 heading style (Scale: 2.0)
 	content := Content{
@@ -816,13 +834,13 @@ func TestFontScaleH2Text(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithScaledFont(1.5, h2Font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with H2 heading style (Scale: 1.5)
 	content := Content{
@@ -873,13 +891,13 @@ func TestFontScaleH3Text(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithScaledFont(1.25, h3Font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with H3 heading style (Scale: 1.25)
 	content := Content{
@@ -930,12 +948,12 @@ func TestFontScaleFallbackToRegular(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	fi := f.(*frameImpl)
 
@@ -965,14 +983,14 @@ func TestFontScaleMixedContent(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithScaledFont(2.0, h1Font),
 		WithScaledFont(1.5, h2Font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Content with multiple heading levels and body text
 	content := Content{
@@ -1040,14 +1058,14 @@ func TestFontScaleWithBoldCombination(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithBoldFont(boldFont),
 		WithScaledFont(2.0, h1BoldFont), // Scaled bold for H1
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// StyleH1 has both Bold:true and Scale:2.0
 	content := Content{
@@ -1092,7 +1110,8 @@ func TestPtofcharStart(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content
 	f.SetContent(Plain("hello world"))
@@ -1114,7 +1133,8 @@ func TestPtofcharMiddle(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello" = 5 chars
 	f.SetContent(Plain("hello"))
@@ -1137,7 +1157,8 @@ func TestPtofcharEnd(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello" = 5 chars
 	f.SetContent(Plain("hello"))
@@ -1160,7 +1181,8 @@ func TestPtofcharMultiLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello\nworld" = "hello" (5 chars) + newline (1 char) + "world" (5 chars)
 	f.SetContent(Plain("hello\nworld"))
@@ -1194,7 +1216,8 @@ func TestPtofcharWrappedLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "helloworld" = 10 chars
 	// Should wrap: "hello" on line 1, "world" on line 2
@@ -1225,7 +1248,8 @@ func TestPtofcharEmptyContent(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// No content set
 	f.SetContent(Plain(""))
@@ -1247,7 +1271,8 @@ func TestPtofcharWithTab(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
+	f.SetRect(rect)
 
 	// "a\tb" = 'a' (1 char) + tab (1 char) + 'b' (1 char)
 	f.SetContent(Plain("a\tb"))
@@ -1284,7 +1309,8 @@ func TestCharofptStart(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content
 	f.SetContent(Plain("hello world"))
@@ -1306,7 +1332,8 @@ func TestCharofptMiddle(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello" = 5 chars, each 10px wide
 	f.SetContent(Plain("hello"))
@@ -1343,7 +1370,8 @@ func TestCharofptEnd(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello" = 5 chars, total width 50px
 	f.SetContent(Plain("hello"))
@@ -1373,7 +1401,8 @@ func TestCharofptMultiLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "hello\nworld" = "hello" (5 chars) + newline (1 char) + "world" (5 chars)
 	f.SetContent(Plain("hello\nworld"))
@@ -1405,7 +1434,8 @@ func TestCharofptWrappedLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content: "helloworld" = 10 chars
 	// Should wrap: "hello" on line 1, "world" on line 2
@@ -1436,7 +1466,8 @@ func TestCharofptEmptyContent(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// No content set
 	f.SetContent(Plain(""))
@@ -1458,7 +1489,8 @@ func TestCharofptWithTab(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(8))
+	f.SetRect(rect)
 
 	// "a\tb" = 'a' (1 char) + tab (1 char) + 'b' (1 char)
 	// Layout: 'a' at 0-10, tab from 10-80, 'b' at 80-90
@@ -1496,7 +1528,8 @@ func TestCharofptOutsideFrame(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	f.SetContent(Plain("hello"))
 
@@ -1526,7 +1559,8 @@ func TestCoordinateRoundTrip(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Test with simple text
 	f.SetContent(Plain("hello"))
@@ -1551,7 +1585,8 @@ func TestCoordinateRoundTripMultiLine(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "hello\nworld" = 11 characters (5 + 1 + 5)
 	f.SetContent(Plain("hello\nworld"))
@@ -1578,7 +1613,8 @@ func TestCoordinateRoundTripWrapped(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "helloworld" = 10 chars, wraps after 5
 	f.SetContent(Plain("helloworld"))
@@ -1603,7 +1639,8 @@ func TestCoordinateRoundTripWithTabs(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "a\tb" = 3 characters
 	f.SetContent(Plain("a\tb"))
@@ -1628,7 +1665,8 @@ func TestWithMaxTabOption(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(6))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage), WithMaxTab(6))
+	f.SetRect(rect)
 
 	fi := f.(*frameImpl)
 	if fi.maxtabChars != 6 {
@@ -1646,7 +1684,8 @@ func TestMaxtabPixelsDefault(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	fi := f.(*frameImpl)
 	got := fi.maxtabPixels()
@@ -1667,7 +1706,8 @@ func TestDefaultTabWidthCoordinates(t *testing.T) {
 
 	f := NewFrame()
 	// No WithMaxTab — should default to 4 chars
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// "a\tb" with 4-char tabs: 'a' at 0-10, tab from 10-40, 'b' at 40-50
 	f.SetContent(Plain("a\tb"))
@@ -1690,7 +1730,8 @@ func TestCoordinateRoundTripEmpty(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Empty content
 	f.SetContent(Plain(""))
@@ -1716,7 +1757,8 @@ func TestCharofptWithOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: "hello\nworld\nfoo" = "hello"(5) + \n(1) + "world"(5) + \n(1) + "foo"(3) = 15 runes
 	// Line 0: "hello\n" (runes 0-5)
@@ -1762,7 +1804,8 @@ func TestPtofcharWithOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: "hello\nworld\nfoo"
 	f.SetContent(Plain("hello\nworld\nfoo"))
@@ -1803,7 +1846,8 @@ func TestCharofptPtofcharRoundTripWithOrigin(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: "hello\nworld\nfoo\nbar\nbaz"
 	// Line 0: "hello\n" (runes 0-5)
@@ -1847,7 +1891,8 @@ func TestDrawBoxBackground(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create content with a background color (like inline code)
 	grayBg := color.RGBA{R: 240, G: 240, B: 240, A: 255}
@@ -1910,7 +1955,8 @@ func TestDrawBoxBackgroundMultiple(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create content with multiple background-styled spans and regular text
 	grayBg := color.RGBA{R: 240, G: 240, B: 240, A: 255}
@@ -1974,13 +2020,13 @@ func TestCodeFontSelection(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		WithCodeFont(codeFont),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Verify the code font is returned for StyleCode
 	fi := f.(*frameImpl)
@@ -2015,13 +2061,13 @@ func TestCodeFontFallback(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(regularFont),
 		// Note: WithCodeFont is NOT called
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	fi := f.(*frameImpl)
 
@@ -2048,7 +2094,8 @@ func TestDrawBlockBackground(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create content with block-level background (like fenced code)
 	// The Block flag indicates this should have indented background
@@ -2113,7 +2160,8 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create multi-line content with block-level background
 	grayBg := color.RGBA{R: 240, G: 240, B: 240, A: 255}
@@ -2170,22 +2218,23 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	}
 }
 
-// TestDrawHorizontalRule tests that HRuleRune causes a horizontal line to be drawn instead of text.
-// When a box contains HRuleRune with StyleHRule, the renderer should draw a line
-// instead of rendering the rune as text.
-func TestDrawHorizontalRule(t *testing.T) {
-	rect := image.Rect(0, 0, 400, 300) // Frame is 400px wide
+// TestHRuleNotRenderedAsText covers the frame-side invariant that
+// HRule-styled boxes are skipped by paintPhaseText — the rule rune
+// (HRuleRune) must not appear in a string rendering operation. The
+// actual horizontal-rule line drawing now lives in rich/mdrender;
+// see TestRendererPaintsHRule there.
+func TestHRuleNotRenderedAsText(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
 	display := edwoodtest.NewDisplay(rect)
-	font := edwoodtest.NewFont(10, 14) // 14px line height
+	font := edwoodtest.NewFont(10, 14)
 
 	bgImage := edwoodtest.NewImage(display, "frame-background", image.Rect(0, 0, 1, 1))
 	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
-	// Create content with a horizontal rule marker followed by text
-	// The HRuleRune should be rendered as a line, not as text
 	content := Content{
 		{Text: "above\n", Style: DefaultStyle()},
 		{Text: string(HRuleRune) + "\n", Style: StyleHRule},
@@ -2195,10 +2244,9 @@ func TestDrawHorizontalRule(t *testing.T) {
 
 	display.(edwoodtest.GettableDrawOps).Clear()
 	f.Redraw()
-
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Verify "above" and "below" are rendered as text
+	// Surrounding text is rendered.
 	foundAbove := false
 	foundBelow := false
 	for _, op := range ops {
@@ -2209,94 +2257,19 @@ func TestDrawHorizontalRule(t *testing.T) {
 			foundBelow = true
 		}
 	}
-
 	if !foundAbove {
-		t.Errorf("Redraw() did not render 'above' text\ngot ops: %v", ops)
+		t.Errorf("Redraw did not render 'above' text\nops: %v", ops)
 	}
 	if !foundBelow {
-		t.Errorf("Redraw() did not render 'below' text\ngot ops: %v", ops)
+		t.Errorf("Redraw did not render 'below' text\nops: %v", ops)
 	}
 
-	// Verify that HRuleRune is NOT rendered as text (it should be drawn as a line instead)
-	hruleAsText := false
+	// The HRuleRune itself must not appear in any string rendering op.
 	for _, op := range ops {
-		// The HRuleRune character should NOT appear in any string rendering operation
 		if strings.Contains(op, `string "`) && strings.Contains(op, string(HRuleRune)) {
-			hruleAsText = true
+			t.Errorf("HRuleRune rendered as text (paintPhaseText skip broken):\nop: %s", op)
 			break
 		}
-	}
-
-	if hruleAsText {
-		t.Errorf("HRuleRune should not be rendered as text (should be drawn as a line)\ngot ops: %v", ops)
-	}
-
-	// Verify that a horizontal line (fill operation) was drawn for the hrule
-	// The line should span the full width of the frame and be thin (1px or similar)
-	frameBackgroundRect := "(0,0)-(400,300)"
-	foundHRuleLine := false
-	for _, op := range ops {
-		if strings.HasPrefix(op, "fill ") {
-			if strings.Contains(op, frameBackgroundRect) {
-				continue // Skip the frame background fill
-			}
-			// Look for a thin fill that spans full width (x from 0 to 400)
-			// The horizontal rule line should be on line 2 (Y around 14-28 area)
-			// and be 1-2px tall
-			if strings.Contains(op, "(0,") && strings.Contains(op, "-(400,") {
-				foundHRuleLine = true
-			}
-		}
-	}
-
-	if !foundHRuleLine {
-		t.Errorf("Redraw() did not render horizontal rule line\nExpected a full-width fill for the hrule, got ops: %v", ops)
-	}
-}
-
-// TestHorizontalRuleFullWidth tests that the horizontal rule line spans the full frame width.
-func TestHorizontalRuleFullWidth(t *testing.T) {
-	rect := image.Rect(0, 0, 500, 300) // Frame is 500px wide
-	display := edwoodtest.NewDisplay(rect)
-	font := edwoodtest.NewFont(10, 14) // 14px line height
-
-	bgImage := edwoodtest.NewImage(display, "frame-background", image.Rect(0, 0, 1, 1))
-	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
-
-	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
-
-	// Create content with just a horizontal rule
-	content := Content{
-		{Text: string(HRuleRune) + "\n", Style: StyleHRule},
-	}
-	f.SetContent(content)
-
-	display.(edwoodtest.GettableDrawOps).Clear()
-	f.Redraw()
-
-	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
-
-	// The horizontal rule should span from X=0 to X=500 (full frame width)
-	// It should be a thin line (1-2px tall)
-	frameBackgroundRect := "(0,0)-(500,300)"
-	foundFullWidthLine := false
-
-	for _, op := range ops {
-		if strings.HasPrefix(op, "fill ") {
-			if strings.Contains(op, frameBackgroundRect) {
-				continue // Skip the frame background fill
-			}
-			// Look for a fill from X=0 to X=500 (full width)
-			// The exact Y position depends on line height and vertical centering
-			if strings.Contains(op, "(0,") && strings.Contains(op, "-(500,") {
-				foundFullWidthLine = true
-			}
-		}
-	}
-
-	if !foundFullWidthLine {
-		t.Errorf("Horizontal rule line should span full frame width (500px)\ngot ops: %v", ops)
 	}
 }
 
@@ -2307,7 +2280,8 @@ func TestFrameSetRect(t *testing.T) {
 	display := edwoodtest.NewDisplay(initialRect)
 
 	f := NewFrame()
-	f.Init(initialRect, WithDisplay(display))
+	f.Init(WithDisplay(display))
+	f.SetRect(initialRect)
 
 	// Verify initial rect
 	if got := f.Rect(); got != initialRect {
@@ -2330,7 +2304,8 @@ func TestFrameSetRectNoChange(t *testing.T) {
 	display := edwoodtest.NewDisplay(rect)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display))
+	f.Init(WithDisplay(display))
+	f.SetRect(rect)
 
 	// Set the same rectangle
 	f.SetRect(rect)
@@ -2353,7 +2328,8 @@ func TestFrameSetRectRelayout(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(narrowRect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(narrowRect)
 
 	// Set content that won't fit on one line at narrow width
 	f.SetContent(Plain("hello world"))
@@ -2392,7 +2368,8 @@ func TestFrameSetRectRedraw(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(initialRect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(initialRect)
 	f.SetContent(Plain("test"))
 
 	// Change to a new rectangle
@@ -2433,7 +2410,8 @@ func TestDrawTextClipsToFrame(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with 5 lines - only 2 should fit in the frame
 	f.SetContent(Plain("line1\nline2\nline3\nline4\nline5"))
@@ -2472,7 +2450,8 @@ func TestInitTickCreatesImage(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithFont(font))
+	f.Init(WithDisplay(display), WithFont(font))
+	f.SetRect(rect)
 
 	// Before initTick, there should be no tick image
 	if fi.tickImage != nil {
@@ -2529,7 +2508,8 @@ func TestInitTickReusesForSameHeight(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithFont(font))
+	f.Init(WithDisplay(display), WithFont(font))
+	f.SetRect(rect)
 
 	// Create tick with height 20
 	fi.initTick(20)
@@ -2569,7 +2549,8 @@ func TestBoxHeightBody(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithFont(font))
+	f.Init(WithDisplay(display), WithFont(font))
+	f.SetRect(rect)
 
 	box := Box{
 		Text:  []byte("hello"),
@@ -2593,7 +2574,8 @@ func TestBoxHeightHeading(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithFont(font), WithScaledFont(2.0, h1Font))
+	f.Init(WithDisplay(display), WithFont(font), WithScaledFont(2.0, h1Font))
+	f.SetRect(rect)
 
 	box := Box{
 		Text:  []byte("Heading"),
@@ -2616,7 +2598,8 @@ func TestBoxHeightImage(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithFont(font))
+	f.Init(WithDisplay(display), WithFont(font))
+	f.SetRect(rect)
 
 	box := Box{
 		Style: Style{
@@ -2652,7 +2635,8 @@ func TestDrawTickAtCursor(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Set content with a simple word and cursor at position 3 (between "hel" and "lo")
 	f.SetContent(Plain("hello"))
@@ -2708,13 +2692,13 @@ func TestNoTickWithSelection(t *testing.T) {
 	selImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Medblue)
 
 	f := NewFrame()
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with a range selection (p0 != p1)
 	f.SetContent(Plain("hello world"))
@@ -2748,13 +2732,13 @@ func TestTickHeightScaling(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithScaledFont(2.0, h1Font),
 	)
+	f.SetRect(rect)
 
 	// Content: "Hi" as H1 heading, newline, then "body" as body text.
 	// Cursor at position 2 = end of "Hi" on the heading line.
@@ -2798,12 +2782,12 @@ func TestTickHeightBodyText(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Plain text: "hello world" — two words separated by space.
 	// Cursor at position 5 (after "hello", before space/next word).
@@ -2841,12 +2825,12 @@ func TestRedrawDrawsTickWhenCursorPoint(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with cursor at position 3 (point selection)
 	f.SetContent(Plain("hello"))
@@ -2894,13 +2878,13 @@ func TestRedrawNoTickWhenSelection(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect,
-		WithDisplay(display),
+	f.Init(WithDisplay(display),
 		WithBackground(bgImage),
 		WithFont(font),
 		WithTextColor(textImage),
 		WithSelectionColor(selImage),
 	)
+	f.SetRect(rect)
 
 	// Set content with a range selection (p0 != p1)
 	f.SetContent(Plain("hello world"))
@@ -2932,7 +2916,8 @@ func TestDrawImageScaled(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create a 200x100 original image
 	origImg := image.NewRGBA(image.Rect(0, 0, 200, 100))
@@ -3158,7 +3143,8 @@ func TestRenderWithHorizontalOffset(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	// Code block indent = 8 * 10 = 80px (CodeBlockIndentChars * font width).
@@ -3264,7 +3250,8 @@ func TestRenderClipsAboveScrollbar(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Block code content that overflows 100px frame width.
 	// Code indent = 4 * 10 = 40px. "long_code_xxx" = 13 chars * 10 = 130px.
@@ -3321,8 +3308,8 @@ func TestRenderClipsAboveScrollbar(t *testing.T) {
 		// (Y >= blockBottomY - scrollbarHeight + lineHeight) should not be drawn.
 		if strings.Contains(op, "long_code_xxx") || strings.Contains(op, "line2_code_xx") {
 			// Text Y + font height should not exceed the block's usable area
-			textBottom := y + 14 // font height
-			blockBottomY := 28   // 2 lines * 14px
+			textBottom := y + 14                          // font height
+			blockBottomY := 28                            // 2 lines * 14px
 			maxContentY := blockBottomY + scrollbarHeight // after two-pass adjustment
 			if textBottom > maxContentY {
 				t.Errorf("code text drawn at Y=%d extends to %d, past block content limit %d (scrollbar starts there); op: %s",
@@ -3419,7 +3406,8 @@ func TestDrawHScrollbar(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	// Code indent = 4 * 10 = 40px. "a_very_long_code_line_xxxxx" = 27 chars * 10 = 270px.
@@ -3493,7 +3481,8 @@ func TestHScrollbarThumbPosition(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: 40px indent + 430px text = 470px total, frame is 200px wide.
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3590,7 +3579,8 @@ func TestNoHScrollbarWhenFits(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Short code block: 40px indent + 50px text = 90px, well within 400px frame.
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3640,7 +3630,8 @@ func TestHScrollbarMinThumbWidth(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Very wide content: 40px indent + 5000px text. Frame is 200px.
 	// thumbWidth = (200/5040) * 200 ≈ 7.9, which is below the 10px minimum.
@@ -3709,7 +3700,8 @@ func TestHScrollBarAtHit(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3759,7 +3751,8 @@ func TestHScrollBarAtMiss(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3792,7 +3785,8 @@ func TestHScrollBarAtNoOverflow(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Short code block that fits within the 400px frame.
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3828,7 +3822,8 @@ func TestHScrollClickB1ScrollsLeft(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3881,7 +3876,8 @@ func TestHScrollClickB2JumpsToPosition(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -3957,7 +3953,8 @@ func TestHScrollClickB3ScrollsRight(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -4010,7 +4007,8 @@ func TestHScrollClickClampsToRange(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -4069,7 +4067,8 @@ func TestHScrollWheelAdjustsOffset(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -4118,7 +4117,8 @@ func TestHScrollWheelClampsToRange(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create block code content that overflows frameWidth (200px).
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -4184,7 +4184,8 @@ func TestScrollbarHeightInHitTesting(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: overflowing code block followed by normal text.
 	// The code block will get a horizontal scrollbar (12px), which should
@@ -4245,7 +4246,8 @@ func TestScrollbarHeightAfterVerticalScroll(t *testing.T) {
 	textImage, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Content: overflowing code block, then two normal text lines.
 	codeStyle := Style{Block: true, Code: true, Scale: 1.0, Bg: color.RGBA{R: 240, G: 240, B: 240, A: 255}}
@@ -4308,7 +4310,8 @@ func TestHScrollRegionOffsetWithOrigin(t *testing.T) {
 
 	f := NewFrame()
 	fi := f.(*frameImpl)
-	f.Init(rect, WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
 
 	// Create content with 3 code blocks, each overflowing the 200px frame width.
 	// Each block is separated by a normal text line.
@@ -4660,7 +4663,8 @@ func TestLayoutCacheSameWidthNoInvalidate(t *testing.T) {
 func TestAllocColorImageCachesByColor(t *testing.T) {
 	display := edwoodtest.NewDisplay(image.Rect(0, 0, 100, 100))
 	f := NewFrame().(*frameImpl)
-	f.Init(image.Rect(0, 0, 100, 100), WithDisplay(display))
+	f.Init(WithDisplay(display))
+	f.SetRect(image.Rect(0, 0, 100, 100))
 
 	red := color.RGBA{R: 255, A: 255}
 	blue := color.RGBA{B: 255, A: 255}
@@ -4689,7 +4693,8 @@ func TestAllocColorImageCachesByColor(t *testing.T) {
 func TestAllocColorImageEqualColorsShareCacheEntry(t *testing.T) {
 	display := edwoodtest.NewDisplay(image.Rect(0, 0, 100, 100))
 	f := NewFrame().(*frameImpl)
-	f.Init(image.Rect(0, 0, 100, 100), WithDisplay(display))
+	f.Init(WithDisplay(display))
+	f.SetRect(image.Rect(0, 0, 100, 100))
 
 	rgba := color.RGBA{R: 64, G: 128, B: 192, A: 255}
 	nrgba := color.NRGBA{R: 64, G: 128, B: 192, A: 255}
@@ -4703,3 +4708,53 @@ func TestAllocColorImageEqualColorsShareCacheEntry(t *testing.T) {
 		t.Errorf("equal colors should share cache entry; got distinct instances %p vs %p", a, b)
 	}
 }
+
+// TestLayoutLinesAccessor covers R2 of
+// rich/mdrender/blockquote.design.md: LayoutLines exposes the
+// layout's visible-line slice for post-paint decoration. Empty
+// content returns nil; non-empty content returns lines whose Y
+// values match the layout that drawTextTo painted, and whose Boxes
+// preserve per-box Style fields the wrapper inspects.
+func TestLayoutLinesAccessor(t *testing.T) {
+	rect := image.Rect(0, 0, 200, 200)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+	bg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	fg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	// Empty content: LayoutLines returns nil.
+	fEmpty := NewFrame()
+	fEmpty.Init(WithDisplay(display), WithFont(font), WithBackground(bg), WithTextColor(fg))
+	fEmpty.SetRect(rect)
+	if got := fEmpty.LayoutLines(); got != nil {
+		t.Errorf("LayoutLines on empty content = %v, want nil", got)
+	}
+
+	// Non-empty content: LayoutLines returns lines matching layout.
+	f := NewFrame()
+	f.Init(WithDisplay(display), WithFont(font), WithBackground(bg), WithTextColor(fg))
+	f.SetRect(rect)
+	f.SetContent(Plain("hello\nworld"))
+	lines := f.LayoutLines()
+	if len(lines) < 2 {
+		t.Fatalf("expected >=2 visible lines, got %d", len(lines))
+	}
+	// Y values must match LinePixelYs (which is the same layout source).
+	ys := f.LinePixelYs()
+	if len(ys) != len(lines) {
+		t.Fatalf("LayoutLines length=%d but LinePixelYs length=%d", len(lines), len(ys))
+	}
+	for i, line := range lines {
+		if line.Y != ys[i] {
+			t.Errorf("LayoutLines[%d].Y = %d, LinePixelYs[%d] = %d (must match)", i, line.Y, i, ys[i])
+		}
+	}
+}
+
+// R1 ("drawTextTo no longer calls paintPhaseBlockquoteBorders" /
+// "BlockquoteBorderColor moves to mdrender") is enforced at
+// compile time after the move: the function is removed and its
+// constants live in mdrender. No runtime test needed.
+//
+// Positive bar-rendering coverage lives on the wrapper side at
+// rich/mdrender/blockquote_test.go.

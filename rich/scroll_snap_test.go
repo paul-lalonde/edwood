@@ -29,7 +29,8 @@ func snapTestFixture(t *testing.T, extraOpts ...Option) (*frameImpl, Content) {
 	opts = append(opts, extraOpts...)
 
 	f := NewFrame()
-	f.Init(rect, opts...)
+	f.Init(opts...)
+	f.SetRect(rect)
 	content := Plain("aaa\nbbb\nccc\nddd\neee")
 	f.SetContent(content)
 	return f.(*frameImpl), content
@@ -138,8 +139,9 @@ func TestScrollSnap_TallLineForcesSnapPixel(t *testing.T) {
 	text, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
 
 	f := NewFrame()
-	f.Init(rect, WithDisplay(display), WithBackground(bg), WithFont(font),
+	f.Init(WithDisplay(display), WithBackground(bg), WithFont(font),
 		WithTextColor(text), WithDefaultScrollSnap(SnapBottom))
+	f.SetRect(rect)
 	fi := f.(*frameImpl)
 
 	// Synthesize a single tall line by setting the origin line's
