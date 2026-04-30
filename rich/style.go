@@ -43,6 +43,18 @@ type Style struct {
 	ImageWidth  int    // Explicit width in pixels (0 = use natural size)
 	ImageHeight int    // Explicit height in pixels (0 = use natural/proportional size)
 
+	// ImageBelow signals that the image is anchored to the
+	// line containing the box's rune offset and painted BELOW
+	// the line text — not inline-replacing it. The line's
+	// effective height grows additively by the image height
+	// (textHeight + sum of imageBelow heights on the line);
+	// the image's horizontal extent does not advance the
+	// text. Used by md2spans (Phase 3 round 4) so users see
+	// the source `![alt](url)` AND the rendered image
+	// stacked. The wire-format counterpart is the
+	// `placement=below` flag on `b` directives, length=0.
+	ImageBelow bool
+
 	// Fixed-dimension box (spans protocol replaced element)
 	FixedBox bool // This span is a fixed-size replaced element
 
