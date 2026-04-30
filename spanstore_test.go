@@ -723,3 +723,48 @@ func TestStyleAttrs_BoxEqualFields(t *testing.T) {
 		t.Error("non-box and box should not be equal")
 	}
 }
+
+// --- Scale field tests (Phase 3 round 1) ---------------------------------
+
+// TestStyleAttrs_SameScale: identical Scale values → equal.
+func TestStyleAttrs_SameScale(t *testing.T) {
+	a := StyleAttrs{Scale: 2.0}
+	b := StyleAttrs{Scale: 2.0}
+	if !a.Equal(b) {
+		t.Error("expected equal for same Scale")
+	}
+}
+
+// TestStyleAttrs_DifferentScale: different Scale → not equal.
+func TestStyleAttrs_DifferentScale(t *testing.T) {
+	a := StyleAttrs{Scale: 2.0}
+	b := StyleAttrs{Scale: 1.5}
+	if a.Equal(b) {
+		t.Error("expected not equal for different Scale")
+	}
+}
+
+// TestStyleAttrs_ScaleZeroVsOne: per the design doc, Scale=0
+// means "unset → render at 1.0", but Equal() uses byte-exact
+// comparison: 0.0 and 1.0 are NOT equal at the StyleAttrs level.
+// Translating 0.0 → 1.0 happens at styleAttrsToRichStyle time;
+// dedup in the span store is at the StyleAttrs level so a
+// span emitted with explicit `scale=1.0` keeps its run distinct
+// from an unset span. Pinned to prevent silent dedup of two
+// spans that the producer chose to distinguish.
+func TestStyleAttrs_ScaleZeroVsOne(t *testing.T) {
+	a := StyleAttrs{Scale: 0}
+	b := StyleAttrs{Scale: 1.0}
+	if a.Equal(b) {
+		t.Error("Scale=0 (unset) and Scale=1.0 (explicit) must compare not-equal at the StyleAttrs level")
+	}
+}
+
+// TestStyleAttrs_DefaultStyleAttrsScaleZero: zero-value
+// StyleAttrs has Scale==0, the "unset" sentinel.
+func TestStyleAttrs_DefaultStyleAttrsScaleZero(t *testing.T) {
+	var a StyleAttrs
+	if a.Scale != 0 {
+		t.Errorf("zero StyleAttrs.Scale = %v, want 0 (unset sentinel)", a.Scale)
+	}
+}
