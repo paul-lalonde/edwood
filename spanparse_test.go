@@ -883,3 +883,124 @@ func TestIsPrefixedFormat(t *testing.T) {
 		})
 	}
 }
+
+// --- Scale flag tests (Phase 3 round 1) ----------------------------------
+
+// TestParseSpanScaleBasic: `scale=2.0` on an s-line round-trips
+// to StyleAttrs.Scale = 2.0.
+func TestParseSpanScaleBasic(t *testing.T) {
+	data := "s 0 5 - scale=2.0"
+	runs, _, isClear, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if isClear {
+		t.Fatal("isClear should be false")
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs, want 1", len(runs))
+	}
+	if runs[0].Style.Scale != 2.0 {
+		t.Errorf("Scale = %v, want 2.0", runs[0].Style.Scale)
+	}
+}
+
+// TestParseSpanScaleAbsentMeansZero: omitting the scale flag
+// leaves Scale at its zero value (the unset sentinel).
+func TestParseSpanScaleAbsentMeansZero(t *testing.T) {
+	data := "s 0 5 - bold"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.Scale != 0 {
+		t.Errorf("Scale = %v, want 0 (unset)", runs[0].Style.Scale)
+	}
+}
+
+// TestParseSpanScaleWithOtherFlags: scale coexists with bold,
+// italic in any order.
+func TestParseSpanScaleWithOtherFlags(t *testing.T) {
+	cases := []string{
+		"s 0 5 - bold scale=1.5",
+		"s 0 5 - scale=1.5 bold",
+		"s 0 5 - italic scale=1.25 bold",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			runs, _, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Fatalf("parseSpanMessage: %v", err)
+			}
+			if runs[0].Style.Scale == 0 {
+				t.Errorf("Scale not parsed; line was %q", data)
+			}
+			if !runs[0].Style.Bold {
+				t.Errorf("Bold not parsed; line was %q", data)
+			}
+		})
+	}
+}
+
+// TestParseSpanScaleFractional: non-integer scales parse.
+func TestParseSpanScaleFractional(t *testing.T) {
+	cases := map[string]float64{
+		"s 0 5 - scale=1.25":  1.25,
+		"s 0 5 - scale=1.05":  1.05,
+		"s 0 5 - scale=0.875": 0.875,
+		"s 0 5 - scale=2":     2.0,
+		"s 0 5 - scale=0.5":   0.5,
+	}
+	for data, want := range cases {
+		runs, _, _, err := parseSpanMessage(data, 100)
+		if err != nil {
+			t.Errorf("parseSpanMessage(%q): %v", data, err)
+			continue
+		}
+		if runs[0].Style.Scale != want {
+			t.Errorf("%q: Scale = %v, want %v", data, runs[0].Style.Scale, want)
+		}
+	}
+}
+
+// TestParseSpanScaleErrors: invalid scale values are errors.
+func TestParseSpanScaleErrors(t *testing.T) {
+	cases := []struct {
+		data string
+		why  string
+	}{
+		{"s 0 5 - scale=0", "zero rejected"},
+		{"s 0 5 - scale=-1.0", "negative rejected"},
+		{"s 0 5 - scale=NaN", "NaN rejected"},
+		{"s 0 5 - scale=Inf", "Inf rejected"},
+		{"s 0 5 - scale=11", "above cap rejected"},
+		{"s 0 5 - scale=", "empty rejected"},
+		{"s 0 5 - scale=abc", "non-numeric rejected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.why, func(t *testing.T) {
+			_, _, _, err := parseSpanMessage(tc.data, 100)
+			if err == nil {
+				t.Errorf("%q: expected error (%s), got nil", tc.data, tc.why)
+			}
+		})
+	}
+}
+
+// TestParseBoxScale: scale flag also applies to b-lines.
+func TestParseBoxScale(t *testing.T) {
+	data := "b 0 1 100 50 - - scale=1.5 image:foo.png"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if !runs[0].Style.IsBox {
+		t.Error("IsBox should be true")
+	}
+	if runs[0].Style.Scale != 1.5 {
+		t.Errorf("Scale = %v, want 1.5", runs[0].Style.Scale)
+	}
+	if runs[0].Style.BoxPayload != "image:foo.png" {
+		t.Errorf("BoxPayload = %q, want image:foo.png", runs[0].Style.BoxPayload)
+	}
+}

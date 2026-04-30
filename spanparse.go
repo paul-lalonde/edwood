@@ -157,14 +157,21 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 	}
 
 	var bold, italic, hidden bool
+	var scale float64
 	for _, flag := range fields[flagStart:] {
-		switch flag {
-		case "bold":
+		switch {
+		case flag == "bold":
 			bold = true
-		case "italic":
+		case flag == "italic":
 			italic = true
-		case "hidden":
+		case flag == "hidden":
 			hidden = true
+		case strings.HasPrefix(flag, "scale="):
+			s, perr := parseScaleFlag(flag)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			scale = s
 		default:
 			return 0, 0, StyleRun{}, fmt.Errorf("unknown span flag: %q", flag)
 		}
@@ -178,9 +185,41 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			Bold:   bold,
 			Italic: italic,
 			Hidden: hidden,
+			Scale:  scale,
 		},
 	}
 	return offset, length, run, nil
+}
+
+// maxScale caps the scale=N.N flag at a reasonable upper bound.
+// Values above this render at degenerate sizes; the parser
+// rejects them to surface producer bugs rather than silently
+// degrade.
+const maxScale = 10.0
+
+// parseScaleFlag parses a "scale=N.N" flag token and returns
+// the validated scale value. Rejects: empty, non-numeric,
+// non-finite (NaN/Inf), zero or negative, or above maxScale.
+// Per Phase 3 round 1 design (font-scale).
+func parseScaleFlag(flag string) (float64, error) {
+	val := strings.TrimPrefix(flag, "scale=")
+	if val == "" {
+		return 0, fmt.Errorf("scale flag missing value: %q", flag)
+	}
+	n, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad scale value: %q: %w", flag, err)
+	}
+	if n != n { // NaN
+		return 0, fmt.Errorf("scale must be finite: %q", flag)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("scale must be positive: %q", flag)
+	}
+	if n > maxScale {
+		return 0, fmt.Errorf("scale must be <= %g: %q", maxScale, flag)
+	}
+	return n, nil
 }
 
 // parseBoxLine parses the fields after the "b" prefix.
@@ -221,6 +260,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 	// Parse optional colors, flags, and payload from remaining fields.
 	var fg, bg color.Color
 	var bold, italic, hidden bool
+	var scale float64
 	var payloadParts []string
 	idx := 4
 	inPayload := false
@@ -264,15 +304,22 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 		}
 
 		// Try known flags.
-		switch f {
-		case "bold":
+		switch {
+		case f == "bold":
 			bold = true
 			idx++
-		case "italic":
+		case f == "italic":
 			italic = true
 			idx++
-		case "hidden":
+		case f == "hidden":
 			hidden = true
+			idx++
+		case strings.HasPrefix(f, "scale="):
+			s, perr := parseScaleFlag(f)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			scale = s
 			idx++
 		default:
 			// Start of payload — collect this and all remaining tokens.
@@ -292,6 +339,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			Bold:       bold,
 			Italic:     italic,
 			Hidden:     hidden,
+			Scale:      scale,
 			IsBox:      true,
 			BoxWidth:   width,
 			BoxHeight:  height,
