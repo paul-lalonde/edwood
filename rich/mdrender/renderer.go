@@ -57,9 +57,17 @@ func New(frame rich.Frame, display edwooddraw.Display) *Renderer {
 // blit to screen), then the wrapper draws decorations directly on
 // top of the screen image. No new flicker — it's a layered draw
 // above already-blitted pixels.
+//
+// The wrapper-side phases run in a fixed order. Currently these
+// don't overlap geometrically (bars go in the left-edge indent
+// zone; rules span the line vertically-centered in the line's
+// height), so the order is for predictability rather than
+// correctness. Future Phase-1 rows that add overlapping decorations
+// must revisit.
 func (r *Renderer) Redraw() {
 	r.frame.Redraw()
 	r.paintBlockquoteBorders()
+	r.paintHorizontalRules()
 }
 
 // Frame returns the wrapped rich.Frame for callers that need to

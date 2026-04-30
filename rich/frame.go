@@ -1296,7 +1296,6 @@ func buildLineRegionIndex(numLines int, adjustedRegions []AdjustedBlockRegion) [
 //	2.  box backgrounds         — inline code etc., behind text.
 //	2b. selection highlight     — between backgrounds and text, so
 //	                              backgrounds don't overdraw it.
-//	3.  horizontal rules        — drawn as lines, not text.
 //	4.  text                    — on top of backgrounds.
 //	5.  images and fixed boxes  — at their layout positions.
 //	5b. gutter repaint          — clips horizontal-scroll overflow
@@ -1318,7 +1317,6 @@ func (f *frameImpl) drawTextTo(target edwooddraw.Image, offset image.Point) {
 	f.paintPhaseBlockBackgrounds(c)
 	f.paintPhaseBoxBackgrounds(c)
 	f.paintPhaseSelectionHighlight(c)
-	f.paintPhaseHorizontalRules(c)
 	f.paintPhaseText(c)
 	f.paintPhaseImagesAndFixedBoxes(c)
 	f.paintPhaseGutterRepaint(c)
@@ -1378,21 +1376,6 @@ func (f *frameImpl) paintPhaseSelectionHighlight(c *paintCtx) {
 	}
 }
 
-// paintPhaseHorizontalRules draws HRule lines (Phase 3).
-func (f *frameImpl) paintPhaseHorizontalRules(c *paintCtx) {
-	for _, line := range c.lines {
-		if line.Y >= c.frameHeight {
-			break
-		}
-		for _, pb := range line.Boxes {
-			if pb.Box.Style.HRule {
-				f.drawHorizontalRuleTo(c.target, line, c.offset, c.frameWidth, c.frameHeight)
-				break // one rule per line
-			}
-		}
-	}
-}
-
 // paintPhaseText renders glyphs (Phase 4). Skips boxes that other
 // phases own (newlines, tabs, images, fixed boxes, horizontal rules).
 // Text inside a scrollable block region is shifted by -hOffset.
@@ -1413,7 +1396,7 @@ func (f *frameImpl) paintPhaseText(c *paintCtx) {
 				continue
 			}
 			if pb.Box.Style.HRule {
-				continue // Phase 3
+				continue // rendered by rich/mdrender, not as text
 			}
 
 			pt := image.Point{
@@ -1595,40 +1578,6 @@ func (f *frameImpl) drawBoxBackgroundTo(target edwooddraw.Image, pb PositionedBo
 	}
 
 	target.Draw(bgRect, bgImg, nil, image.ZP)
-}
-
-// HRuleColor is the gray color used for horizontal rule lines.
-var HRuleColor = color.RGBA{R: 180, G: 180, B: 180, A: 255}
-
-// drawHorizontalRuleTo draws a horizontal rule line across the full frame width.
-// The line is drawn vertically centered within the line height.
-func (f *frameImpl) drawHorizontalRuleTo(target edwooddraw.Image, line Line, offset image.Point, frameWidth, frameHeight int) {
-	// Use a gray color for the rule
-	ruleImg := f.allocColorImage(HRuleColor)
-	if ruleImg == nil {
-		return
-	}
-
-	// Draw a 1px line vertically centered in the line
-	// The line spans the full frame width
-	lineThickness := 1
-	centerY := offset.Y + line.Y + line.Height/2
-
-	ruleRect := image.Rect(
-		offset.X,
-		centerY,
-		offset.X+frameWidth,
-		centerY+lineThickness,
-	)
-
-	// Clip to frame bounds (in target coordinates)
-	clipRect := image.Rect(offset.X, offset.Y, offset.X+frameWidth, offset.Y+frameHeight)
-	ruleRect = ruleRect.Intersect(clipRect)
-	if ruleRect.Empty() {
-		return
-	}
-
-	target.Draw(ruleRect, ruleImg, nil, image.ZP)
 }
 
 // layoutFromOrigin returns the layout lines starting from the origin position.
