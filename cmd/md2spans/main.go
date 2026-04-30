@@ -40,9 +40,14 @@ current body and exits.
 `
 
 // editDebounce is the delay between a body edit and the next
-// re-render. Mirrors cmd/edcolor's 300 ms; v1 uses 200 ms to
-// match the "fast feedback" feel of preview mode without
-// overloading on rapid typing.
+// re-render. v1 uses 200 ms to match the "fast feedback" feel of
+// preview mode without overloading on rapid typing. (cmd/edcolor
+// uses 300 ms; the divergence is intentional — markdown
+// rendering is cheaper than syntax tokenization for typical
+// document sizes.)
+//
+// Exposed as a var (not a const) so tests can override it for
+// fast watch-loop testing without sleeping for 200 ms.
 var editDebounce = 200 * time.Millisecond
 
 func main() {
@@ -51,8 +56,9 @@ func main() {
 
 // run is the testable core of main. argv is the program's
 // arguments (without the program name). getenv is the env-getter
-// (os.Getenv in production, a closure in tests). stderr is where
-// usage and error messages are written.
+// (os.Getenv in production, a closure in tests). stdout receives
+// the help text on -h (POSIX convention); stderr receives error
+// messages and usage on bad-args.
 //
 // Return values: 0 success, 1 runtime/environment error, 2
 // invocation error (bad args).
@@ -66,7 +72,9 @@ func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 		return 2
 	}
 	if *help {
-		fmt.Fprint(stderr, usage)
+		// POSIX convention: -h goes to stdout. Errors go to
+		// stderr (the bad-args branch below).
+		fmt.Fprint(os.Stdout, usage)
 		return 0
 	}
 	if fs.NArg() != 0 {
@@ -95,11 +103,16 @@ func run(argv []string, getenv func(string) string, stderr io.Writer) int {
 // attachAndRender opens the window, mounts the acme service for
 // the spans file, renders once, and (unless once is true)
 // watches the body for edits with debounce, re-rendering on each.
+//
+// The *acme.Win is released via win.CloseFiles before return.
+// *client.Fsys has no explicit close in 9fans.net/go/plan9/client;
+// its underlying connection lives until the process exits.
 func attachAndRender(winid int, once bool, stderr io.Writer) error {
 	win, err := acme.Open(winid, nil)
 	if err != nil {
 		return fmt.Errorf("open window %d: %w", winid, err)
 	}
+	defer win.CloseFiles()
 
 	fsys, err := client.MountService("acme")
 	if err != nil {
@@ -118,9 +131,14 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 
 	// Open the event file and re-enable the menu so user
 	// commands (Undo / Redo / Put) stay in the tag — same
-	// pattern as cmd/edcolor.
-	win.OpenEvent()
-	win.Ctl("menu")
+	// pattern as cmd/edcolor. Errors here are unusual but
+	// non-fatal: log and proceed.
+	if err := win.OpenEvent(); err != nil {
+		fmt.Fprintf(stderr, "md2spans: open event: %v\n", err)
+	}
+	if err := win.Ctl("menu"); err != nil {
+		fmt.Fprintf(stderr, "md2spans: ctl menu: %v\n", err)
+	}
 
 	watchEdits(win, fsys, winid, stderr)
 	return nil
@@ -128,6 +146,15 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 
 // renderOnce reads the body, parses it, and writes the
 // spans-protocol output to the window's spans file.
+//
+// Race note: the body can change between ReadAll and the spans
+// write. Spans are computed against the pre-edit body; if the
+// user typed during the render, the styled offsets will be
+// off-by-N runes for the post-edit body. The next debounced
+// edit triggers another render that corrects the displacement.
+// v1 accepts the transient mismatch; an interlock here would
+// require coordination with edwood's event stream that doesn't
+// fit the v1 architecture.
 func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
 	body, err := win.ReadAll("body")
 	if err != nil {
@@ -146,9 +173,19 @@ func renderOnce(win *acme.Win, fsys *client.Fsys, winid int) error {
 //
 // The loop exits when the window's event channel closes (the
 // window was deleted).
+//
+// Implementation note: editTimer is a *time.Timer whose channel
+// (`timerC`) is consumed when the timer fires. Each new edit
+// calls Reset on the existing timer rather than allocating a
+// new one — the previous time.After-based implementation
+// allocated a fresh runtime timer for every edit, leaving the
+// prior one to expire and be GC'd. Reset reuses the timer's
+// underlying state.
 func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
 	events := win.EventChan()
-	var editTimer <-chan time.Time
+	editTimer := newStoppedTimer()
+	defer editTimer.Stop()
+
 	for {
 		select {
 		case e, ok := <-events:
@@ -157,19 +194,44 @@ func watchEdits(win *acme.Win, fsys *client.Fsys, winid int, stderr io.Writer) {
 			}
 			switch e.C2 {
 			case 'I', 'D':
-				editTimer = time.After(editDebounce)
+				resetTimer(editTimer, editDebounce)
 			case 'x', 'X', 'l', 'L':
 				// Pass user-issued commands through unchanged
 				// so edwood handles them normally.
 				win.WriteEvent(e)
 			}
-		case <-editTimer:
-			editTimer = nil
+		case <-editTimer.C:
 			if err := renderOnce(win, fsys, winid); err != nil {
 				fmt.Fprintf(stderr, "md2spans: render after edit: %v\n", err)
 			}
 		}
 	}
+}
+
+// newStoppedTimer returns a *time.Timer that has not been
+// armed; the channel C will not fire until the caller calls
+// Reset. Used to set up the debounce timer cleanly without
+// a sentinel "first edit" branch in the watch loop.
+func newStoppedTimer() *time.Timer {
+	t := time.NewTimer(time.Hour)
+	if !t.Stop() {
+		<-t.C
+	}
+	return t
+}
+
+// resetTimer arms t to fire after d, draining any pending fire
+// from a previous arming first. Stop+drain pattern per the
+// time.Timer docs: without it, a previous fire that hasn't been
+// consumed yet would race the Reset and produce a spurious tick.
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 // writeSpans replaces the window's spans with the supplied list.
@@ -202,13 +264,25 @@ func writeSpans(fsys *client.Fsys, winid int, spans []Span, totalRunes int) erro
 		return fmt.Errorf("write clear: %w", err)
 	}
 
-	payload := FormatSpans(spans, totalRunes)
-	const maxChunk = 4000
+	return writeChunked(fid, FormatSpans(spans, totalRunes))
+}
+
+// maxChunk caps each Twrite to stay under the typical 9P msize
+// (8192). Splitting at newline boundaries means each chunk is a
+// complete set of span directives that parseSpanMessage parses
+// independently.
+const maxChunk = 4000
+
+// writeChunked writes payload to fid in chunks of at most
+// maxChunk bytes, each ending at a newline so parseSpanMessage
+// receives complete directive sets per Twrite. Returns an error
+// if the payload contains a single line longer than maxChunk
+// (which v1's emitter never produces, but is a guarded
+// invariant).
+func writeChunked(fid io.Writer, payload string) error {
 	for len(payload) > 0 {
 		end := len(payload)
 		if end > maxChunk {
-			// Cap at maxChunk and back off to the last newline so
-			// each write is a complete set of directives.
 			end = maxChunk
 			for end > 0 && payload[end-1] != '\n' {
 				end--

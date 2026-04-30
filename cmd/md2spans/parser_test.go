@@ -139,6 +139,77 @@ func TestParseUnclosedEmphasisFallsThrough(t *testing.T) {
 	}
 }
 
+// TestParseAsymmetricEmphasisBlocks pins the post-review
+// behavior: a different-count delimiter run encountered while
+// searching for a closer BLOCKS the match, returning literal
+// text rather than producing a surprising partial match.
+//
+// Earlier behavior (skip-past-different-count) produced
+// italic("a**b") for `*a**b*c*` — confusing. New behavior:
+// the inner `**` blocks the outer `*` from finding a closer,
+// so the outer markers fall through as literal text. The
+// inner `**b**` is then matched on its own pass.
+func TestParseAsymmetricEmphasisBlocks(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want []Span
+	}{
+		{
+			name: "outer single blocked by inner double",
+			src:  "*a**b**c*",
+			// First pass: opener `*` at 0 looks for `*`. Hits
+			// `**` (count 2) at 2 → blocks. No span.
+			// Then position 1 is `a`, advance.
+			// Position 2: `**` opener (count 2). Looks for `**`.
+			// Finds `**` at 5 → match. Bold "b". offset 4 length 1.
+			// Position 7: `c`, advance.
+			// Position 8: `*` opener. No closer remaining. No span.
+			want: []Span{{Offset: 4, Length: 1, Bold: true}},
+		},
+		{
+			name: "single delimiter blocked by triple",
+			src:  "*a***b**",
+			// `*` at 0 looks for `*`. Hits `***` at 2 (count 3) → blocks.
+			// `***` at 2 (count 3) looks for `***`. None remaining → no span.
+			// `**` at 6 (count 2) looks for `**` → none → no span.
+			want: nil,
+		},
+		{
+			name: "double blocked by single",
+			src:  "**a*b**",
+			// `**` at 0 (count 2) looks for `**`. First sees `*` at 3 (count 1) → blocks.
+			// `*` at 3 (count 1) looks for `*`. None remaining (the `**` is count 2) → no span.
+			want: nil,
+		},
+		{
+			name: "mixed delimiter chars don't match",
+			src:  "*x_",
+			// `*` opener cannot pair with `_`. No closer → no span.
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSpansEqual(t, Parse(tc.src), tc.want)
+		})
+	}
+}
+
+// TestParseDelimiterCountAboveThree: runs of 4+ delimiters are
+// not recognized as emphasis (delimRunLen caps at 4). v1 treats
+// them as literal text.
+func TestParseDelimiterCountAboveThree(t *testing.T) {
+	for _, src := range []string{
+		"****x****",
+		"____x____",
+	} {
+		if got := Parse(src); len(got) != 0 {
+			t.Errorf("Parse(%q) = %v, want empty (4-run not recognized)", src, got)
+		}
+	}
+}
+
 // TestParseEmphasisDoesNotSpanParagraphs: emphasis is intra-
 // paragraph (R4); openers in one paragraph don't pair with
 // closers in another.
@@ -175,17 +246,12 @@ func TestParseEmphasisUTF8(t *testing.T) {
 
 // --- Link tests (R5) ----------------------------------------------------
 
-// LinkBlue is the v1 link color; mirrors rich.LinkBlue but is
-// hard-coded here to keep md2spans independent of the rich
-// package.
-const linkBlueHex = "#0000cc"
-
 // TestParseLinkBasic covers R5: [text](url) emits a Fg-colored
 // span over "text"; the URL is dropped.
 func TestParseLinkBasic(t *testing.T) {
 	src := "[link](https://example.com)"
 	// Runes: [=0 l=1 i=2 n=3 k=4 ]=5 (=6 ...
-	want := []Span{{Offset: 1, Length: 4, Fg: linkBlueHex}}
+	want := []Span{{Offset: 1, Length: 4, Fg: linkBlue}}
 	assertSpansEqual(t, Parse(src), want)
 }
 
@@ -195,7 +261,7 @@ func TestParseLinkInSentence(t *testing.T) {
 	src := "Visit [our site](https://example.com) today"
 	// Runes: V=0 i=1 s=2 i=3 t=4 ' '=5 [=6 o=7 u=8 r=9 ' '=10 s=11 i=12 t=13 e=14 ]=15 ...
 	// Link text "our site" at offset 7, length 8.
-	want := []Span{{Offset: 7, Length: 8, Fg: linkBlueHex}}
+	want := []Span{{Offset: 7, Length: 8, Fg: linkBlue}}
 	assertSpansEqual(t, Parse(src), want)
 }
 
@@ -209,29 +275,32 @@ func TestParseLinkAdjacentToEmphasis(t *testing.T) {
 	// Italic "post" → offset 16 len 4.
 	want := []Span{
 		{Offset: 1, Length: 3, Italic: true},
-		{Offset: 7, Length: 3, Fg: linkBlueHex},
+		{Offset: 7, Length: 3, Fg: linkBlue},
 		{Offset: 16, Length: 4, Italic: true},
 	}
 	assertSpansEqual(t, Parse(src), want)
 }
 
-// TestParseMalformedLinksFallThrough: links missing parts emit
-// no spans (R5: malformed cases are literal text).
+// TestParseMalformedLinksFallThrough: links missing required
+// pieces emit no spans (R5: malformed cases are literal text).
+// Each case has a documented reason for the no-span outcome.
 func TestParseMalformedLinksFallThrough(t *testing.T) {
-	for _, src := range []string{
-		"[unclosed",
-		"[text] no paren",
-		"[text](no close",
-		"[text]( ) but no )", // does have close — see other test
-		"]orphan close",
-	} {
-		spans := Parse(src)
-		// We allow ZERO link spans here; emphasis is not in any
-		// of these test inputs, so total spans should be 0.
-		// (We don't assert against the "[text]( ) but no )"
-		// being malformed per se — the inner `( )` balanced makes
-		// it actually a valid v1 link with empty text. Accept.
-		_ = spans
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"unclosed bracket", "[unclosed"},
+		{"bracket then non-paren", "[text] no paren"},
+		{"open paren no close", "[text](no close"},
+		{"orphan close bracket", "]orphan close"},
+		{"empty link text and url", "[](u)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Parse(tc.src); len(got) != 0 {
+				t.Errorf("Parse(%q) = %v, want empty (malformed link → literal)", tc.src, got)
+			}
+		})
 	}
 }
 
@@ -250,7 +319,7 @@ func TestParseLinkTextEmpty(t *testing.T) {
 // counts (R7).
 func TestParseLinkUTF8(t *testing.T) {
 	// "[世界](u)": [=0 世=1 界=2 ]=3 (=4 u=5 )=6
-	want := []Span{{Offset: 1, Length: 2, Fg: linkBlueHex}}
+	want := []Span{{Offset: 1, Length: 2, Fg: linkBlue}}
 	assertSpansEqual(t, Parse("[世界](u)"), want)
 }
 

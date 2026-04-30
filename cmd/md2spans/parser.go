@@ -116,9 +116,9 @@ func scanParagraphs(src string) []paragraphRange {
 	return out
 }
 
-// LinkBlue is the v1 foreground color for inline-link text.
+// linkBlue is the v1 foreground color for inline-link text.
 // Hard-coded per md2spans.design.md § R5.
-const LinkBlue = "#0000cc"
+const linkBlue = "#0000cc"
 
 // parseParagraph turns one paragraph's source bytes into a list
 // of styled spans. Handles emphasis (R4) and inline links (R5).
@@ -134,59 +134,86 @@ const LinkBlue = "#0000cc"
 // (md2spans.design.md § R4).
 //
 // Link matcher: `[text](url)` emits a single span over "text"
-// with `Fg = LinkBlue`. The URL is dropped. Reference / autolink
+// with `Fg = linkBlue`. The URL is dropped. Reference / autolink
 // forms are not recognized (R5). Emphasis inside link text is
 // not currently honored — `[**bold**](u)` styles only the link
 // color, not the bold. Documented divergence.
 func parseParagraph(src string, p paragraphRange) []Span {
 	runes := []rune(src[p.ByteStart:p.ByteEnd])
 	var spans []Span
-	i := 0
-	for i < len(runes) {
-		c := runes[i]
-		switch {
+	for i := 0; i < len(runes); {
+		switch c := runes[i]; {
 		case c == '*' || c == '_':
-			n := delimRunLen(runes, i, c)
-			if n > 3 {
-				// Beyond v1's recognized counts; advance as literal.
-				i += n
-				continue
+			s, advance, ok := tryEmphasis(runes, i, p.RuneStart)
+			if ok {
+				spans = append(spans, s)
 			}
-			closerIdx := findEmphasisCloser(runes, i+n, c, n)
-			if closerIdx < 0 {
-				// No matching closer — leave opener as literal.
-				i += n
-				continue
-			}
-			spans = append(spans, Span{
-				Offset: p.RuneStart + i + n,
-				Length: closerIdx - (i + n),
-				Bold:   n == 2 || n == 3,
-				Italic: n == 1 || n == 3,
-			})
-			i = closerIdx + n
+			i += advance
 		case c == '[':
-			closeBracket, closeParen, ok := findInlineLink(runes, i)
-			if !ok {
-				i++
-				continue
+			s, advance, ok := tryLink(runes, i, p.RuneStart)
+			if ok {
+				spans = append(spans, s)
 			}
-			textLen := closeBracket - (i + 1)
-			if textLen > 0 {
-				// Skip zero-length link text; emitting a 0-length
-				// span is protocol-noise (R5 final paragraph).
-				spans = append(spans, Span{
-					Offset: p.RuneStart + i + 1,
-					Length: textLen,
-					Fg:     LinkBlue,
-				})
-			}
-			i = closeParen + 1
+			i += advance
 		default:
 			i++
 		}
 	}
 	return spans
+}
+
+// tryEmphasis attempts to parse an emphasis run starting at
+// runes[i] (which must be `*` or `_`). On match, returns the
+// styled Span, the number of runes consumed (opener + content +
+// closer), and ok=true. On no-match, returns ok=false and the
+// number of runes to skip past as literal (typically the opener
+// run length).
+//
+// runeStart is the body-relative rune offset of runes[0], so
+// emitted Span offsets are body-absolute.
+func tryEmphasis(runes []rune, i, runeStart int) (Span, int, bool) {
+	c := runes[i]
+	n := delimRunLen(runes, i, c)
+	if n > 3 {
+		return Span{}, n, false
+	}
+	closerIdx := findEmphasisCloser(runes, i+n, c, n)
+	if closerIdx < 0 {
+		return Span{}, n, false
+	}
+	return Span{
+		Offset: runeStart + i + n,
+		Length: closerIdx - (i + n),
+		Bold:   n == 2 || n == 3,
+		Italic: n == 1 || n == 3,
+	}, closerIdx + n - i, true
+}
+
+// tryLink attempts to parse an inline link `[text](url)`
+// starting at runes[i] (which must be `[`). On match, returns
+// the colored Span over the link text and the number of runes
+// consumed (the entire `[text](url)`). On no-match (malformed
+// shape, zero-length text), returns ok=false and 1 (skip past
+// the `[` as literal).
+//
+// runeStart is the body-relative rune offset of runes[0].
+func tryLink(runes []rune, i, runeStart int) (Span, int, bool) {
+	closeBracket, closeParen, ok := findInlineLink(runes, i)
+	if !ok {
+		return Span{}, 1, false
+	}
+	textLen := closeBracket - (i + 1)
+	if textLen <= 0 {
+		// Zero-length link text — skip the whole `[](u)` form
+		// without emitting (a 0-length span would be
+		// protocol-noise per R5).
+		return Span{}, closeParen + 1 - i, false
+	}
+	return Span{
+		Offset: runeStart + i + 1,
+		Length: textLen,
+		Fg:     linkBlue,
+	}, closeParen + 1 - i, true
 }
 
 // findInlineLink looks for the [text](url) pattern starting at
@@ -236,24 +263,37 @@ func delimRunLen(runes []rune, start int, c rune) int {
 
 // findEmphasisCloser returns the rune index in runes of the next
 // run of exactly count copies of c, starting search at index
-// `start`. Returns -1 if no such run exists in the remainder.
+// `start`. Returns -1 if no such run exists or if a run of c
+// with a different count is encountered first.
 //
-// Skip-rule: if a run of c is encountered with a different
-// count, advance past it without matching. This is what makes
-// the matcher "equal-count required". Documented divergence
-// from CommonMark.
+// Block-rule: if the matcher encounters a run of c with a
+// different count, it returns -1 immediately rather than
+// skipping past. This treats the asymmetric run as a hard
+// boundary that the opener cannot cross — matching what most
+// users intuit from `*a**b*c*`-style inputs (where the inner
+// `**` should not let the outer `*` quietly consume the closer
+// `*` after `b`). The earlier "skip and continue" rule produced
+// confusing partial matches; tests now pin the new behavior.
+//
+// This is still a divergence from CommonMark (which has full
+// flanking-rune rules), but it's a more honest "v1 doesn't
+// support nested emphasis at all" rather than "v1 sometimes
+// matches across nested runs in surprising ways."
 func findEmphasisCloser(runes []rune, start int, c rune, count int) int {
-	i := start
-	for i < len(runes) {
+	for i := start; i < len(runes); i++ {
 		if runes[i] != c {
-			i++
 			continue
 		}
 		n := delimRunLen(runes, i, c)
 		if n == count {
 			return i
 		}
-		i += n
+		// Different-count run of the same delimiter character
+		// blocks the match. Return -1 (caller falls through to
+		// literal text). Skipping past the run, as earlier
+		// versions did, produced surprising matches like
+		// italic("a**b") for `*a**b*c*`.
+		return -1
 	}
 	return -1
 }

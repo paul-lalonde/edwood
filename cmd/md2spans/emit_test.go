@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -118,15 +119,14 @@ func TestFormatSpansContiguous(t *testing.T) {
 		{Offset: 20, Length: 5, Fg: "#0000cc"},
 	}
 	got := FormatSpans(styled, 30)
-	// Walk lines, parse offset+length, verify contiguity.
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 	cursor := 0
 	for i, line := range lines {
 		var off, length int
 		var fg string
-		// "s OFFSET LENGTH FG ..." — only need the first three numeric/text fields.
-		_, err := stringScan(line, "s %d %d %s", &off, &length, &fg)
-		if err != nil {
+		// "s OFFSET LENGTH FG ..." — Sscanf reads the first
+		// three numeric/text fields and ignores trailing flags.
+		if _, err := fmt.Sscanf(line, "s %d %d %s", &off, &length, &fg); err != nil {
 			t.Fatalf("line %d %q: parse error %v", i, line, err)
 		}
 		if off != cursor {
@@ -137,44 +137,6 @@ func TestFormatSpansContiguous(t *testing.T) {
 	if cursor != 30 {
 		t.Errorf("final cursor = %d, want 30", cursor)
 	}
-}
-
-// stringScan is a small wrapper to make the contiguity test
-// readable without pulling in fmt.Sscanf-with-error-vibes.
-func stringScan(line, format string, args ...interface{}) (int, error) {
-	// Trim trailing flag tokens we don't need to parse.
-	fields := strings.Fields(line)
-	if len(fields) < 4 {
-		return 0, errf("not enough fields in %q", line)
-	}
-	*(args[0].(*int)) = parseInt(fields[1])
-	*(args[1].(*int)) = parseInt(fields[2])
-	*(args[2].(*string)) = fields[3]
-	return 3, nil
-}
-
-func errf(format string, args ...interface{}) error {
-	return scanErr{msg: format}
-}
-
-type scanErr struct{ msg string }
-
-func (e scanErr) Error() string { return e.msg }
-
-func parseInt(s string) int {
-	n := 0
-	neg := false
-	for i, c := range s {
-		if i == 0 && c == '-' {
-			neg = true
-			continue
-		}
-		n = n*10 + int(c-'0')
-	}
-	if neg {
-		n = -n
-	}
-	return n
 }
 
 // TestFormatSpansClipsToBody: a styled span past the body length
@@ -191,6 +153,46 @@ func TestFormatSpansClipsToBody(t *testing.T) {
 // the body length is dropped.
 func TestFormatSpansDropsOutOfRangeSpan(t *testing.T) {
 	got := FormatSpans([]Span{{Offset: 100, Length: 5, Italic: true}}, 10)
+	want := "s 0 10 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansNegativeOffsetClipped: a styled span with a
+// negative Offset is clipped to start at 0. This guards the
+// `start < 0` defense in fillGaps.
+func TestFormatSpansNegativeOffsetClipped(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: -3, Length: 5, Italic: true}}, 10)
+	// Clip: start=0, end=2. Italic over [0, 2). Default [2, 10).
+	want := "s 0 2 - italic\ns 2 8 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansOverlapDefense: overlapping styled spans (which
+// Parse should never produce, but a future refactor might) get
+// the earlier-wins handling — the second span is clipped to
+// start at the first's end. This guards the `start < cursor`
+// defense in fillGaps.
+func TestFormatSpansOverlapDefense(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 5, Italic: true},
+		{Offset: 3, Length: 4, Bold: true}, // overlaps the italic
+	}, 10)
+	// First italic [0, 5). Second bold should clip to [5, 7).
+	// Then default [7, 10).
+	want := "s 0 5 - italic\ns 5 2 - bold\ns 7 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
+// AT totalRunes (zero remaining body) is dropped.
+func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 10, Length: 1, Italic: true}}, 10)
 	want := "s 0 10 -\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
