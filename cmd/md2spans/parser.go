@@ -116,9 +116,12 @@ func scanParagraphs(src string) []paragraphRange {
 	return out
 }
 
+// LinkBlue is the v1 foreground color for inline-link text.
+// Hard-coded per md2spans.design.md § R5.
+const LinkBlue = "#0000cc"
+
 // parseParagraph turns one paragraph's source bytes into a list
-// of styled spans. Emphasis (R4) is handled here; links (R5)
-// arrive in row 2.4.
+// of styled spans. Handles emphasis (R4) and inline links (R5).
 //
 // Emphasis matcher: greedy and non-CommonMark-compliant. The
 // matcher pairs delimiter runs by adjacency requiring the
@@ -129,37 +132,95 @@ func scanParagraphs(src string) []paragraphRange {
 // flanking-rune rules are not applied; `5*x*` is treated as
 // emphasis on "x" the same as ` *x* `. Documented divergence
 // (md2spans.design.md § R4).
+//
+// Link matcher: `[text](url)` emits a single span over "text"
+// with `Fg = LinkBlue`. The URL is dropped. Reference / autolink
+// forms are not recognized (R5). Emphasis inside link text is
+// not currently honored — `[**bold**](u)` styles only the link
+// color, not the bold. Documented divergence.
 func parseParagraph(src string, p paragraphRange) []Span {
 	runes := []rune(src[p.ByteStart:p.ByteEnd])
 	var spans []Span
 	i := 0
 	for i < len(runes) {
 		c := runes[i]
-		if c != '*' && c != '_' {
+		switch {
+		case c == '*' || c == '_':
+			n := delimRunLen(runes, i, c)
+			if n > 3 {
+				// Beyond v1's recognized counts; advance as literal.
+				i += n
+				continue
+			}
+			closerIdx := findEmphasisCloser(runes, i+n, c, n)
+			if closerIdx < 0 {
+				// No matching closer — leave opener as literal.
+				i += n
+				continue
+			}
+			spans = append(spans, Span{
+				Offset: p.RuneStart + i + n,
+				Length: closerIdx - (i + n),
+				Bold:   n == 2 || n == 3,
+				Italic: n == 1 || n == 3,
+			})
+			i = closerIdx + n
+		case c == '[':
+			closeBracket, closeParen, ok := findInlineLink(runes, i)
+			if !ok {
+				i++
+				continue
+			}
+			textLen := closeBracket - (i + 1)
+			if textLen > 0 {
+				// Skip zero-length link text; emitting a 0-length
+				// span is protocol-noise (R5 final paragraph).
+				spans = append(spans, Span{
+					Offset: p.RuneStart + i + 1,
+					Length: textLen,
+					Fg:     LinkBlue,
+				})
+			}
+			i = closeParen + 1
+		default:
 			i++
-			continue
 		}
-		n := delimRunLen(runes, i, c)
-		if n > 3 {
-			// Beyond v1's recognized counts; advance past run as literal.
-			i += n
-			continue
-		}
-		closerIdx := findEmphasisCloser(runes, i+n, c, n)
-		if closerIdx < 0 {
-			// No matching closer — leave opener as literal text.
-			i += n
-			continue
-		}
-		spans = append(spans, Span{
-			Offset: p.RuneStart + i + n,
-			Length: closerIdx - (i + n),
-			Bold:   n == 2 || n == 3,
-			Italic: n == 1 || n == 3,
-		})
-		i = closerIdx + n
 	}
 	return spans
+}
+
+// findInlineLink looks for the [text](url) pattern starting at
+// runes[start] (which must be '['). Returns the rune indices of
+// the closing ']' and the closing ')', plus ok=true on a match.
+// Returns ok=false for any malformed shape (no ']', '(' missing,
+// '(' not adjacent, no closing ')').
+func findInlineLink(runes []rune, start int) (closeBracket, closeParen int, ok bool) {
+	if start >= len(runes) || runes[start] != '[' {
+		return 0, 0, false
+	}
+	closeBracket = indexRune(runes, start+1, ']')
+	if closeBracket < 0 {
+		return 0, 0, false
+	}
+	if closeBracket+1 >= len(runes) || runes[closeBracket+1] != '(' {
+		return 0, 0, false
+	}
+	closeParen = indexRune(runes, closeBracket+2, ')')
+	if closeParen < 0 {
+		return 0, 0, false
+	}
+	return closeBracket, closeParen, true
+}
+
+// indexRune returns the rune index >= start of the next
+// occurrence of c, or -1 if not found.
+func indexRune(runes []rune, start int, c rune) int {
+	for i := start; i < len(runes); i++ {
+		if runes[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // delimRunLen returns the length of the maximal run of character
