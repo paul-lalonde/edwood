@@ -21,6 +21,16 @@ type StyleAttrs struct {
 	// 1 of the markdown-externalization plan.
 	Scale float64
 
+	// Family is the semantic font-family name (e.g. "code" for
+	// monospace). Empty string is the unset sentinel: downstream
+	// translation uses the default font. The protocol uses
+	// semantic names (not Plan 9 font paths); edwood's font
+	// registry maps family names to actual loaded fonts. v1
+	// recognizes "code" only; the parser rejects unknown names.
+	// Wire format: `family=NAME` flag on s/b directives. Added
+	// in Phase 3 round 2.
+	Family string
+
 	// Box fields (zero values = not a box)
 	IsBox      bool
 	BoxWidth   int    // pixels
@@ -55,6 +65,7 @@ func (a StyleAttrs) Equal(b StyleAttrs) bool {
 		a.Italic == b.Italic &&
 		a.Hidden == b.Hidden &&
 		a.Scale == b.Scale &&
+		a.Family == b.Family &&
 		a.IsBox == b.IsBox &&
 		a.BoxWidth == b.BoxWidth &&
 		a.BoxHeight == b.BoxHeight &&

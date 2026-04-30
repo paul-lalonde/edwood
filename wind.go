@@ -2370,6 +2370,14 @@ func (w *Window) initStyledMode() {
 	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
 	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
 
+	// Code font for monospace rendering — same as previewcmd.
+	// Without this, fontForStyle returns the base font for any
+	// span with Code=true, so spans-protocol family=code
+	// directives (added in Phase 3 round 2) would render in the
+	// proportional body font despite StyleAttrs.Family="code"
+	// being plumbed through styleAttrsToRichStyle correctly.
+	codeFont := tryLoadCodeFont(display, fontPath)
+
 	rt := NewRichText()
 
 	rtOpts := []RichTextOption{
@@ -2404,6 +2412,9 @@ func (w *Window) initStyledMode() {
 	}
 	if h3Font != nil {
 		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
+	}
+	if codeFont != nil {
+		rtOpts = append(rtOpts, WithRichTextCodeFont(codeFont))
 	}
 
 	// Create an image cache for box elements that reference images.
@@ -2658,6 +2669,13 @@ func (w *Window) buildStyledContent() rich.Content {
 // passed through directly. Per the spans-protocol round 1 design,
 // the parser rejects negative / zero / non-finite Scale values,
 // so this branch never sees them.
+//
+// Family: "code" maps to rich.Style.Code=true (rich.Frame's
+// fontForStyle returns the registered codeFont). Empty Family
+// leaves Code=false. Other values are no-ops here — the parser
+// rejects unknown family names upstream, so this branch never
+// sees them in production; the defensive ignore prevents a
+// stale span store from breaking the rendering.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
@@ -2669,6 +2687,9 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s.Bg = sa.Bg
 	s.Bold = sa.Bold
 	s.Italic = sa.Italic
+	if sa.Family == "code" {
+		s.Code = true
+	}
 	return s
 }
 
@@ -2690,6 +2711,9 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 	s.Bg = sa.Bg
 	s.Bold = sa.Bold
 	s.Italic = sa.Italic
+	if sa.Family == "code" {
+		s.Code = true
+	}
 
 	// Parse payload: if it starts with "image:", set Image + ImageURL.
 	if strings.HasPrefix(sa.BoxPayload, "image:") {

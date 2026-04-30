@@ -230,6 +230,38 @@ func TestFormatSpansScaleWithFlags(t *testing.T) {
 	}
 }
 
+// --- Family emission tests (Phase 3 round 2) ----------------------------
+
+// TestFormatSpansFamilyOmittedForEmpty: Family="" produces no
+// `family=` flag on the wire.
+func TestFormatSpansFamilyOmittedForEmpty(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 5, Italic: true, Family: ""}}, 5)
+	want := "s 0 5 - italic\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansFamilyEmitted: Family="code" produces a
+// `family=code` flag.
+func TestFormatSpansFamilyEmitted(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 5, Family: "code"}}, 5)
+	want := "s 0 5 - family=code\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansFamilyWithFlags: family coexists with bold,
+// italic, scale on the wire.
+func TestFormatSpansFamilyWithFlags(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 5, Bold: true, Family: "code", Scale: 1.5}}, 5)
+	want := "s 0 5 - bold scale=1.5 family=code\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {
