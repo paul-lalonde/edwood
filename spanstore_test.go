@@ -768,3 +768,32 @@ func TestStyleAttrs_DefaultStyleAttrsScaleZero(t *testing.T) {
 		t.Errorf("zero StyleAttrs.Scale = %v, want 0 (unset sentinel)", a.Scale)
 	}
 }
+
+// --- Family field tests (Phase 3 round 2) --------------------------------
+
+// TestStyleAttrs_SameFamily: identical Family values → equal.
+func TestStyleAttrs_SameFamily(t *testing.T) {
+	a := StyleAttrs{Family: "code"}
+	b := StyleAttrs{Family: "code"}
+	if !a.Equal(b) {
+		t.Error("expected equal for same Family")
+	}
+}
+
+// TestStyleAttrs_DifferentFamily: different Family → not equal.
+func TestStyleAttrs_DifferentFamily(t *testing.T) {
+	a := StyleAttrs{Family: "code"}
+	b := StyleAttrs{Family: ""}
+	if a.Equal(b) {
+		t.Error("expected not equal for different Family")
+	}
+}
+
+// TestStyleAttrs_DefaultStyleAttrsFamilyEmpty: zero-value
+// StyleAttrs has Family=="", the "unset" sentinel.
+func TestStyleAttrs_DefaultStyleAttrsFamilyEmpty(t *testing.T) {
+	var a StyleAttrs
+	if a.Family != "" {
+		t.Errorf("zero StyleAttrs.Family = %q, want \"\" (unset sentinel)", a.Family)
+	}
+}
