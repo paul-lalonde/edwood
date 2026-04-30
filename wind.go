@@ -2633,9 +2633,18 @@ func (w *Window) buildStyledContent() rich.Content {
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
+//
+// Scale: StyleAttrs.Scale==0 is the "unset" sentinel and maps
+// to rich.Style.Scale=1.0 (body baseline). A positive Scale is
+// passed through directly. Per the spans-protocol round 1 design,
+// the parser rejects negative / zero / non-finite Scale values,
+// so this branch never sees them.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
+	}
+	if sa.Scale > 0 {
+		s.Scale = sa.Scale
 	}
 	s.Fg = sa.Fg
 	s.Bg = sa.Bg
@@ -2654,6 +2663,9 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 		ImageWidth:  sa.BoxWidth,
 		ImageHeight: sa.BoxHeight,
 		ImageAlt:    altText,
+	}
+	if sa.Scale > 0 {
+		s.Scale = sa.Scale
 	}
 	s.Fg = sa.Fg
 	s.Bg = sa.Bg
