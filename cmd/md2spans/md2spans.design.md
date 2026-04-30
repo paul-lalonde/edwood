@@ -154,12 +154,16 @@ R6. **Pass-through fallback.** Any markdown construct not
     honest about its limited scope; Phase 3 rounds add real
     heading support.
 
-R7. **Byte vs. rune offsets.** Spans emitted use byte offsets
-    into the body's UTF-8 byte stream. This is what
-    `xfid.go:parseSpanMessage` and the gap-buffered
-    `SpanStore` consume. Verify at iterate time by reading
-    `spanparse.go:parseSpanLine` and the call chain that
-    interprets `offset` / `length` against the window body.
+R7. **Rune offsets.** Spans emitted use rune offsets and rune
+    lengths, NOT byte offsets. This matches `cmd/edcolor`'s
+    existing convention (`colorize` uses `utf8.RuneCountInString`
+    and emits offsets / lengths in runes). Multi-byte UTF-8
+    runes count as one offset unit.
+
+    Confirmed by reading `cmd/edcolor/main.go:colorize` and
+    `cmd/edcolor/main.go:writeSpans`. Earlier drafts of this
+    design said "byte offsets" — that was wrong; corrected
+    after auditing edcolor.
 
 R8. **Watch loop.** v1 watches the window's `event` file for
     body edits (acme `Mu` / similar). On each edit, after a
@@ -216,16 +220,13 @@ cmd/md2spans/
 
 ## Risks
 
-1. **Byte vs. rune offset confusion** (R7). If the spans
-   protocol elsewhere assumes runes, byte offsets mis-position
-   styled runs on multi-byte content. Verify before committing.
-2. **Hand-rolled parser bugs.** Greedy emphasis matching
+1. **Hand-rolled parser bugs.** Greedy emphasis matching
    diverges from CommonMark. Document divergences in tests.
-3. **Watch loop / acme event semantics.** edcolor's loop is
+2. **Watch loop / acme event semantics.** edcolor's loop is
    200 ms debounced; emulate exactly until we have reason to
    diverge. The `9fans.net/go/acme` package abstracts most of
    the 9P plumbing.
-4. **Markup-rune visibility.** v1 leaves `*`, `**`, `[`, `]`,
+3. **Markup-rune visibility.** v1 leaves `*`, `**`, `[`, `]`,
    `(`, `)`, etc. visible in the body. Side-by-side comparison
    with the internal preview will look different — internal
    preview hides these. v1 accepts this as a known difference
