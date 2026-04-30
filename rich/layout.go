@@ -507,9 +507,26 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	pendingParaBreak := false // Track if we just had a paragraph break
 	currentListIndent := 0    // Track current list indentation level for wrapped lines
 	actualLineHeight := 0     // Track actual max height of content boxes on current line
+	imagesBelowHeight := 0    // Sum of ImageBelow box heights on the current line (Phase 3 round 4)
 
 	for i := range boxes {
 		box := &boxes[i]
+
+		// ImageBelow boxes don't compete for vertical space with
+		// the line's text — they render BELOW it, growing the line
+		// height additively. They contribute zero horizontal
+		// advance and are placed at the current xPos so the
+		// painter can locate them on the line. Phase 3 round 4.
+		if box.IsImage() && box.Style.ImageBelow {
+			_, imgHeight := imageBoxDimensions(box, frameWidth)
+			imagesBelowHeight += imgHeight
+			box.Wid = 0
+			currentLine.Boxes = append(currentLine.Boxes, PositionedBox{
+				Box: *box,
+				X:   xPos,
+			})
+			continue
+		}
 
 		// Update line height if this box uses a taller font
 		boxHeight := getFontHeight(box.Style)
@@ -547,6 +564,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			if actualLineHeight > 0 {
 				currentLine.Height = actualLineHeight
 			}
+			// ImageBelow boxes add height below the line text (Phase 3 round 4).
+			currentLine.Height += imagesBelowHeight
 			lines = append(lines, currentLine)
 
 			// Calculate Y offset based on the finalized line height
@@ -565,6 +584,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			xPos = 0
 			currentListIndent = 0 // Reset list indent on explicit newline
 			actualLineHeight = 0  // Reset for next line
+			imagesBelowHeight = 0 // Reset for next line
 
 			// Mark that we have a pending paragraph break if this newline is a para break
 			if box.Style.ParaBreak {
@@ -655,6 +675,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				if actualLineHeight > 0 {
 					currentLine.Height = actualLineHeight
 				}
+				// ImageBelow contribution closes out with the line.
+				currentLine.Height += imagesBelowHeight
 				lines = append(lines, currentLine)
 				currentLine = Line{
 					Y:      currentLine.Y + currentLine.Height,
@@ -662,7 +684,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				}
 				// Maintain indentation on wrapped lines
 				xPos = currentIndent
-				actualLineHeight = 0 // Reset for new line
+				actualLineHeight = 0  // Reset for new line
+				imagesBelowHeight = 0 // Reset for new line
 
 				// Recalculate tab width at new position
 				if box.IsTab() {
@@ -675,6 +698,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				if actualLineHeight > 0 {
 					currentLine.Height = actualLineHeight
 				}
+				currentLine.Height += imagesBelowHeight
 				lines = append(lines, currentLine)
 				currentLine = Line{
 					Y:      currentLine.Y + currentLine.Height,
@@ -682,6 +706,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				}
 				xPos = currentIndent
 				actualLineHeight = 0
+				imagesBelowHeight = 0
 				lines, currentLine, xPos = splitBoxAcrossLinesWithIndent(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight, getFontForStyle, currentIndent)
 				continue
 			}
@@ -702,6 +727,13 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 
 	// Don't forget the last line (if it has content)
 	if len(currentLine.Boxes) > 0 {
+		// Use actual content height if we had content (matches the
+		// newline-close-out path); otherwise leave Height as the
+		// inherited value. Then add ImageBelow contribution.
+		if actualLineHeight > 0 {
+			currentLine.Height = actualLineHeight
+		}
+		currentLine.Height += imagesBelowHeight
 		lines = append(lines, currentLine)
 	}
 
