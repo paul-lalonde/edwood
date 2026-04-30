@@ -85,8 +85,18 @@ Defines a styled run of text. Fields:
   any other token is the first flag. (Discriminated by
   appearance, not by position.)
 - `<flag>...`: zero or more of `bold`, `italic`, `hidden`,
-  `scale=N.N`, `family=NAME`. Order doesn't matter; each is a
-  single token. Unknown flags are an error.
+  `scale=N.N`, `family=NAME`, `hrule`. Order doesn't matter;
+  each is a single token. Unknown flags are an error.
+
+**`hrule`** (added Phase 3 round 3):
+- Single-token boolean flag. Indicates that the span is a
+  horizontal-rule line. The renderer suppresses the span's
+  text content (`paintPhaseText` skips HRule-styled boxes)
+  and `rich/mdrender`'s `paintPhaseHorizontalRules` draws a
+  thin line spanning the frame width on the line.
+- No coexistence restrictions; `hrule` plus `bold` parses
+  fine, but the bold has no visible effect since the text
+  isn't drawn.
 
 **`family=NAME`** (added Phase 3 round 2):
 - NAME is a semantic font-family name from the v1-recognized
@@ -267,8 +277,8 @@ update this spec in lockstep:
   `scale=N.N` (e.g. `scale=2.0` for H1). See above.
 - **Round 2 — font family**: ✓ landed (April 2026). New `<flag>`
   `family=NAME` with v1-recognized value `code`. See above.
-- **Round 3 — inline rule**: new directive (or new box payload
-  kind `rule:width:height`).
+- **Round 3 — inline rule**: ✓ landed (April 2026). New
+  `<flag>` `hrule`. See above.
 - **Round 4 — slide / images**: tool-side only; protocol
   unchanged.
 - **Round 5 — block code (region)**: `begin region` /
