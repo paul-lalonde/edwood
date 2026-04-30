@@ -31,6 +31,13 @@ type StyleAttrs struct {
 	// in Phase 3 round 2.
 	Family string
 
+	// HRule indicates that this span represents a horizontal
+	// rule line. The wrapping renderer (rich/mdrender)
+	// suppresses the span's text and draws a 1px line spanning
+	// the frame width. Wire format: `hrule` flag on s/b
+	// directives. Added in Phase 3 round 3.
+	HRule bool
+
 	// Box fields (zero values = not a box)
 	IsBox      bool
 	BoxWidth   int    // pixels
@@ -66,6 +73,7 @@ func (a StyleAttrs) Equal(b StyleAttrs) bool {
 		a.Hidden == b.Hidden &&
 		a.Scale == b.Scale &&
 		a.Family == b.Family &&
+		a.HRule == b.HRule &&
 		a.IsBox == b.IsBox &&
 		a.BoxWidth == b.BoxWidth &&
 		a.BoxHeight == b.BoxHeight &&
