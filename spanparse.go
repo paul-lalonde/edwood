@@ -156,7 +156,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 		}
 	}
 
-	var bold, italic, hidden bool
+	var bold, italic, hidden, hrule bool
 	var scale float64
 	var family string
 	for _, flag := range fields[flagStart:] {
@@ -167,6 +167,8 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			italic = true
 		case flag == "hidden":
 			hidden = true
+		case flag == "hrule":
+			hrule = true
 		case strings.HasPrefix(flag, "scale="):
 			s, perr := parseScaleFlag(flag)
 			if perr != nil {
@@ -194,6 +196,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			Hidden: hidden,
 			Scale:  scale,
 			Family: family,
+			HRule:  hrule,
 		},
 	}
 	return offset, length, run, nil
@@ -290,7 +293,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 
 	// Parse optional colors, flags, and payload from remaining fields.
 	var fg, bg color.Color
-	var bold, italic, hidden bool
+	var bold, italic, hidden, hrule bool
 	var scale float64
 	var family string
 	var payloadParts []string
@@ -346,6 +349,9 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 		case f == "hidden":
 			hidden = true
 			idx++
+		case f == "hrule":
+			hrule = true
+			idx++
 		case strings.HasPrefix(f, "scale="):
 			s, perr := parseScaleFlag(f)
 			if perr != nil {
@@ -380,6 +386,7 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			Hidden:     hidden,
 			Scale:      scale,
 			Family:     family,
+			HRule:      hrule,
 			IsBox:      true,
 			BoxWidth:   width,
 			BoxHeight:  height,

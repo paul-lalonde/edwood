@@ -1088,3 +1088,63 @@ func TestParseBoxFamily(t *testing.T) {
 		t.Errorf("Family = %q, want code", runs[0].Style.Family)
 	}
 }
+
+// --- HRule flag tests (Phase 3 round 3) ----------------------------------
+
+// TestParseSpanHRule: `hrule` flag parses to HRule=true.
+func TestParseSpanHRule(t *testing.T) {
+	data := "s 0 3 - hrule"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if !runs[0].Style.HRule {
+		t.Error("HRule should be true")
+	}
+}
+
+// TestParseSpanHRuleAbsentMeansFalse: omitting the flag leaves
+// HRule at its zero value (false).
+func TestParseSpanHRuleAbsentMeansFalse(t *testing.T) {
+	data := "s 0 5 - bold"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.HRule {
+		t.Error("HRule should be false when flag absent")
+	}
+}
+
+// TestParseSpanHRuleWithOtherFlags: hrule coexists with bold,
+// italic, scale, family in any order.
+func TestParseSpanHRuleWithOtherFlags(t *testing.T) {
+	cases := []string{
+		"s 0 3 - hrule bold",
+		"s 0 3 - bold hrule",
+		"s 0 3 - scale=1.0 hrule",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			runs, _, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Fatalf("parseSpanMessage: %v", err)
+			}
+			if !runs[0].Style.HRule {
+				t.Errorf("HRule not parsed; line was %q", data)
+			}
+		})
+	}
+}
+
+// TestParseBoxHRule: hrule flag also applies to b-lines.
+func TestParseBoxHRule(t *testing.T) {
+	data := "b 0 1 100 1 - - hrule"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if !runs[0].Style.HRule {
+		t.Error("HRule should be true")
+	}
+}
