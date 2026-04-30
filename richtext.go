@@ -5,6 +5,7 @@ import (
 
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/rich"
+	"github.com/rjkroege/edwood/rich/mdrender"
 )
 
 // Note: scrollbar dimensions use Scrollwid and Scrollgap from dat.go
@@ -20,7 +21,14 @@ type RichText struct {
 
 	display draw.Display
 	frame   rich.Frame
-	content rich.Content
+	// renderer wraps frame for the markdown-aware paint phases that
+	// no longer live in rich.Frame (Phase 1 of the markdown-
+	// externalization work). Constructed in Init alongside the
+	// frame; non-nil for the lifetime of RichText. Drives all
+	// frame redraws so blockquote / future markdown decorations
+	// land on top of the frame's paint pass.
+	renderer *mdrender.Renderer
+	content  rich.Content
 
 	// Options stored for frame initialization
 	background     draw.Image
@@ -139,6 +147,15 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	// Initialize frame with empty rectangle - will be set on first Render() call
 	rt.frame.Init(image.Rectangle{}, frameOpts...)
 
+	// Wrap the frame in a markdown-aware Renderer. As of Phase 1.2
+	// of the markdown-externalization plan, blockquote-bar painting
+	// lives on the wrapper rather than in rich.Frame. Subsequent
+	// rows move horizontal rules and slide-break handling here too.
+	// The wrapper is unconditionally constructed: styled mode never
+	// produces blockquote-styled content (per the spans-protocol
+	// invariant) so the wrapper's extra paint pass is a no-op there.
+	rt.renderer = mdrender.New(rt.frame, display)
+
 	// Construct the shared Scrollbar widget driven by the rich-text
 	// adapter. SetRect is called by Render() each time the scroll
 	// rectangle is recomputed; the widget's own dirty-cache
@@ -229,13 +246,20 @@ func (rt *RichText) GetOriginYOffset() int {
 
 // Redraw redraws the RichText component using the last rendered rectangle.
 func (rt *RichText) Redraw() {
-	// Draw scrollbar first (behind frame)
+	// Draw scrollbar first (behind frame).
 	if rt.scrollbar != nil {
 		rt.scrollbar.Draw()
 	}
 
-	// Draw the frame content
-	if rt.frame != nil {
+	// Draw the frame content via the markdown-aware Renderer so
+	// blockquote / future markdown decorations land on top of the
+	// frame's paint pass. Renderer is constructed in Init and is
+	// non-nil for the lifetime of RichText.
+	if rt.renderer != nil {
+		rt.renderer.Redraw()
+	} else if rt.frame != nil {
+		// Defensive fallback (should not occur in production —
+		// renderer is always constructed alongside frame).
 		rt.frame.Redraw()
 	}
 }
@@ -297,8 +321,11 @@ func (rt *RichText) Render(r image.Rectangle) {
 		screen.Draw(gapRect, rt.background, rt.background, image.ZP)
 	}
 
-	// Draw frame content
-	if rt.frame != nil {
+	// Draw frame content via the markdown-aware Renderer (see
+	// Redraw godoc for context).
+	if rt.renderer != nil {
+		rt.renderer.Redraw()
+	} else if rt.frame != nil {
 		rt.frame.Redraw()
 	}
 }

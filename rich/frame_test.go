@@ -4703,3 +4703,51 @@ func TestAllocColorImageEqualColorsShareCacheEntry(t *testing.T) {
 		t.Errorf("equal colors should share cache entry; got distinct instances %p vs %p", a, b)
 	}
 }
+
+// TestLayoutLinesAccessor covers R2 of
+// rich/mdrender/blockquote.design.md: LayoutLines exposes the
+// layout's visible-line slice for post-paint decoration. Empty
+// content returns nil; non-empty content returns lines whose Y
+// values match the layout that drawTextTo painted, and whose Boxes
+// preserve per-box Style fields the wrapper inspects.
+func TestLayoutLinesAccessor(t *testing.T) {
+	rect := image.Rect(0, 0, 200, 200)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+	bg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.White)
+	fg, _ := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Black)
+
+	// Empty content: LayoutLines returns nil.
+	fEmpty := NewFrame()
+	fEmpty.Init(rect, WithDisplay(display), WithFont(font), WithBackground(bg), WithTextColor(fg))
+	if got := fEmpty.LayoutLines(); got != nil {
+		t.Errorf("LayoutLines on empty content = %v, want nil", got)
+	}
+
+	// Non-empty content: LayoutLines returns lines matching layout.
+	f := NewFrame()
+	f.Init(rect, WithDisplay(display), WithFont(font), WithBackground(bg), WithTextColor(fg))
+	f.SetContent(Plain("hello\nworld"))
+	lines := f.LayoutLines()
+	if len(lines) < 2 {
+		t.Fatalf("expected >=2 visible lines, got %d", len(lines))
+	}
+	// Y values must match LinePixelYs (which is the same layout source).
+	ys := f.LinePixelYs()
+	if len(ys) != len(lines) {
+		t.Fatalf("LayoutLines length=%d but LinePixelYs length=%d", len(lines), len(ys))
+	}
+	for i, line := range lines {
+		if line.Y != ys[i] {
+			t.Errorf("LayoutLines[%d].Y = %d, LinePixelYs[%d] = %d (must match)", i, line.Y, i, ys[i])
+		}
+	}
+}
+
+// R1 ("drawTextTo no longer calls paintPhaseBlockquoteBorders" /
+// "BlockquoteBorderColor moves to mdrender") is enforced at
+// compile time after the move: the function is removed and its
+// constants live in mdrender. No runtime test needed.
+//
+// Positive bar-rendering coverage lives on the wrapper side at
+// rich/mdrender/blockquote_test.go.

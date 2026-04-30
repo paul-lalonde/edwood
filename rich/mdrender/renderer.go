@@ -5,51 +5,67 @@
 // package; Renderer wraps a frame and adds those phases on top of
 // the frame's own paint pass.
 //
-// At Phase 1.1 (this row of the plan) the package contains only an
-// empty skeleton: Renderer wraps a frame and Redraw delegates to it
-// transparently. Subsequent rows add the moved paint phases. The
-// package is transitional — it will be deleted in Phase 4 once the
-// external md2spans tool produces equivalent output via spans-
-// protocol primitives.
+// As of Phase 1.2, the wrapper paints blockquote bars after the
+// frame's paint pass returns. Subsequent rows add horizontal
+// rules (1.3) and slide-break handling (1.4). The package is
+// transitional — it will be deleted in Phase 4 once the external
+// md2spans tool produces equivalent output via spans-protocol
+// primitives.
 //
 // Import direction: mdrender imports rich. rich must NEVER import
 // mdrender. The Go compiler enforces this via the import cycle
 // check.
 package mdrender
 
-import "github.com/rjkroege/edwood/rich"
+import (
+	edwooddraw "github.com/rjkroege/edwood/draw"
+	"github.com/rjkroege/edwood/rich"
+)
 
 // Renderer wraps a rich.Frame and applies markdown-specific paint
 // phases on top of the frame's own paint pass. See the package doc
 // for the larger context.
 type Renderer struct {
-	frame rich.Frame
+	frame   rich.Frame
+	display edwooddraw.Display
+
+	// colorCache mirrors rich.frameImpl.colorCache: caches 1x1
+	// replicated images by packed RGBA so repeated calls during
+	// scrollbar latches / live edits don't leak Plan 9 image
+	// handles. Lazily initialized in allocColorImage.
+	colorCache map[edwooddraw.Color]edwooddraw.Image
 }
 
-// New returns a Renderer wrapping frame. frame must be non-nil; New
-// panics on nil rather than constructing a silently-broken Renderer
-// that would later nil-deref. The panic is intentional and matches
-// the project convention for unrecoverable construction-time misuse.
-func New(frame rich.Frame) *Renderer {
+// New returns a Renderer wrapping frame with display as the draw
+// target for wrapper-side decoration phases. Both frame and
+// display must be non-nil; New panics on either being nil with a
+// message identifying which.
+func New(frame rich.Frame, display edwooddraw.Display) *Renderer {
 	if frame == nil {
 		panic("mdrender.New: frame must not be nil")
 	}
-	return &Renderer{frame: frame}
+	if display == nil {
+		panic("mdrender.New: display must not be nil")
+	}
+	return &Renderer{frame: frame, display: display}
 }
 
-// Redraw paints the wrapped frame. At Phase 1.1 this is a pure
-// delegation to the frame's own Redraw; later rows add wrapper-side
-// paint phases that run after the frame's paint pass.
+// Redraw paints the wrapped frame and runs wrapper-side paint
+// phases.
+//
+// Order is fixed: frame paints first (text + images via scratch +
+// blit to screen), then the wrapper draws decorations directly on
+// top of the screen image. No new flicker — it's a layered draw
+// above already-blitted pixels.
 func (r *Renderer) Redraw() {
 	r.frame.Redraw()
+	r.paintBlockquoteBorders()
 }
 
 // Frame returns the wrapped rich.Frame for callers that need to
 // drive the frame directly during the Phase 1 transition (e.g. to
 // call SetContent, SetRect, SetOrigin while wrapper-side methods
-// don't yet exist). This is a transitional affordance and is
-// expected to shrink as the wrapper grows; new code should prefer
-// adding methods on Renderer over reaching through this getter.
+// don't yet exist). Transitional affordance; expected to shrink.
 func (r *Renderer) Frame() rich.Frame {
 	return r.frame
 }

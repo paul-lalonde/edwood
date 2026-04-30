@@ -20,17 +20,26 @@ and "renderer.Redraw() through this wrapper" at this row is a bug.
 
 ## Requirements
 
-R1. `New(frame rich.Frame) *Renderer` returns a non-nil `*Renderer`
-    that holds the supplied frame. The frame must not be nil; if it
-    is, `New` panics with a clear message. (No silent-nil
-    misbehavior — Phase 1 is high-risk; failing loudly at
-    construction is preferable to a confusing later nil-deref.)
+R1. `New(frame rich.Frame, display draw.Display) *Renderer` returns
+    a non-nil `*Renderer` that holds the supplied frame and
+    display. Both arguments are required; `New` panics on a nil
+    frame OR a nil display, with a message that names which one
+    was nil. (No silent-nil misbehavior — Phase 1 is high-risk;
+    failing loudly at construction is preferable to a confusing
+    later nil-deref.)
+
+    **Signature note:** Row 1.1 originally specified
+    `New(frame)` only. Row 1.2 (blockquote painting) added the
+    `display` parameter because the wrapper needs the display
+    to draw decorations on top of the frame's already-blitted
+    output. See `blockquote.design.md` R3.
 
 R2. `Renderer.Redraw()` calls the underlying frame's `Redraw()` and
-    returns. No additional drawing happens at this row. Calling
-    `Redraw` on a wrapper produces output indistinguishable from
-    calling `Redraw` on the underlying frame directly, for any
-    content the frame can render today.
+    then any wrapper-side paint phases (introduced row-by-row,
+    starting with blockquote bars in row 1.2). At Phase 1.1 there
+    are no wrapper-side phases, so `Redraw` is a pure pass-through
+    and produces output indistinguishable from direct
+    `frame.Redraw`.
 
 R3. `Renderer.Frame()` returns the underlying `rich.Frame` for
     callers that need direct access during the Phase 1 transition
@@ -53,7 +62,10 @@ R5. Import direction: `rich/mdrender` may import `rich`. `rich`
 ```go
 package mdrender
 
-import "github.com/rjkroege/edwood/rich"
+import (
+    "github.com/rjkroege/edwood/draw"
+    "github.com/rjkroege/edwood/rich"
+)
 
 // Renderer wraps a rich.Frame and adds markdown-specific paint
 // phases on top of the frame's own paint pass. Phase 1.1 is the
@@ -63,15 +75,17 @@ import "github.com/rjkroege/edwood/rich"
 // and edwood drives rich.Frame from spans-protocol output produced
 // by the external md2spans tool.
 type Renderer struct {
-    frame rich.Frame
+    frame   rich.Frame
+    display draw.Display
 }
 
-// New constructs a Renderer wrapping frame. frame must be non-nil.
-func New(frame rich.Frame) *Renderer
+// New constructs a Renderer wrapping frame. Both frame and display
+// must be non-nil; New panics on either being nil.
+func New(frame rich.Frame, display draw.Display) *Renderer
 
-// Redraw paints the wrapped frame. At Phase 1.1 this is a pure
-// pass-through to frame.Redraw(); later rows add markdown-specific
-// post-paint passes.
+// Redraw paints the wrapped frame and runs wrapper-side paint
+// phases. At Phase 1.1 there are no wrapper-side phases yet, so
+// this is a pure pass-through to frame.Redraw().
 func (r *Renderer) Redraw()
 
 // Frame returns the wrapped frame for callers that need to drive it
@@ -82,9 +96,11 @@ func (r *Renderer) Frame() rich.Frame
 
 ## Edge cases
 
-- **Nil frame**: `New(nil)` panics. The argument is required; there
-  is no useful behavior for a nil frame and silently constructing
-  an unusable Renderer would mask configuration mistakes.
+- **Nil frame or nil display**: `New` panics with a message
+  identifying which argument was nil. Both are required; there is
+  no useful behavior for either being nil and silently
+  constructing an unusable Renderer would mask configuration
+  mistakes.
 - **Repeated Redraw calls**: same as repeated `frame.Redraw()`
   calls — idempotent in the sense that they produce the same
   output for the same frame state.
