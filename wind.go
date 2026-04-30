@@ -2360,6 +2360,16 @@ func (w *Window) initStyledMode() {
 	italicFont := ft.italic
 	boldItalicFont := ft.boldItalic
 
+	// Scaled fonts for headings — same set previewcmd loads.
+	// Without these, fontForStyle in rich.Frame falls through to
+	// the base font for any Scale > 1, so spans-protocol scale=N
+	// directives (added in Phase 3 round 1) would render at body
+	// size despite the StyleAttrs.Scale field being plumbed
+	// through styleAttrsToRichStyle correctly.
+	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
+	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
+	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
+
 	rt := NewRichText()
 
 	rtOpts := []RichTextOption{
@@ -2385,6 +2395,15 @@ func (w *Window) initStyledMode() {
 	}
 	if boldItalicFont != nil {
 		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
+	}
+	if h1Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(2.0, h1Font))
+	}
+	if h2Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.5, h2Font))
+	}
+	if h3Font != nil {
+		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
 	}
 
 	// Create an image cache for box elements that reference images.
