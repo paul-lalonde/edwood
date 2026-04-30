@@ -1409,3 +1409,46 @@ func TestBoxStyleToRichStyle_ScaleAlsoPassedThrough(t *testing.T) {
 		t.Errorf("box Scale = %v, want 1.5", got.Scale)
 	}
 }
+
+// --- Family mapping tests (Phase 3 round 2) ------------------------------
+
+// TestStyleAttrsToRichStyle_FamilyEmptyLeavesCodeFalse: the unset
+// Family ("") leaves rich.Style.Code at its zero value (false).
+func TestStyleAttrsToRichStyle_FamilyEmptyLeavesCodeFalse(t *testing.T) {
+	sa := StyleAttrs{Family: ""}
+	got := styleAttrsToRichStyle(sa)
+	if got.Code {
+		t.Error("Code should be false for empty Family")
+	}
+}
+
+// TestStyleAttrsToRichStyle_FamilyCodeMapsToCodeTrue: Family="code"
+// maps to rich.Style.Code=true.
+func TestStyleAttrsToRichStyle_FamilyCodeMapsToCodeTrue(t *testing.T) {
+	sa := StyleAttrs{Family: "code"}
+	got := styleAttrsToRichStyle(sa)
+	if !got.Code {
+		t.Error("Code should be true for Family=\"code\"")
+	}
+}
+
+// TestStyleAttrsToRichStyle_FamilyUnknownIgnored: unknown family
+// values (which shouldn't reach this layer because the parser
+// rejects them, but defensively...) leave Code=false.
+func TestStyleAttrsToRichStyle_FamilyUnknownIgnored(t *testing.T) {
+	sa := StyleAttrs{Family: "serif"}
+	got := styleAttrsToRichStyle(sa)
+	if got.Code {
+		t.Error("Code should not be true for unknown Family")
+	}
+}
+
+// TestBoxStyleToRichStyle_FamilyAlsoMapped: the box-style path
+// also honors Family (consistency with span path).
+func TestBoxStyleToRichStyle_FamilyAlsoMapped(t *testing.T) {
+	sa := StyleAttrs{Family: "code", IsBox: true, BoxWidth: 100, BoxHeight: 50}
+	got := boxStyleToRichStyle(sa, "alt")
+	if !got.Code {
+		t.Error("box Code should be true for Family=\"code\"")
+	}
+}
