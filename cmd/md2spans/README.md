@@ -32,9 +32,8 @@ re-render styled spans (debounced 200 ms).
 | Inline link `[text](url)` | ✓ | URL dropped, text colored `#0000cc` |
 | ATX headings (`# … ######`) | ✓ | Phase 3 round 1 — emits `scale=N.N` (H1=2.0 down to H6=1.0). The `# ` markup remains visible in the body. H6 is body-size; the in-tree path also makes it bold for visual distinction (md2spans does not in v1). |
 | Inline code (`` `text` ``) | ✓ | Phase 3 round 2 — emits `family=code` over backtick-delimited content. Single-backtick form only; double-backtick form deferred. The backticks remain visible in the body. |
-| Horizontal rules (`---` / `***` / `___`) | ✓ | Phase 3 round 3 — emits `hrule` over the marker runes; the renderer suppresses the markers and draws a horizontal line. Simple form only (3+ same-character markers, no internal spaces, no trailing content). v1 may render a setext-heading underline (`---` after a text line) as a rule rather than a heading; users who write `---` between paragraphs may see this. |
+| Horizontal rules (`---` / `***` / `___`) | ✓ | Phase 3 round 3 — emits `hrule` over the marker runes; the renderer keeps the markers visible and draws a horizontal line over the same row (matching the "markup remains visible" stance of every other v1 feature). Simple form only (3+ same-character markers, no internal spaces, no trailing content). v1 may render a setext-heading underline (`---` after a text line) as a rule rather than a heading; users who write `---` between paragraphs may see this. |
 | Fenced / indented code blocks | — | Phase 3 round 5 (regions) |
-| Horizontal rules | — | Phase 3 round 3 |
 | Images | — | Phase 3 round 4 |
 | Block code with bg | — | Phase 3 round 5 (region) |
 | Blockquote | — | Phase 3 round 6 (region) |

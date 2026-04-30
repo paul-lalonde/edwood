@@ -90,13 +90,18 @@ Defines a styled run of text. Fields:
 
 **`hrule`** (added Phase 3 round 3):
 - Single-token boolean flag. Indicates that the span is a
-  horizontal-rule line. The renderer suppresses the span's
-  text content (`paintPhaseText` skips HRule-styled boxes)
-  and `rich/mdrender`'s `paintPhaseHorizontalRules` draws a
-  thin line spanning the frame width on the line.
-- No coexistence restrictions; `hrule` plus `bold` parses
-  fine, but the bold has no visible effect since the text
-  isn't drawn.
+  horizontal-rule line. The renderer keeps the span's text
+  visible (the source markers `---`/`***`/`___` render
+  normally) and `rich/mdrender`'s
+  `paintPhaseHorizontalRules` draws a thin line spanning
+  the frame width on the line — the user sees both the
+  markers and the rule. This matches the "markup remains
+  visible" stance of every other md2spans-emitted markdown
+  feature in v1; a future WYSIWYG mode may hide markers
+  globally.
+- No coexistence restrictions; `hrule` plus `bold` /
+  `italic` is valid and the styling applies to the visible
+  marker text.
 
 **`family=NAME`** (added Phase 3 round 2):
 - NAME is a semantic font-family name from the v1-recognized

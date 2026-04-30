@@ -2218,12 +2218,17 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	}
 }
 
-// TestHRuleNotRenderedAsText covers the frame-side invariant that
-// HRule-styled boxes are skipped by paintPhaseText — the rule rune
-// (HRuleRune) must not appear in a string rendering operation. The
-// actual horizontal-rule line drawing now lives in rich/mdrender;
-// see TestRendererPaintsHRule there.
-func TestHRuleNotRenderedAsText(t *testing.T) {
+// TestHRuleRenderedAsText covers the frame-side behavior: HRule-
+// styled boxes are NOT skipped by paintPhaseText. Their text
+// (whether HRuneRune from the in-tree markdown path or `---`/`***`/
+// `___` from md2spans) renders normally. The rich/mdrender
+// wrapper draws the rule line on top — the user sees both the
+// source markers AND the rule, matching the "markup remains
+// visible" stance of all other md2spans-emitted features.
+//
+// Phase 3 round 3 (April 2026) flipped this from "skip text" to
+// "render text" per user feedback.
+func TestHRuleRenderedAsText(t *testing.T) {
 	rect := image.Rect(0, 0, 400, 300)
 	display := edwoodtest.NewDisplay(rect)
 	font := edwoodtest.NewFont(10, 14)
@@ -2237,7 +2242,7 @@ func TestHRuleNotRenderedAsText(t *testing.T) {
 
 	content := Content{
 		{Text: "above\n", Style: DefaultStyle()},
-		{Text: string(HRuleRune) + "\n", Style: StyleHRule},
+		{Text: "---\n", Style: StyleHRule},
 		{Text: "below", Style: DefaultStyle()},
 	}
 	f.SetContent(content)
@@ -2246,15 +2251,20 @@ func TestHRuleNotRenderedAsText(t *testing.T) {
 	f.Redraw()
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Surrounding text is rendered.
+	// Surrounding text is rendered (regression check; was also
+	// asserted by the prior version of this test).
 	foundAbove := false
 	foundBelow := false
+	foundDashes := false
 	for _, op := range ops {
 		if strings.Contains(op, `string "above"`) {
 			foundAbove = true
 		}
 		if strings.Contains(op, `string "below"`) {
 			foundBelow = true
+		}
+		if strings.Contains(op, `string "---"`) {
+			foundDashes = true
 		}
 	}
 	if !foundAbove {
@@ -2263,13 +2273,9 @@ func TestHRuleNotRenderedAsText(t *testing.T) {
 	if !foundBelow {
 		t.Errorf("Redraw did not render 'below' text\nops: %v", ops)
 	}
-
-	// The HRuleRune itself must not appear in any string rendering op.
-	for _, op := range ops {
-		if strings.Contains(op, `string "`) && strings.Contains(op, string(HRuleRune)) {
-			t.Errorf("HRuleRune rendered as text (paintPhaseText skip broken):\nop: %s", op)
-			break
-		}
+	// New invariant: HRule-styled boxes' text DOES render now.
+	if !foundDashes {
+		t.Errorf("Redraw did not render '---' text (HRule skip should be removed)\nops: %v", ops)
 	}
 }
 

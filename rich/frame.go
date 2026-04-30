@@ -1405,10 +1405,16 @@ func (f *frameImpl) paintPhaseText(c *paintCtx) {
 			if len(pb.Box.Text) == 0 {
 				continue
 			}
-			if pb.Box.Style.HRule {
-				continue // rendered by rich/mdrender, not as text
-			}
-
+			// HRule-styled boxes used to be skipped here so that
+			// the rich/mdrender wrapper's rule painter could draw
+			// over a blank line. Phase 3 round 3 (April 2026)
+			// removed the skip per user feedback: source markers
+			// should remain visible alongside the rendered rule,
+			// matching the "markup remains visible" stance of all
+			// other md2spans-emitted markdown features. The rule
+			// line is still drawn by rich/mdrender; the markers
+			// (`---`/`***`/`___` from md2spans, or HRune chars
+			// from the in-tree markdown path) now show through.
 			pt := image.Point{
 				X: c.offset.X + pb.X - hOff,
 				Y: c.offset.Y + line.Y,
