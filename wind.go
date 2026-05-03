@@ -6,6 +6,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2721,14 +2722,64 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 		s.Code = true
 	}
 	s.HRule = sa.HRule
-
-	// Parse payload: if it starts with "image:", set Image + ImageURL.
-	if strings.HasPrefix(sa.BoxPayload, "image:") {
-		s.Image = true
-		s.ImageURL = strings.TrimPrefix(sa.BoxPayload, "image:")
+	// BoxPlacement="below" → render image anchored to the
+	// line, painted below the line text (Phase 3 round 4).
+	// "" and "replace" both denote the existing replacing
+	// semantic.
+	if sa.BoxPlacement == "below" {
+		s.ImageBelow = true
 	}
 
+	// Parse payload. v1 convention: first token is `image:URL`;
+	// subsequent space-separated tokens are key=value params
+	// interpreted by the consumer (this function), not by the
+	// wire-format parser. Unknown params are silently ignored
+	// for forward-compat. Phase 3 round 4.
+	applyImagePayload(&s, sa.BoxPayload)
+
 	return s
+}
+
+// applyImagePayload parses a box's payload string and applies
+// the recognized parts to the rich.Style:
+//   - First token `image:URL` enables image rendering and sets
+//     ImageURL to URL (without the `image:` prefix).
+//   - Subsequent `key=value` tokens are recognized for v1's
+//     small set:
+//   - `width=N` sets ImageWidth to N (overrides any prior
+//     value, including a wire-format BoxWidth).
+//
+// Anything else (unknown prefix on the first token, unknown
+// param names, malformed values like `width=abc`) is silently
+// ignored. Phase 3 round 4.
+func applyImagePayload(s *rich.Style, payload string) {
+	if payload == "" {
+		return
+	}
+	tokens := strings.Fields(payload)
+	if len(tokens) == 0 {
+		return
+	}
+	first := tokens[0]
+	if !strings.HasPrefix(first, "image:") {
+		return
+	}
+	s.Image = true
+	s.ImageURL = strings.TrimPrefix(first, "image:")
+	for _, tok := range tokens[1:] {
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 {
+			continue
+		}
+		key, val := tok[:eq], tok[eq+1:]
+		switch key {
+		case "width":
+			n, err := strconv.Atoi(val)
+			if err == nil && n > 0 {
+				s.ImageWidth = n
+			}
+		}
+	}
 }
 
 // HandleStyledMouse handles mouse events when the window is in styled rendering

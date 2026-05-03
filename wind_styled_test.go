@@ -635,6 +635,161 @@ func TestBoxStyleToRichStyleNonImagePayload(t *testing.T) {
 	}
 }
 
+// --- BoxPlacement + payload-param plumbing tests (Phase 3 round 4) -----
+
+// TestBoxStyleToRichStyleImageBelow: BoxPlacement="below"
+// maps to Style.ImageBelow=true; the box still produces an
+// image span, source URL is parsed from the first payload
+// token, alt text passes through.
+func TestBoxStyleToRichStyleImageBelow(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     0,
+		BoxHeight:    0,
+		BoxPayload:   "image:./pic.png",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+
+	if !got.ImageBelow {
+		t.Error("ImageBelow should be true for BoxPlacement=below")
+	}
+	if !got.Image {
+		t.Error("Image should be true")
+	}
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./pic.png")
+	}
+	if got.ImageAlt != "alt" {
+		t.Errorf("ImageAlt = %q; want %q", got.ImageAlt, "alt")
+	}
+}
+
+// TestBoxStyleToRichStyleImageBelowReplaceExplicit:
+// BoxPlacement="replace" is treated the same as "" — no
+// ImageBelow.
+func TestBoxStyleToRichStyleImageBelowReplaceExplicit(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     100,
+		BoxHeight:    50,
+		BoxPayload:   "image:./pic.png",
+		BoxPlacement: "replace",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageBelow {
+		t.Error("ImageBelow should be false for BoxPlacement=replace")
+	}
+}
+
+// TestBoxStyleToRichStyleImageBelowAbsent: empty
+// BoxPlacement → Style.ImageBelow=false (default).
+func TestBoxStyleToRichStyleImageBelowAbsent(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:      true,
+		BoxWidth:   100,
+		BoxHeight:  50,
+		BoxPayload: "image:./pic.png",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageBelow {
+		t.Error("ImageBelow should be false for empty BoxPlacement")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadWidthParam: a payload of
+// "image:URL width=N" applies N to Style.ImageWidth. The
+// `width=N` token follows the URL and is parsed by the
+// consumer, not by the wire-format parser.
+func TestBoxStyleToRichStylePayloadWidthParam(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./pic.png width=200",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q (URL only)", got.ImageURL, "./pic.png")
+	}
+	if got.ImageWidth != 200 {
+		t.Errorf("ImageWidth = %d; want 200 (from payload param)", got.ImageWidth)
+	}
+}
+
+// TestBoxStyleToRichStylePayloadUnknownParamIgnored: an
+// unknown payload param is silently ignored (forward-compat
+// for future params on older renderers).
+func TestBoxStyleToRichStylePayloadUnknownParamIgnored(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./pic.png alignment=center caption=hello",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	// URL still parses correctly; unknown params don't break.
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./pic.png")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadMultipleParams: multiple
+// recognized params apply (currently only width=N is
+// recognized, but the parser must handle param ordering
+// and multiple-token payloads cleanly).
+func TestBoxStyleToRichStylePayloadMultipleParams(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./p.png width=300 unknown=foo",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	if got.ImageWidth != 300 {
+		t.Errorf("ImageWidth = %d; want 300", got.ImageWidth)
+	}
+	if got.ImageURL != "./p.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./p.png")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadWidthOverride: an explicit
+// BoxWidth from the wire format takes effect when no
+// width=N param is present. When BOTH are set, the payload
+// param wins (treats wire BoxWidth as a legacy hint that
+// payload params override).
+func TestBoxStyleToRichStylePayloadWidthOverride(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     100, // wire-format hint (legacy mode)
+		BoxHeight:    80,
+		BoxPayload:   "image:./p.png width=200",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	// Payload param wins for width.
+	if got.ImageWidth != 200 {
+		t.Errorf("ImageWidth = %d; want 200 (payload param wins)", got.ImageWidth)
+	}
+}
+
+// TestBoxStyleToRichStylePayloadInvalidWidth: a
+// non-numeric width=X is silently ignored (treated like an
+// unknown param).
+func TestBoxStyleToRichStylePayloadInvalidWidth(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./p.png width=abc",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	if got.ImageURL != "./p.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./p.png")
+	}
+	// width=abc is invalid → ImageWidth stays 0 (unset).
+	if got.ImageWidth != 0 {
+		t.Errorf("ImageWidth = %d; want 0 (invalid width=abc ignored)", got.ImageWidth)
+	}
+}
+
 // =========================================================================
 // buildStyledContent with boxes tests
 // =========================================================================
