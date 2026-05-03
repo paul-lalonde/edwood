@@ -253,6 +253,73 @@ func TestWriteChunkedSplitsAtNewlines(t *testing.T) {
 	}
 }
 
+// TestWriteChunkedKeepsRegionInOneChunk: a payload that
+// exceeds maxChunk should NOT split a chunk boundary
+// between a `begin region` and its matching `end region`.
+// The chunker extends past maxChunk if needed so the
+// entire region lands in a single Twrite, satisfying the
+// protocol's "regions cannot span Twrites" rule. Phase 3
+// round 5.
+func TestWriteChunkedKeepsRegionInOneChunk(t *testing.T) {
+	// Build a payload where:
+	// - Lines [0, ~2000): plain s-lines (default fill).
+	// - Line: begin region code
+	// - Lines: ~3000 bytes of body
+	// - Line: end region
+	// - Trailing s-lines.
+	// The region straddles maxChunk (4000), so the chunker
+	// must not break inside the begin/end pair.
+	var b strings.Builder
+	for i := 0; i < 250; i++ {
+		b.WriteString("s 0 1 -\n") // 8 bytes each → 2000 bytes
+	}
+	beginIdx := b.Len()
+	b.WriteString("begin region code\n")
+	for i := 0; i < 300; i++ {
+		b.WriteString("s 100 5 -\n") // 10 bytes each → 3000 bytes
+	}
+	endIdx := b.Len()
+	b.WriteString("end region\n")
+	for i := 0; i < 100; i++ {
+		b.WriteString("s 0 1 -\n")
+	}
+	payload := b.String()
+
+	file := &fakeSpansFile{failOn: -1}
+	if err := writeChunked(file, payload); err != nil {
+		t.Fatalf("writeChunked: %v", err)
+	}
+	// Every chunk must contain a balanced number of begin
+	// region / end region directives.
+	for i, w := range file.writes {
+		begins := strings.Count(string(w), "begin region")
+		ends := strings.Count(string(w), "end region")
+		if begins != ends {
+			t.Errorf("chunk %d: %d `begin region` vs %d `end region` (must be balanced)",
+				i, begins, ends)
+		}
+	}
+	// Concatenated chunks recover the payload.
+	if got := file.allWritten(); got != payload {
+		t.Errorf("concatenated writes != original payload (lengths %d vs %d)", len(got), len(payload))
+	}
+	_ = beginIdx
+	_ = endIdx
+}
+
+// TestWriteChunkedRejectsUnclosedRegion: a payload with an
+// unclosed `begin region` (no matching `end region` at EOF)
+// is malformed; the chunker must reject rather than emit a
+// chunk that the consumer's parser would reject mid-write.
+func TestWriteChunkedRejectsUnclosedRegion(t *testing.T) {
+	payload := "s 0 5 -\nbegin region code\ns 5 10 - family=code\n"
+	file := &fakeSpansFile{failOn: -1}
+	err := writeChunked(file, payload)
+	if err == nil {
+		t.Error("expected error for unclosed region; got nil")
+	}
+}
+
 // TestWriteChunkedRejectsLineTooLong: a payload with a single line
 // exceeding maxChunk is rejected (no infinite loop).
 func TestWriteChunkedRejectsLineTooLong(t *testing.T) {

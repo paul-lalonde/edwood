@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -301,21 +302,25 @@ const maxChunk = 4000
 
 // writeChunked writes payload to fid in chunks of at most
 // maxChunk bytes, each ending at a newline so parseSpanMessage
-// receives complete directive sets per Twrite. Returns an error
-// if the payload contains a single line longer than maxChunk
-// (which v1's emitter never produces, but is a guarded
-// invariant).
+// receives complete directive sets per Twrite.
+//
+// Phase 3 round 5: chunks honor region boundaries. A chunk
+// boundary may not fall between a `begin region` directive
+// and its matching `end region` (the protocol requires
+// balanced begin/end within one Twrite). When a region
+// straddles maxChunk, the chunker extends the chunk past
+// maxChunk to enclose the entire region — chunks may
+// therefore exceed maxChunk by at most the size of one
+// region's body.
+//
+// Returns an error if (a) the payload contains a single line
+// longer than maxChunk with no newline anywhere, or (b) the
+// payload has unbalanced begin/end region directives at EOF.
 func writeChunked(fid io.Writer, payload string) error {
 	for len(payload) > 0 {
-		end := len(payload)
-		if end > maxChunk {
-			end = maxChunk
-			for end > 0 && payload[end-1] != '\n' {
-				end--
-			}
-			if end == 0 {
-				return fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
-			}
+		end, err := nextChunkEnd(payload)
+		if err != nil {
+			return err
 		}
 		if _, err := fid.Write([]byte(payload[:end])); err != nil {
 			return fmt.Errorf("write spans: %w", err)
@@ -323,4 +328,69 @@ func writeChunked(fid io.Writer, payload string) error {
 		payload = payload[end:]
 	}
 	return nil
+}
+
+// nextChunkEnd returns the byte position just past the end
+// of the next chunk. Rule: the chunk ends at the latest
+// newline at-or-before maxChunk where region-nesting depth
+// is zero. If no such newline exists, the chunker extends
+// past maxChunk to find the next depth-zero newline (a
+// region's body forced the extension); but if we extend
+// past maxChunk WITHOUT having seen any newlines before
+// maxChunk and WITHOUT having opened a region, the payload
+// has a single line longer than maxChunk and we error.
+// Phase 3 round 5.
+func nextChunkEnd(payload string) (int, error) {
+	depth := 0
+	lineStart := 0
+	lastSafe := 0           // latest \n position+1 at depth 0, <= maxChunk; 0 means none yet
+	newlineBeforeMax := false // any \n at-or-before maxChunk?
+	for i := 0; i < len(payload); i++ {
+		if payload[i] != '\n' {
+			continue
+		}
+		line := payload[lineStart:i]
+		switch {
+		case strings.HasPrefix(line, "begin region"):
+			depth++
+		case strings.HasPrefix(line, "end region"):
+			depth--
+			if depth < 0 {
+				return 0, fmt.Errorf("end region without matching begin")
+			}
+		}
+		end := i + 1
+		if end <= maxChunk {
+			newlineBeforeMax = true
+			if depth == 0 {
+				lastSafe = end
+			}
+		} else if depth == 0 {
+			// Past maxChunk at depth 0. Decide.
+			if lastSafe > 0 {
+				return lastSafe, nil
+			}
+			if !newlineBeforeMax {
+				return 0, fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
+			}
+			// We had newlines before maxChunk but they were
+			// inside open regions; extend the chunk to here.
+			return end, nil
+		}
+		lineStart = i + 1
+	}
+	// Reached EOF.
+	if depth != 0 {
+		return 0, fmt.Errorf("spans payload has unclosed region (depth %d at EOF)", depth)
+	}
+	if len(payload) <= maxChunk {
+		return len(payload), nil
+	}
+	if lastSafe > 0 {
+		return lastSafe, nil
+	}
+	if !newlineBeforeMax {
+		return 0, fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
+	}
+	return len(payload), nil
 }

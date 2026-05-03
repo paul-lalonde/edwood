@@ -126,10 +126,10 @@ have something to integrate with.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | writeChunked walks the formatted output and ensures no chunk boundary falls between a `begin region` and its matching `end region`. Within a region, lines may still be chunked at newline boundaries; only the begin/end pair must be in the same chunk. | base doc § "Risk #2 (atomicity)" | Bound on region length: ~16KB (large code blocks). 9P msize is typically 8KB-64KB. |
-| [ ] Tests | A region whose body would naturally split across chunks gets bumped to the next chunk; chunk that just barely fits an entire region; multiple regions per chunk OK | `cmd/md2spans/main_test.go` | Tests likely require a configurable msize for determinism. |
-| [ ] Iterate | Update writeChunked to track region depth and defer the chunk boundary | `cmd/md2spans/main.go` | — |
-| [ ] Commit | — | — | `md2spans: writeChunked honors region boundaries` |
+| [x] Design | writeChunked walks the payload tracking begin/end depth; the chunk ends at the latest depth-0 \\n at-or-before maxChunk; if no safe split exists, extend past maxChunk for a region (or error if simply line-too-long). | base doc § "Risk #2 (atomicity)" | Real fenced blocks << maxChunk; pathological case produces one big Twrite (still under typical 9P msize). |
+| [x] Tests | Region straddling maxChunk lands balanced (begin/end count balanced per chunk); unclosed region at EOF errors; existing line-too-long error preserved | `cmd/md2spans/render_test.go` | — |
+| [x] Iterate | Extract nextChunkEnd helper; track depth, lastSafe, newlineBeforeMax to distinguish "extend for region" vs "single line too long" | `cmd/md2spans/main.go` | — |
+| [x] Commit | — | — | `md2spans: writeChunked honors region boundaries` |
 
 ## Phase 3.5.9: Spec + README
 
