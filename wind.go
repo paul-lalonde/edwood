@@ -2418,23 +2418,53 @@ func (w *Window) initStyledMode() {
 		rtOpts = append(rtOpts, WithRichTextCodeFont(codeFont))
 	}
 
-	// Create an image cache for box elements that reference images.
+	// Create an image cache for box elements that reference
+	// images (initStyledMode is the only mode that
+	// lazily allocates; previewcmd guards on a nil cache).
 	if w.imageCache == nil {
 		w.imageCache = rich.NewImageCache(0)
 	}
-	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
 
-	// Wire async-image-load callback so cache-miss images
-	// trigger a repaint when the load completes. previewcmd
-	// has had this since the in-tree markdown renderer was
-	// added; styled mode was missing it (Phase 3 round 4
-	// post-merge fix), so md2spans-emitted images would only
-	// appear after the next unrelated user action.
+	// Image-related options (cache + onImageLoaded callback +
+	// basePath) are routed through a shared helper so the
+	// preview and styled paths stay in parity. Three rounds
+	// of bugs (rounds 1/2 missed font registration; round 4
+	// missed basePath; the post-review sweep caught the
+	// missed onImageLoaded callback) all came from
+	// previewcmd updating without initStyledMode following.
+	// See addImageRichTextOptions for the rationale.
+	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.styledMode })
+
+	rt.Init(display, font, rtOpts...)
+
+	w.richBody = rt
+	w.styledMode = true
+	w.styledSuppressed = false
+}
+
+// addImageRichTextOptions appends the image-related options
+// to the rich-text option list: image cache, async-load
+// callback, and base path for relative image resolution.
+// Both initStyledMode and previewcmd use this — extracting
+// the shared set keeps them in lockstep so a new image-related
+// option doesn't have to be remembered in two places. Each
+// call site passes a closure (`isCurrentMode`) that gates the
+// async-load redraw on the caller's specific mode flag
+// (styledMode vs previewMode); when the closure returns false
+// or the rich body is gone, the redraw is skipped.
+//
+// Background: rounds 1, 2, and 4 each shipped a bug-fix that
+// added a missing option to initStyledMode that previewcmd
+// already had. The recurring pattern motivated this helper.
+func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode func() bool) []RichTextOption {
+	if w.imageCache != nil {
+		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+	}
 	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
 		go func() {
 			global.row.lk.Lock()
 			defer global.row.lk.Unlock()
-			if !w.styledMode || w.richBody == nil {
+			if !isCurrentMode() || w.richBody == nil {
 				return
 			}
 			w.richBody.Render(w.body.all)
@@ -2443,14 +2473,6 @@ func (w *Window) initStyledMode() {
 			}
 		}()
 	}))
-
-	// Wire the body file's absolute path as basePath so
-	// relative image URLs (md2spans's `image:./pic.png`)
-	// resolve against the file's directory. previewcmd
-	// already does this (wind.go:2604-2613); styled mode
-	// was missing the wiring, so md2spans-emitted relative
-	// paths failed to load. Phase 3 round 4 bug fix —
-	// same class as the rounds 1/2 missing-font-load bugs.
 	name := w.body.file.Name()
 	basePath := name
 	if !filepath.IsAbs(basePath) {
@@ -2459,12 +2481,7 @@ func (w *Window) initStyledMode() {
 		}
 	}
 	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
-
-	rt.Init(display, font, rtOpts...)
-
-	w.richBody = rt
-	w.styledMode = true
-	w.styledSuppressed = false
+	return rtOpts
 }
 
 // exitStyledMode switches the window from styled rendering back to plain mode.
@@ -2602,34 +2619,10 @@ func (w *Window) rebuildPreviewFont() {
 		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
 	}
 
-	if w.imageCache != nil {
-		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
-	}
-
-	// Wire async image load callback.
-	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
-		go func() {
-			global.row.lk.Lock()
-			defer global.row.lk.Unlock()
-			if !w.previewMode || w.richBody == nil {
-				return
-			}
-			w.richBody.Render(w.body.all)
-			if w.display != nil {
-				w.display.Flush()
-			}
-		}()
-	}))
-
-	// Set base path for relative image resolution.
-	name := w.body.file.Name()
-	basePath := name
-	if !filepath.IsAbs(basePath) {
-		if abs, err := filepath.Abs(basePath); err == nil {
-			basePath = abs
-		}
-	}
-	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
+	// Image-related options (cache + onImageLoaded callback +
+	// basePath) — shared with initStyledMode so the two paths
+	// stay in lockstep. See addImageRichTextOptions.
+	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.previewMode })
 
 	rt.Init(display, font, rtOpts...)
 
