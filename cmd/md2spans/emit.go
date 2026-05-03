@@ -116,36 +116,10 @@ func writeStyleFlags(b *strings.Builder, s Span) {
 // by inserting default-styled spans between, before, and after the
 // supplied styled spans. Spans that fall outside [0, totalRunes)
 // are clipped or dropped. Mirrors cmd/edcolor's colorize tail.
-//
-// Length-0 box spans (Phase 3 round 4 placement=below) are
-// special-cased: they don't bound a text region and don't advance
-// the cursor, so they sit "between" two text spans without
-// splitting their coverage.
 func fillGaps(styled []Span, totalRunes int) []Span {
 	out := make([]Span, 0, 2*len(styled)+1)
 	cursor := 0
 	for _, s := range styled {
-		// Length-0 boxes (placement=below): emit fill before,
-		// emit the box itself, leave cursor unchanged. The box
-		// can sit at offset == totalRunes (e.g., image at end
-		// of body); clamp the offset for the fill check.
-		if s.IsBox && s.Length == 0 {
-			start := s.Offset
-			if start < 0 {
-				start = 0
-			}
-			if start > totalRunes {
-				start = totalRunes
-			}
-			if start > cursor {
-				out = append(out, Span{Offset: cursor, Length: start - cursor})
-				cursor = start
-			}
-			boxOut := s
-			boxOut.Offset = start
-			out = append(out, boxOut)
-			continue
-		}
 		// Clip to body bounds; drop spans entirely past the end.
 		start := s.Offset
 		end := s.Offset + s.Length

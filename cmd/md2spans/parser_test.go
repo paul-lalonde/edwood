@@ -622,7 +622,7 @@ func TestParseImageBasic(t *testing.T) {
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       15,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -635,10 +635,11 @@ func TestParseImageBasic(t *testing.T) {
 // width=Npx → payload is just `image:URL` (no width param).
 func TestParseImageWithTitleNoWidth(t *testing.T) {
 	src := `![alt](p.png "no width here")`
+	// 29 runes total (![alt](p.png "no width here"))
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       29,
 			IsBox:        true,
 			BoxPayload:   "image:p.png",
 			BoxPlacement: "below",
@@ -651,10 +652,11 @@ func TestParseImageWithTitleNoWidth(t *testing.T) {
 // into the box's payload as `width=N` (px suffix dropped).
 func TestParseImageWithWidth(t *testing.T) {
 	src := `![alt](p.png "width=200px")`
+	// 27 runes (![alt](p.png "width=200px"))
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       27,
 			IsBox:        true,
 			BoxPayload:   "image:p.png width=200",
 			BoxPlacement: "below",
@@ -667,10 +669,11 @@ func TestParseImageWithWidth(t *testing.T) {
 // optional in CommonMark. The box is still emitted.
 func TestParseImageEmptyAlt(t *testing.T) {
 	src := "![](pic.png)"
+	// 12 runes (![](pic.png))
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       12,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -680,14 +683,14 @@ func TestParseImageEmptyAlt(t *testing.T) {
 }
 
 // TestParseImageMidParagraph: image syntax mid-paragraph
-// anchors at its start position, not at paragraph start.
+// anchors at its start position; covers the source runes.
 func TestParseImageMidParagraph(t *testing.T) {
 	src := "see ![cat](c.png) here"
-	// Runes: s=0 e=1 e=2 ' '=3 !=4 ...
+	// Runes: s=0 e=1 e=2 ' '=3 ![cat](c.png)=4..16 (13 runes) ' '=17 here=18..21
 	want := []Span{
 		{
 			Offset:       4,
-			Length:       0,
+			Length:       13,
 			IsBox:        true,
 			BoxPayload:   "image:c.png",
 			BoxPlacement: "below",
@@ -698,22 +701,23 @@ func TestParseImageMidParagraph(t *testing.T) {
 
 // TestParseImageMultiplePerParagraph: two images in one
 // paragraph emit two box records, anchored at their
-// respective start positions.
+// respective start positions; each covers its own source
+// runes.
 func TestParseImageMultiplePerParagraph(t *testing.T) {
 	src := "![a](x.png) and ![b](y.png)"
 	// First image: !=0 ... )=10 (11 runes)
-	// Second image at position 16: !=16 ... )=26
+	// Second image at position 16: !=16 ... )=26 (11 runes)
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       11,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
 		},
 		{
 			Offset:       16,
-			Length:       0,
+			Length:       11,
 			IsBox:        true,
 			BoxPayload:   "image:y.png",
 			BoxPlacement: "below",
@@ -728,12 +732,12 @@ func TestParseImageMultiplePerParagraph(t *testing.T) {
 // (image discriminator is `!`).
 func TestParseImageAdjacentToLink(t *testing.T) {
 	src := "![a](x.png) [b](y)"
-	// Image: !=0 ...)=10. Link: ' '=11, [=12, b=13, ]=14, (=15, y=16, )=17.
+	// Image: !=0 ...)=10 (11 runes). Link: ' '=11, [=12, b=13, ]=14, (=15, y=16, )=17.
 	// Link text "b" → offset 13 length 1.
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       11,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
@@ -771,10 +775,11 @@ func TestParseImageMalformed(t *testing.T) {
 // terminator.
 func TestParseImageURLWithSpace(t *testing.T) {
 	src := `![alt](path/to/file.png "width=100px")`
+	// 38 runes total
 	want := []Span{
 		{
 			Offset:       0,
-			Length:       0,
+			Length:       38,
 			IsBox:        true,
 			BoxPayload:   "image:path/to/file.png width=100",
 			BoxPlacement: "below",

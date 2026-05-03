@@ -196,18 +196,21 @@ Fields:
 - Single-token namespaced value. Selects the box's layout
   mode. v1 values:
   - `replace` — existing semantic. The box's `length` runes
-    are replaced by the box at render time. `length` may be
-    any non-negative value. This is also the default when
-    the flag is absent.
-  - `below` — non-replacing. The box does NOT consume source
-    runes; the renderer anchors it to the LINE containing
-    `offset`, paints below the line text, and grows line
-    height by the image's height. **`length` MUST be 0** —
-    the parser rejects positive `length` combined with
-    `placement=below`. Two `placement=below b` lines may
-    share an `offset` (e.g., two images stacked at the same
-    paragraph position); the consumer paints them in
-    emission order.
+    are replaced by the box at render time. This is also
+    the default when the flag is absent.
+  - `below` — the box covers the runes `[offset,
+    offset+length)` but does NOT replace them. The
+    renderer renders those source runes as text in the
+    normal way (preserving `![alt](url)` markup
+    visibility, consistent with rounds 1-3's
+    markup-stays-visible stance), AND paints the image on
+    the same line, anchored below the line's text. Line
+    height grows additively by the image's height.
+    `length` is the rune span the directive covers —
+    typically the rune count of the source `![alt](url)`
+    syntax. Multiple `placement=below b` lines on adjacent
+    runes stack their images top-to-bottom in emission
+    order.
 - Future placements (`above`, `center`, `right`, etc.)
   extend the value vocabulary by way of their own Phase 3
   rounds, not by adding new flags. The parser deliberately
@@ -217,10 +220,10 @@ Fields:
 **Examples**:
 ```
 b 0 1 100 50 - - image:/path/to/img.png
-b 5 1 20 20 #ff0000                              ; 20×20 red box, no image
-b 12 0 0 0 - - placement=below image:./pic.png   ; image rendered below source
-b 12 0 0 0 - - placement=below image:./pic.png width=200
-b 0 1 100 50 - - placement=replace image:./pic.png  ; explicit form of the default
+b 5 1 20 20 #ff0000                                ; 20×20 red box, no image
+b 12 11 0 0 - - placement=below image:./pic.png    ; image rendered below source
+b 12 11 0 0 - - placement=below image:./pic.png width=200
+b 0 1 100 50 - - placement=replace image:./pic.png ; explicit form of the default
 ```
 
 ## Per-write ordering rules

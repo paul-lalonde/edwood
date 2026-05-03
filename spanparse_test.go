@@ -1153,11 +1153,13 @@ func TestParseBoxHRule(t *testing.T) {
 
 // --- placement=NAME flag tests (Phase 3 round 4) -----------------------
 
-// TestParseBoxPlacementBelow: `placement=below` parses with
-// length=0 and W=H=0 (the renderer-probes sentinel) and
-// produces BoxPlacement="below".
+// TestParseBoxPlacementBelow: `placement=below` covers the
+// source markdown runes [offset, offset+length); the
+// renderer renders the source text normally and paints the
+// image below the line. W=H=0 is the canonical
+// "renderer-probes" sentinel for image dimensions.
 func TestParseBoxPlacementBelow(t *testing.T) {
-	data := "b 5 0 0 0 - - placement=below image:./pic.png"
+	data := "b 5 11 0 0 - - placement=below image:./pic.png"
 	runs, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
@@ -1178,8 +1180,8 @@ func TestParseBoxPlacementBelow(t *testing.T) {
 	if runs[0].Style.BoxPayload != "image:./pic.png" {
 		t.Errorf("BoxPayload = %q, want %q", runs[0].Style.BoxPayload, "image:./pic.png")
 	}
-	if runs[0].Len != 0 {
-		t.Errorf("Len = %d, want 0", runs[0].Len)
+	if runs[0].Len != 11 {
+		t.Errorf("Len = %d, want 11 (source rune count)", runs[0].Len)
 	}
 }
 
@@ -1214,18 +1216,6 @@ func TestParseBoxPlacementAbsentMeansEmpty(t *testing.T) {
 	}
 }
 
-// TestParseBoxPlacementBelowPositiveLengthRejected: the
-// `placement=below` flag requires length=0. A producer that
-// emits length>0 with placement=below is in violation; the
-// parser must reject so the bug surfaces loudly.
-func TestParseBoxPlacementBelowPositiveLengthRejected(t *testing.T) {
-	data := "b 0 5 0 0 - - placement=below image:./pic.png"
-	_, _, _, err := parseSpanMessage(data, 100)
-	if err == nil {
-		t.Error("expected error for placement=below+length>0; got nil")
-	}
-}
-
 // TestParseBoxPlacementUnknownRejected: unknown values are
 // rejected (mirrors family=NAME; future placements extend
 // the spec, not the parser via silent acceptance).
@@ -1247,15 +1237,14 @@ func TestParseBoxPlacementUnknownRejected(t *testing.T) {
 
 // TestParseBoxPlacementWithOtherFlags: placement coexists
 // with bold/italic/scale/family in any order. The flags
-// apply to the box's metadata even though boxes don't
-// currently render styled content; round 4 preserves the
-// flags for future-proofing.
+// apply to the box's covered runes (which render as text
+// for placement=below).
 func TestParseBoxPlacementWithOtherFlags(t *testing.T) {
 	cases := []string{
-		"b 0 0 0 0 - - placement=below bold image:./p.png",
-		"b 0 0 0 0 - - bold placement=below image:./p.png",
-		"b 0 0 0 0 - - scale=1.5 placement=below image:./p.png",
-		"b 0 0 0 0 - - placement=below family=code image:./p.png",
+		"b 0 11 0 0 - - placement=below bold image:./p.png",
+		"b 0 11 0 0 - - bold placement=below image:./p.png",
+		"b 0 11 0 0 - - scale=1.5 placement=below image:./p.png",
+		"b 0 11 0 0 - - placement=below family=code image:./p.png",
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
@@ -1271,12 +1260,12 @@ func TestParseBoxPlacementWithOtherFlags(t *testing.T) {
 }
 
 // TestParseBoxPlacementBelowContiguity: a placement=below b
-// at offset N (length=0) followed by an s at offset N
-// (length>0) satisfies the contiguity rule — no offset gap.
+// at offset N (length=L) followed by a span at offset N+L
+// satisfies the contiguity rule.
 func TestParseBoxPlacementBelowContiguity(t *testing.T) {
 	data := "s 0 5 -\n" +
-		"b 5 0 0 0 - - placement=below image:./p.png\n" +
-		"s 5 5 -\n"
+		"b 5 11 0 0 - - placement=below image:./p.png\n" +
+		"s 16 4 -\n"
 	runs, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
@@ -1294,7 +1283,7 @@ func TestParseBoxPlacementBelowContiguity(t *testing.T) {
 // payload string verbatim. Param interpretation happens in
 // the consumer (boxStyleToRichStyle), not the parser.
 func TestParseBoxPayloadWithParams(t *testing.T) {
-	data := "b 5 0 0 0 - - placement=below image:./p.png width=200"
+	data := "b 5 11 0 0 - - placement=below image:./p.png width=200"
 	runs, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)

@@ -1399,8 +1399,8 @@ func (f *frameImpl) paintPhaseText(c *paintCtx) {
 			if pb.Box.IsNewline() || pb.Box.IsTab() {
 				continue
 			}
-			if pb.Box.Style.Image || pb.Box.IsFixedBox() {
-				continue // Phase 5
+			if (pb.Box.Style.Image && !pb.Box.Style.ImageBelow) || pb.Box.IsFixedBox() {
+				continue // Phase 5 — but ImageBelow renders source text normally; the image paints below in paintLineImagesBelow.
 			}
 			if len(pb.Box.Text) == 0 {
 				continue

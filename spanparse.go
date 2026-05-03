@@ -413,10 +413,6 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 
 	payload := strings.Join(payloadParts, " ")
 
-	if placement == "below" && length != 0 {
-		return 0, 0, StyleRun{}, fmt.Errorf("placement=below requires length=0, got %d", length)
-	}
-
 	run = StyleRun{
 		Len: length,
 		Style: StyleAttrs{

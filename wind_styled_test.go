@@ -851,6 +851,57 @@ func TestBoxStyleToRichStylePayloadInvalidWidth(t *testing.T) {
 // buildStyledContent with boxes tests
 // =========================================================================
 
+// TestBuildStyledContentImageBelowBox covers the Phase 3
+// round 4 contract (post-pivot): an IsBox+placement=below
+// run covers the source markdown runes [offset,
+// offset+length); buildStyledContent produces a Span whose
+// Text is the source bytes and whose Style carries
+// Image=true, ImageBelow=true, and ImageURL set. The
+// renderer renders the source as text AND paints the image
+// below the line.
+func TestBuildStyledContentImageBelowBox(t *testing.T) {
+	w := makeStyledWindow(t, "see ![alt](pic.png) ok") // 22 runes
+
+	w.spanStore = NewSpanStore()
+	// Body: "see " (4) "![alt](pic.png)" (15) " ok" (3) = 22 runes.
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 4, Style: StyleAttrs{}},
+		{Len: 15, Style: StyleAttrs{
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		}},
+		{Len: 3, Style: StyleAttrs{}},
+	})
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans; want 3", len(content))
+	}
+	if !content[1].Style.ImageBelow {
+		t.Error("middle span should have Style.ImageBelow=true")
+	}
+	if !content[1].Style.Image {
+		t.Error("middle span should have Style.Image=true")
+	}
+	if content[1].Style.ImageURL != "pic.png" {
+		t.Errorf("middle span ImageURL = %q; want %q",
+			content[1].Style.ImageURL, "pic.png")
+	}
+	// The middle span's Text is the source markdown runes,
+	// not synthetic placeholder. Source markers stay visible.
+	if content[1].Text != "![alt](pic.png)" {
+		t.Errorf("middle span Text = %q; want %q",
+			content[1].Text, "![alt](pic.png)")
+	}
+	if content[0].Text != "see " {
+		t.Errorf("span[0] text = %q; want %q", content[0].Text, "see ")
+	}
+	if content[2].Text != " ok" {
+		t.Errorf("span[2] text = %q; want %q", content[2].Text, " ok")
+	}
+}
+
 func TestBuildStyledContentBoxRun(t *testing.T) {
 	w := makeStyledWindow(t, "hello world test!") // 17 runes
 

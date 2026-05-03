@@ -301,60 +301,42 @@ func TestFormatSpansHRuleSurvivesGapClipping(t *testing.T) {
 
 // --- Box emission tests (Phase 3 round 4) -----------------------------
 
-// TestFormatSpansBoxAtStart: a box at offset 0 (length=0)
-// emits a `b` line before the default-styled fill; the
-// default fill covers [0, totalRunes).
+// TestFormatSpansBoxAtStart: a placement=below box at
+// offset 0 covers the source markdown runes [0, length);
+// emit produces a single `b` line plus a trailing default
+// fill for the rest of the body.
 func TestFormatSpansBoxAtStart(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
-			Offset: 0, Length: 0,
+			Offset: 0, Length: 5,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png",
 			BoxPlacement: "below",
 		},
 	}, 10)
-	want := "b 0 0 0 0 - - placement=below image:./pic.png\n" +
-		"s 0 10 -\n"
+	want := "b 0 5 0 0 - - placement=below image:./pic.png\n" +
+		"s 5 5 -\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-// TestFormatSpansBoxMidBuffer: a box at offset 4 (length=0)
-// emits default fill [0, 4), the box, then default fill
-// [4, 10). The box's zero length keeps the contiguity
-// invariant trivially.
+// TestFormatSpansBoxMidBuffer: a placement=below box at
+// offset 4 (length=5) covering source runes [4, 9). Emit
+// produces default fill [0, 4), the box, then default fill
+// [9, 10).
 func TestFormatSpansBoxMidBuffer(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
-			Offset: 4, Length: 0,
+			Offset: 4, Length: 5,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png",
 			BoxPlacement: "below",
 		},
 	}, 10)
 	want := "s 0 4 -\n" +
-		"b 4 0 0 0 - - placement=below image:./pic.png\n" +
-		"s 4 6 -\n"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// TestFormatSpansBoxAtEnd: a box at offset==totalRunes
-// (length=0) emits the box at the end with no trailing
-// default fill (the buffer is fully covered).
-func TestFormatSpansBoxAtEnd(t *testing.T) {
-	got := FormatSpans([]Span{
-		{
-			Offset: 10, Length: 0,
-			IsBox:        true,
-			BoxPayload:   "image:./pic.png",
-			BoxPlacement: "below",
-		},
-	}, 10)
-	want := "s 0 10 -\n" +
-		"b 10 0 0 0 - - placement=below image:./pic.png\n"
+		"b 4 5 0 0 - - placement=below image:./pic.png\n" +
+		"s 9 1 -\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -366,64 +348,15 @@ func TestFormatSpansBoxAtEnd(t *testing.T) {
 func TestFormatSpansBoxWithWidthParam(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
-			Offset: 4, Length: 0,
+			Offset: 4, Length: 5,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png width=200",
 			BoxPlacement: "below",
 		},
 	}, 10)
 	want := "s 0 4 -\n" +
-		"b 4 0 0 0 - - placement=below image:./pic.png width=200\n" +
-		"s 4 6 -\n"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// TestFormatSpansTwoBoxesSameOffset: two boxes at the same
-// offset emit one after another, both at that offset
-// (length=0 each); contiguity holds.
-func TestFormatSpansTwoBoxesSameOffset(t *testing.T) {
-	got := FormatSpans([]Span{
-		{
-			Offset: 5, Length: 0,
-			IsBox:        true,
-			BoxPayload:   "image:./a.png",
-			BoxPlacement: "below",
-		},
-		{
-			Offset: 5, Length: 0,
-			IsBox:        true,
-			BoxPayload:   "image:./b.png",
-			BoxPlacement: "below",
-		},
-	}, 10)
-	want := "s 0 5 -\n" +
-		"b 5 0 0 0 - - placement=below image:./a.png\n" +
-		"b 5 0 0 0 - - placement=below image:./b.png\n" +
-		"s 5 5 -\n"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// TestFormatSpansBoxAndStyledSpan: a box adjacent to a
-// styled span — the box's length=0 means the styled span
-// can sit at the same offset without overlap.
-func TestFormatSpansBoxAndStyledSpan(t *testing.T) {
-	got := FormatSpans([]Span{
-		{Offset: 0, Length: 5, Italic: true},
-		{
-			Offset: 5, Length: 0,
-			IsBox:        true,
-			BoxPayload:   "image:./pic.png",
-			BoxPlacement: "below",
-		},
-		{Offset: 5, Length: 5, Bold: true},
-	}, 10)
-	want := "s 0 5 - italic\n" +
-		"b 5 0 0 0 - - placement=below image:./pic.png\n" +
-		"s 5 5 - bold\n"
+		"b 4 5 0 0 - - placement=below image:./pic.png width=200\n" +
+		"s 9 1 -\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

@@ -536,8 +536,13 @@ func tryImage(runes []rune, i, runeStart int) (Span, int, bool) {
 	}
 	advance := parts.closeParen + 1 - i
 	return Span{
-		Offset:       runeStart + i,
-		Length:       0,
+		Offset: runeStart + i,
+		// Length covers the source `![alt](url ...)` runes.
+		// The renderer renders these source markers as text
+		// (consistent with markup-stays-visible from rounds
+		// 1-3) and ALSO paints the image below the line via
+		// the placement=below contract.
+		Length:       advance,
 		IsBox:        true,
 		BoxPayload:   payload,
 		BoxPlacement: "below",
