@@ -797,3 +797,67 @@ func TestStyleAttrs_DefaultStyleAttrsFamilyEmpty(t *testing.T) {
 		t.Errorf("zero StyleAttrs.Family = %q, want \"\" (unset sentinel)", a.Family)
 	}
 }
+
+// --- HRule field tests (Phase 3 round 3) ---------------------------------
+
+// TestStyleAttrs_SameHRule: identical HRule values → equal.
+func TestStyleAttrs_SameHRule(t *testing.T) {
+	a := StyleAttrs{HRule: true}
+	b := StyleAttrs{HRule: true}
+	if !a.Equal(b) {
+		t.Error("expected equal for same HRule")
+	}
+}
+
+// TestStyleAttrs_DifferentHRule: different HRule → not equal.
+func TestStyleAttrs_DifferentHRule(t *testing.T) {
+	a := StyleAttrs{HRule: true}
+	b := StyleAttrs{HRule: false}
+	if a.Equal(b) {
+		t.Error("expected not equal for different HRule")
+	}
+}
+
+// TestStyleAttrs_DefaultStyleAttrsHRuleFalse: zero-value has
+// HRule==false (the unset sentinel for a bool flag).
+func TestStyleAttrs_DefaultStyleAttrsHRuleFalse(t *testing.T) {
+	var a StyleAttrs
+	if a.HRule {
+		t.Error("zero StyleAttrs.HRule should be false")
+	}
+}
+
+// --- BoxPlacement field tests (Phase 3 round 4) -------------------------
+
+// TestStyleAttrs_SameBoxPlacement: identical BoxPlacement
+// values → equal.
+func TestStyleAttrs_SameBoxPlacement(t *testing.T) {
+	a := StyleAttrs{IsBox: true, BoxPlacement: "below"}
+	b := StyleAttrs{IsBox: true, BoxPlacement: "below"}
+	if !a.Equal(b) {
+		t.Error("expected equal for same BoxPlacement")
+	}
+}
+
+// TestStyleAttrs_DifferentBoxPlacement: different
+// BoxPlacement → not equal even when other box fields match.
+// A "below" box and a "" (default replace) box of the same
+// dimensions are distinct runs.
+func TestStyleAttrs_DifferentBoxPlacement(t *testing.T) {
+	a := StyleAttrs{IsBox: true, BoxWidth: 200, BoxHeight: 150, BoxPlacement: "below"}
+	b := StyleAttrs{IsBox: true, BoxWidth: 200, BoxHeight: 150, BoxPlacement: ""}
+	if a.Equal(b) {
+		t.Error("expected not equal for different BoxPlacement")
+	}
+}
+
+// TestStyleAttrs_DefaultStyleAttrsBoxPlacementEmpty: zero
+// value has BoxPlacement=="" (the unset sentinel — the
+// existing replacing semantic applies, matching all
+// pre-round-4 producers and consumers).
+func TestStyleAttrs_DefaultStyleAttrsBoxPlacementEmpty(t *testing.T) {
+	var a StyleAttrs
+	if a.BoxPlacement != "" {
+		t.Errorf("zero StyleAttrs.BoxPlacement = %q, want empty", a.BoxPlacement)
+	}
+}

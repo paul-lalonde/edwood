@@ -2218,12 +2218,75 @@ func TestDrawBlockBackgroundMultiLine(t *testing.T) {
 	}
 }
 
-// TestHRuleNotRenderedAsText covers the frame-side invariant that
-// HRule-styled boxes are skipped by paintPhaseText — the rule rune
-// (HRuleRune) must not appear in a string rendering operation. The
-// actual horizontal-rule line drawing now lives in rich/mdrender;
-// see TestRendererPaintsHRule there.
-func TestHRuleNotRenderedAsText(t *testing.T) {
+// TestHRuleRenderedAsText covers the frame-side behavior: HRule-
+// styled boxes are NOT skipped by paintPhaseText. Their text
+// (whether HRuleRune from the in-tree markdown path or `---`/`***`/
+// `___` from md2spans) renders normally. The rich/mdrender
+// wrapper draws the rule line on top — the user sees both the
+// source markers AND the rule, matching the "markup remains
+// visible" stance of all other md2spans-emitted features.
+//
+// Phase 3 round 3 (April 2026) flipped this from "skip text" to
+// "render text" per user feedback.
+func TestHRuleRenderedAsText(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage := edwoodtest.NewImage(display, "frame-background", image.Rect(0, 0, 1, 1))
+	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
+
+	f := NewFrame()
+	f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+	f.SetRect(rect)
+
+	content := Content{
+		{Text: "above\n", Style: DefaultStyle()},
+		{Text: "---\n", Style: StyleHRule},
+		{Text: "below", Style: DefaultStyle()},
+	}
+	f.SetContent(content)
+
+	display.(edwoodtest.GettableDrawOps).Clear()
+	f.Redraw()
+	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
+
+	// Surrounding text is rendered (regression check; was also
+	// asserted by the prior version of this test).
+	foundAbove := false
+	foundBelow := false
+	foundDashes := false
+	for _, op := range ops {
+		if strings.Contains(op, `string "above"`) {
+			foundAbove = true
+		}
+		if strings.Contains(op, `string "below"`) {
+			foundBelow = true
+		}
+		if strings.Contains(op, `string "---"`) {
+			foundDashes = true
+		}
+	}
+	if !foundAbove {
+		t.Errorf("Redraw did not render 'above' text\nops: %v", ops)
+	}
+	if !foundBelow {
+		t.Errorf("Redraw did not render 'below' text\nops: %v", ops)
+	}
+	// New invariant: HRule-styled boxes' text DOES render now.
+	if !foundDashes {
+		t.Errorf("Redraw did not render '---' text (HRule skip should be removed)\nops: %v", ops)
+	}
+}
+
+// TestHRuleRuneRenderedAsText is the dual of
+// TestHRuleRenderedAsText for the in-tree markdown path: the
+// markdown package emits HRuleRune (a single horizontal-bar
+// rune) under StyleHRule, and Phase 3 round 3's removal of the
+// paintPhaseText skip applies to that path too. This test pins
+// the in-tree contract independently of md2spans's literal-
+// marker output.
+func TestHRuleRuneRenderedAsText(t *testing.T) {
 	rect := image.Rect(0, 0, 400, 300)
 	display := edwoodtest.NewDisplay(rect)
 	font := edwoodtest.NewFont(10, 14)
@@ -2246,30 +2309,15 @@ func TestHRuleNotRenderedAsText(t *testing.T) {
 	f.Redraw()
 	ops := display.(edwoodtest.GettableDrawOps).DrawOps()
 
-	// Surrounding text is rendered.
-	foundAbove := false
-	foundBelow := false
-	for _, op := range ops {
-		if strings.Contains(op, `string "above"`) {
-			foundAbove = true
-		}
-		if strings.Contains(op, `string "below"`) {
-			foundBelow = true
-		}
-	}
-	if !foundAbove {
-		t.Errorf("Redraw did not render 'above' text\nops: %v", ops)
-	}
-	if !foundBelow {
-		t.Errorf("Redraw did not render 'below' text\nops: %v", ops)
-	}
-
-	// The HRuleRune itself must not appear in any string rendering op.
+	foundHRune := false
 	for _, op := range ops {
 		if strings.Contains(op, `string "`) && strings.Contains(op, string(HRuleRune)) {
-			t.Errorf("HRuleRune rendered as text (paintPhaseText skip broken):\nop: %s", op)
+			foundHRune = true
 			break
 		}
+	}
+	if !foundHRune {
+		t.Errorf("Redraw did not render HRuleRune as text (in-tree HRule path broken)\nops: %v", ops)
 	}
 }
 
@@ -4758,3 +4806,256 @@ func TestLayoutLinesAccessor(t *testing.T) {
 //
 // Positive bar-rendering coverage lives on the wrapper side at
 // rich/mdrender/blockquote_test.go.
+
+// TestPaintImageBelowPositioning covers the Phase 3 round 4
+// paint contract: an ImageBelow-styled box renders at Y =
+// line.Y + textHeight (i.e., below the line's text content,
+// not at the line's top). Multiple ImageBelow boxes on the
+// same line stack top-down. Source text on the same line
+// still paints at the line's top.
+//
+// The test calls layout() directly to get Lines from a
+// hand-built []Box list (with ImageData populated), then
+// invokes the image-paint phase directly via a constructed
+// paintCtx. We use Loading-state CachedImages so the
+// painter takes the deterministic placeholder path
+// (target.Bytes) whose Y coordinate appears in the recorded
+// draw ops.
+func TestPaintImageBelowPositioning(t *testing.T) {
+	rect := image.Rect(0, 0, 400, 300)
+	display := edwoodtest.NewDisplay(rect)
+	font := edwoodtest.NewFont(10, 14)
+
+	bgImage := edwoodtest.NewImage(display, "frame-background", image.Rect(0, 0, 1, 1))
+	textImage := edwoodtest.NewImage(display, "text-color", image.Rect(0, 0, 1, 1))
+
+	makeFrame := func() (*frameImpl, draw.Image) {
+		f := NewFrame()
+		fi := f.(*frameImpl)
+		f.Init(WithDisplay(display), WithBackground(bgImage), WithFont(font), WithTextColor(textImage))
+		f.SetRect(rect)
+		return fi, bgImage
+	}
+
+	// extractY parses "atpoint: (X,Y)" out of a draw-op
+	// string and returns Y, or -1 if not present.
+	extractY := func(op string) int {
+		idx := strings.Index(op, "atpoint: (")
+		if idx < 0 {
+			return -1
+		}
+		rest := op[idx+len("atpoint: ("):]
+		comma := strings.Index(rest, ",")
+		closeIdx := strings.Index(rest, ")")
+		if comma < 0 || closeIdx < 0 {
+			return -1
+		}
+		var y int
+		if _, err := fmt.Sscanf(rest[comma+1:closeIdx], "%d", &y); err != nil {
+			return -1
+		}
+		return y
+	}
+
+	// findY scans ops for a substring and returns the Y of
+	// the matching draw op, or -1.
+	findY := func(ops []string, needle string) int {
+		for _, op := range ops {
+			if strings.Contains(op, needle) {
+				if y := extractY(op); y >= 0 {
+					return y
+				}
+			}
+		}
+		return -1
+	}
+
+	// runPaint runs layout + image-paint on the given boxes
+	// and returns the recorded draw ops. The image-paint
+	// phase is the only one we exercise here so the test
+	// stays focused on ImageBelow placement.
+	runPaint := func(fi *frameImpl, boxes []Box) []string {
+		lines := layout(boxes, font, rect.Dx(), 80, nil, nil)
+		ctx := &paintCtx{
+			target:      bgImage,
+			offset:      image.ZP,
+			lines:       lines,
+			frameWidth:  rect.Dx(),
+			frameHeight: rect.Dy(),
+			lineRegion:  buildLineRegionIndex(len(lines), nil),
+		}
+		display.(edwoodtest.GettableDrawOps).Clear()
+		fi.paintPhaseImagesAndFixedBoxes(ctx)
+		return display.(edwoodtest.GettableDrawOps).DrawOps()
+	}
+
+	t.Run("single ImageBelow paints below text", func(t *testing.T) {
+		fi, _ := makeFrame()
+		img := &CachedImage{Width: 100, Height: 60, Path: "below.png", Loading: true}
+		boxes := []Box{
+			{Text: []byte("see this:"), Nrune: 9, Style: DefaultStyle()},
+			{
+				Text: []byte("[Image: below]"), Nrune: 14,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "below.png", ImageAlt: "below",
+					Scale: 1.0,
+				},
+				ImageData: img,
+			},
+		}
+		ops := runPaint(fi, boxes)
+		y := findY(ops, `string "[Loading: below]"`)
+		if y < 0 {
+			t.Fatalf("did not find Loading placeholder draw op; ops: %v", ops)
+		}
+		// 14-px font → text rows are 14 tall. ImageBelow paints
+		// at line.Y + textHeight, so Y >= 14.
+		if y < 14 {
+			t.Errorf("ImageBelow Y = %d, want >= 14 (below 14px-tall text)", y)
+		}
+	})
+
+	t.Run("two stacked ImageBelow paint at increasing Y", func(t *testing.T) {
+		fi, _ := makeFrame()
+		first := &CachedImage{Width: 80, Height: 40, Path: "first.png", Loading: true}
+		second := &CachedImage{Width: 80, Height: 50, Path: "second.png", Loading: true}
+		boxes := []Box{
+			{Text: []byte("two:"), Nrune: 4, Style: DefaultStyle()},
+			{
+				Text: []byte("[Image: first]"), Nrune: 14,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "first.png", ImageAlt: "first",
+					Scale: 1.0,
+				},
+				ImageData: first,
+			},
+			{
+				Text: []byte("[Image: second]"), Nrune: 15,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "second.png", ImageAlt: "second",
+					Scale: 1.0,
+				},
+				ImageData: second,
+			},
+		}
+		ops := runPaint(fi, boxes)
+		yFirst := findY(ops, `string "[Loading: first]"`)
+		ySecond := findY(ops, `string "[Loading: second]"`)
+		if yFirst < 0 || ySecond < 0 {
+			t.Fatalf("did not find both placeholders; yFirst=%d ySecond=%d\nops: %v", yFirst, ySecond, ops)
+		}
+		if ySecond <= yFirst {
+			t.Errorf("ySecond (%d) should be > yFirst (%d) for stacked ImageBelow boxes", ySecond, yFirst)
+		}
+		if yFirst < 14 {
+			t.Errorf("yFirst (%d) should be below 14px-tall text", yFirst)
+		}
+		// Second image's Y should be greater than first's Y
+		// by at least the first image's height (40).
+		if ySecond-yFirst < 40 {
+			t.Errorf("ySecond-yFirst = %d, want >= 40 (first image height)", ySecond-yFirst)
+		}
+	})
+
+	t.Run("source runes are hit-testable like normal text", func(t *testing.T) {
+		// Phase 3 round 4 contract: ImageBelow boxes COVER
+		// source markdown runes that render as text. Those
+		// runes must participate in hit-testing/selection
+		// like any other text — Ptofchar maps each rune
+		// position to a screen point inside the line, and
+		// Charofpt maps a point inside the source-text
+		// region back to the matching rune.
+		_, _ = makeFrame()
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png", Loading: true}
+		// Layout: "see " (4 runes) + "![alt](p.png)" (13 runes,
+		// ImageBelow) + " ok" (3 runes) = 20 runes.
+		boxes := []Box{
+			{Text: []byte("see "), Nrune: 4, Style: DefaultStyle()},
+			{
+				Text: []byte("![alt](p.png)"), Nrune: 13,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "p.png", Scale: 1.0,
+				},
+				ImageData: img,
+			},
+			{Text: []byte(" ok"), Nrune: 3, Style: DefaultStyle()},
+		}
+		lines := layout(boxes, font, rect.Dx(), 80, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		// Verify the ImageBelow box advances xPos by its
+		// text width — i.e., the " ok" box starts AFTER the
+		// source markdown's pixel width, not at xPos==0.
+		var seeX, imgX, okX int = -1, -1, -1
+		for _, pb := range lines[0].Boxes {
+			switch string(pb.Box.Text) {
+			case "see ":
+				seeX = pb.X
+			case "![alt](p.png)":
+				imgX = pb.X
+			case " ok":
+				okX = pb.X
+			}
+		}
+		if seeX < 0 || imgX < 0 || okX < 0 {
+			t.Fatalf("missing box positions: seeX=%d imgX=%d okX=%d", seeX, imgX, okX)
+		}
+		if !(seeX < imgX && imgX < okX) {
+			t.Errorf("expected seeX < imgX < okX; got %d < %d < %d", seeX, imgX, okX)
+		}
+		// The ImageBelow box's text spans 13 runes at 10px =
+		// 130 pixels. " ok" must start at imgX + 130.
+		if okX-imgX < 130 {
+			t.Errorf("' ok' box at X=%d, expected ≥ %d (imgX %d + source-text width 130) — ImageBelow may not be advancing xPos correctly",
+				okX, imgX+130, imgX)
+		}
+	})
+
+	t.Run("ImageBelow on second line uses that line's Y", func(t *testing.T) {
+		fi, _ := makeFrame()
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png", Loading: true}
+		// Layout produces line[0] containing "first\n", line[1]
+		// containing "second" + ImageBelow. The image paints at
+		// line[1].Y + textHeight, NOT at line[0].Y + textHeight.
+		boxes := []Box{
+			{Text: []byte("first"), Nrune: 5, Style: DefaultStyle()},
+			{Text: nil, Nrune: -1, Bc: '\n', Style: DefaultStyle()},
+			{Text: []byte("second"), Nrune: 6, Style: DefaultStyle()},
+			{
+				Text: []byte("[Image: l2]"), Nrune: 11,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "p.png", Scale: 1.0,
+				},
+				ImageData: img,
+			},
+		}
+		lines := layout(boxes, font, rect.Dx(), 80, nil, nil)
+		if len(lines) < 2 {
+			t.Fatalf("expected >= 2 lines, got %d", len(lines))
+		}
+		line2Y := lines[1].Y
+		ctx := &paintCtx{
+			target: bgImage, offset: image.ZP, lines: lines,
+			frameWidth: rect.Dx(), frameHeight: rect.Dy(),
+			lineRegion: buildLineRegionIndex(len(lines), nil),
+		}
+		display.(edwoodtest.GettableDrawOps).Clear()
+		fi.paintPhaseImagesAndFixedBoxes(ctx)
+		ops := display.(edwoodtest.GettableDrawOps).DrawOps()
+		y := findY(ops, `string "[Loading: l2]"`)
+		if y < 0 {
+			t.Fatalf("did not find Loading placeholder; ops: %v", ops)
+		}
+		// Image's Y must be on or below line2's Y (it's
+		// anchored to that line, not line[0]).
+		if y < line2Y {
+			t.Errorf("ImageBelow Y = %d, want >= line[1].Y = %d", y, line2Y)
+		}
+	})
+}

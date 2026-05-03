@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -339,6 +340,82 @@ func TestIsStyledMode_AfterExit(t *testing.T) {
 	}
 }
 
+// TestInitStyledMode_WiresBasePath pins the Phase 3 round 4
+// bug fix: initStyledMode must set the rich text's basePath
+// to the body file's absolute path so relative image URLs
+// (like md2spans's `image:./pic.png`) resolve correctly.
+// previewcmd has done this since the in-tree markdown
+// renderer was added; styled mode was missing the wiring,
+// so md2spans-emitted relative paths failed to load.
+func TestInitStyledMode_WiresBasePath(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	w.initStyledMode()
+
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	if w.richBody.basePath == "" {
+		t.Error("richBody.basePath is empty; want absolute path of body file")
+	}
+	// makeStyledWindow's body name is empty by default in
+	// the test harness, but initStyledMode should still
+	// produce SOME basePath value matching what previewcmd
+	// would produce — i.e., the absolute form of w.body.file.Name().
+	// We verify it was wired (non-empty after the body has a name)
+	// by checking the field is populated; the exact value depends
+	// on the test harness.
+}
+
+// TestInitStyledMode_WiresOnImageLoadedCallback pins the
+// async-image-load redraw plumbing: when an image cache-misses
+// in styled mode, the LoadAsync callback must trigger a
+// repaint of the styled view, otherwise the user sees the
+// loading placeholder until the next user action (scroll/edit).
+// previewcmd has done this since the in-tree markdown
+// renderer was added; styled mode was missing the wiring.
+// Same class of bug as initStyledMode missing fonts (rounds
+// 1, 2) and basePath (round 4 row 5).
+func TestInitStyledMode_WiresOnImageLoadedCallback(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.initStyledMode()
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	if w.richBody.onImageLoaded == nil {
+		t.Error("richBody.onImageLoaded is nil; styled mode should wire the async-load callback (parity with previewcmd)")
+	}
+}
+
+// TestInitStyledMode_BasePathMatchesBodyFile pins the
+// specific value: when the body's file has a concrete
+// name, initStyledMode resolves it to an absolute path and
+// passes it to the rich text. Mirrors previewcmd's
+// wind.go:2587-2596 logic.
+func TestInitStyledMode_BasePathMatchesBodyFile(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	// Set the body file's name to a relative path; the
+	// wiring should resolve it to absolute before passing
+	// to the rich text.
+	w.body.file.SetName("test.md")
+
+	w.initStyledMode()
+
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	bp := w.richBody.basePath
+	if bp == "" {
+		t.Fatal("basePath empty; want absolute form of test.md")
+	}
+	if !filepath.IsAbs(bp) {
+		t.Errorf("basePath = %q; want absolute path", bp)
+	}
+	if filepath.Base(bp) != "test.md" {
+		t.Errorf("basePath = %q; basename should be test.md", bp)
+	}
+}
+
 func TestInitStyledMode_SetsFlag(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 
@@ -635,9 +712,260 @@ func TestBoxStyleToRichStyleNonImagePayload(t *testing.T) {
 	}
 }
 
+// --- BoxPlacement + payload-param plumbing tests (Phase 3 round 4) -----
+
+// TestBoxStyleToRichStyleImageBelow: BoxPlacement="below"
+// maps to Style.ImageBelow=true; the box still produces an
+// image span, source URL is parsed from the first payload
+// token, alt text passes through.
+func TestBoxStyleToRichStyleImageBelow(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     0,
+		BoxHeight:    0,
+		BoxPayload:   "image:./pic.png",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+
+	if !got.ImageBelow {
+		t.Error("ImageBelow should be true for BoxPlacement=below")
+	}
+	if !got.Image {
+		t.Error("Image should be true")
+	}
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./pic.png")
+	}
+	if got.ImageAlt != "alt" {
+		t.Errorf("ImageAlt = %q; want %q", got.ImageAlt, "alt")
+	}
+}
+
+// TestBoxStyleToRichStyleImageBelowReplaceExplicit:
+// BoxPlacement="replace" is treated the same as "" — no
+// ImageBelow.
+func TestBoxStyleToRichStyleImageBelowReplaceExplicit(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     100,
+		BoxHeight:    50,
+		BoxPayload:   "image:./pic.png",
+		BoxPlacement: "replace",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageBelow {
+		t.Error("ImageBelow should be false for BoxPlacement=replace")
+	}
+}
+
+// TestBoxStyleToRichStyleImageBelowAbsent: empty
+// BoxPlacement → Style.ImageBelow=false (default).
+func TestBoxStyleToRichStyleImageBelowAbsent(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:      true,
+		BoxWidth:   100,
+		BoxHeight:  50,
+		BoxPayload: "image:./pic.png",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageBelow {
+		t.Error("ImageBelow should be false for empty BoxPlacement")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadWidthParam: a payload of
+// "image:URL width=N" applies N to Style.ImageWidth. The
+// `width=N` token follows the URL and is parsed by the
+// consumer, not by the wire-format parser.
+func TestBoxStyleToRichStylePayloadWidthParam(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./pic.png width=200",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q (URL only)", got.ImageURL, "./pic.png")
+	}
+	if got.ImageWidth != 200 {
+		t.Errorf("ImageWidth = %d; want 200 (from payload param)", got.ImageWidth)
+	}
+}
+
+// TestBoxStyleToRichStylePayloadUnknownParamIgnored: an
+// unknown payload param is silently ignored (forward-compat
+// for future params on older renderers).
+func TestBoxStyleToRichStylePayloadUnknownParamIgnored(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./pic.png alignment=center caption=hello",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "alt")
+	// URL still parses correctly; unknown params don't break.
+	if got.ImageURL != "./pic.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./pic.png")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadMultipleParams: multiple
+// recognized params apply (currently only width=N is
+// recognized, but the parser must handle param ordering
+// and multiple-token payloads cleanly).
+func TestBoxStyleToRichStylePayloadMultipleParams(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./p.png width=300 unknown=foo",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	if got.ImageWidth != 300 {
+		t.Errorf("ImageWidth = %d; want 300", got.ImageWidth)
+	}
+	if got.ImageURL != "./p.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./p.png")
+	}
+}
+
+// TestBoxStyleToRichStylePayloadWidthOverride: an explicit
+// BoxWidth from the wire format takes effect when no
+// width=N param is present. When BOTH are set, the payload
+// param wins (treats wire BoxWidth as a legacy hint that
+// payload params override).
+func TestBoxStyleToRichStylePayloadWidthOverride(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxWidth:     100, // wire-format hint (legacy mode)
+		BoxHeight:    80,
+		BoxPayload:   "image:./p.png width=200",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	// Payload param wins for width.
+	if got.ImageWidth != 200 {
+		t.Errorf("ImageWidth = %d; want 200 (payload param wins)", got.ImageWidth)
+	}
+}
+
+// TestBoxStyleToRichStylePayloadInvalidWidth: a
+// non-numeric width=X is silently ignored (treated like an
+// unknown param).
+func TestBoxStyleToRichStylePayloadInvalidWidth(t *testing.T) {
+	sa := StyleAttrs{
+		IsBox:        true,
+		BoxPayload:   "image:./p.png width=abc",
+		BoxPlacement: "below",
+	}
+	got := boxStyleToRichStyle(sa, "")
+	if got.ImageURL != "./p.png" {
+		t.Errorf("ImageURL = %q; want %q", got.ImageURL, "./p.png")
+	}
+	// width=abc is invalid → ImageWidth stays 0 (unset).
+	if got.ImageWidth != 0 {
+		t.Errorf("ImageWidth = %d; want 0 (invalid width=abc ignored)", got.ImageWidth)
+	}
+}
+
+// TestBoxStyleToRichStylePayloadMalformedFirstToken: when
+// the first payload token doesn't have an `image:` prefix,
+// applyImagePayload silently returns without setting any
+// image fields. This protects the consumer from a stale or
+// misshapen payload (e.g., "widget:foo" or "image" alone or
+// just "garbage"); Style.Image stays false and the rich.Style
+// renders as a plain box.
+func TestBoxStyleToRichStylePayloadMalformedFirstToken(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"non-image prefix", "widget:foo width=200"},
+		{"image without colon", "image width=200"},
+		{"empty payload", ""},
+		{"only whitespace", "   "},
+		{"plain text", "garbage payload"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sa := StyleAttrs{
+				IsBox:        true,
+				BoxWidth:     100,
+				BoxHeight:    50,
+				BoxPayload:   tc.payload,
+				BoxPlacement: "below",
+			}
+			got := boxStyleToRichStyle(sa, "alt")
+			if got.Image {
+				t.Errorf("Image = true for malformed payload %q; want false", tc.payload)
+			}
+			if got.ImageURL != "" {
+				t.Errorf("ImageURL = %q for malformed payload %q; want empty",
+					got.ImageURL, tc.payload)
+			}
+			// Width param shouldn't apply if the URL token didn't
+			// match (param parsing should bail early).
+			if got.ImageWidth != sa.BoxWidth {
+				t.Errorf("ImageWidth = %d for malformed payload %q; want %d (wire-format BoxWidth unchanged)",
+					got.ImageWidth, tc.payload, sa.BoxWidth)
+			}
+		})
+	}
+}
+
 // =========================================================================
 // buildStyledContent with boxes tests
 // =========================================================================
+
+// TestBuildStyledContentImageBelowBox covers the Phase 3
+// round 4 contract (post-pivot): an IsBox+placement=below
+// run covers the source markdown runes [offset,
+// offset+length); buildStyledContent produces a Span whose
+// Text is the source bytes and whose Style carries
+// Image=true, ImageBelow=true, and ImageURL set. The
+// renderer renders the source as text AND paints the image
+// below the line.
+func TestBuildStyledContentImageBelowBox(t *testing.T) {
+	w := makeStyledWindow(t, "see ![alt](pic.png) ok") // 22 runes
+
+	w.spanStore = NewSpanStore()
+	// Body: "see " (4) "![alt](pic.png)" (15) " ok" (3) = 22 runes.
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 4, Style: StyleAttrs{}},
+		{Len: 15, Style: StyleAttrs{
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		}},
+		{Len: 3, Style: StyleAttrs{}},
+	})
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans; want 3", len(content))
+	}
+	if !content[1].Style.ImageBelow {
+		t.Error("middle span should have Style.ImageBelow=true")
+	}
+	if !content[1].Style.Image {
+		t.Error("middle span should have Style.Image=true")
+	}
+	if content[1].Style.ImageURL != "pic.png" {
+		t.Errorf("middle span ImageURL = %q; want %q",
+			content[1].Style.ImageURL, "pic.png")
+	}
+	// The middle span's Text is the source markdown runes,
+	// not synthetic placeholder. Source markers stay visible.
+	if content[1].Text != "![alt](pic.png)" {
+		t.Errorf("middle span Text = %q; want %q",
+			content[1].Text, "![alt](pic.png)")
+	}
+	if content[0].Text != "see " {
+		t.Errorf("span[0] text = %q; want %q", content[0].Text, "see ")
+	}
+	if content[2].Text != " ok" {
+		t.Errorf("span[2] text = %q; want %q", content[2].Text, " ok")
+	}
+}
 
 func TestBuildStyledContentBoxRun(t *testing.T) {
 	w := makeStyledWindow(t, "hello world test!") // 17 runes
@@ -1450,5 +1778,36 @@ func TestBoxStyleToRichStyle_FamilyAlsoMapped(t *testing.T) {
 	got := boxStyleToRichStyle(sa, "alt")
 	if !got.Code {
 		t.Error("box Code should be true for Family=\"code\"")
+	}
+}
+
+// --- HRule mapping tests (Phase 3 round 3) -------------------------------
+
+// TestStyleAttrsToRichStyle_HRulePassedThrough: HRule=true →
+// rich.Style.HRule=true.
+func TestStyleAttrsToRichStyle_HRulePassedThrough(t *testing.T) {
+	sa := StyleAttrs{HRule: true}
+	got := styleAttrsToRichStyle(sa)
+	if !got.HRule {
+		t.Error("rich.Style.HRule should be true for StyleAttrs.HRule=true")
+	}
+}
+
+// TestStyleAttrsToRichStyle_HRuleFalsePassedThrough: HRule=false
+// → rich.Style.HRule=false.
+func TestStyleAttrsToRichStyle_HRuleFalsePassedThrough(t *testing.T) {
+	sa := StyleAttrs{HRule: false}
+	got := styleAttrsToRichStyle(sa)
+	if got.HRule {
+		t.Error("rich.Style.HRule should be false for StyleAttrs.HRule=false")
+	}
+}
+
+// TestBoxStyleToRichStyle_HRuleAlsoMapped: box path honors HRule.
+func TestBoxStyleToRichStyle_HRuleAlsoMapped(t *testing.T) {
+	sa := StyleAttrs{HRule: true, IsBox: true, BoxWidth: 100, BoxHeight: 1}
+	got := boxStyleToRichStyle(sa, "alt")
+	if !got.HRule {
+		t.Error("box rich.Style.HRule should be true for StyleAttrs.HRule=true")
 	}
 }

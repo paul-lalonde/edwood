@@ -85,8 +85,30 @@ Defines a styled run of text. Fields:
   any other token is the first flag. (Discriminated by
   appearance, not by position.)
 - `<flag>...`: zero or more of `bold`, `italic`, `hidden`,
-  `scale=N.N`, `family=NAME`. Order doesn't matter; each is a
-  single token. Unknown flags are an error.
+  `scale=N.N`, `family=NAME`, `hrule`. Order doesn't matter;
+  each is a single token. Unknown flags are an error.
+
+**`hrule`** (added Phase 3 round 3):
+- Single-token boolean flag. Indicates that the span is a
+  horizontal-rule line. The renderer keeps the span's text
+  visible (the source markers `---`/`***`/`___` render
+  normally) and `rich/mdrender.Renderer.paintHorizontalRules`
+  draws a thin line on the line containing the span — the
+  user sees both the markers and the rule. This matches the
+  "markup remains visible" stance of every other
+  md2spans-emitted markdown feature in v1; a future WYSIWYG
+  mode may hide markers globally.
+- The rule spans the **full frame width** regardless of the
+  span's offset or length. A short `hrule` span (e.g. one
+  rune) and a long one produce identical rule geometry; only
+  the marker text differs. Producers do not need to size the
+  span to the rule's visual extent — sizing it to the marker
+  characters is canonical.
+- No coexistence restrictions; `hrule` plus `bold` /
+  `italic` / `scale=` / `family=` is valid and the styling
+  applies to the visible marker text. v1 does not pin the
+  visual semantics of these combinations beyond "the markers
+  inherit the styling."
 
 **`family=NAME`** (added Phase 3 round 2):
 - NAME is a semantic font-family name from the v1-recognized
@@ -138,22 +160,71 @@ rendered layout.
 
 Fields:
 
-- `<offset>`, `<length>`: as for `s`. The body's runes in
-  `[offset, offset+length)` are replaced by the box at render
-  time.
+- `<offset>`, `<length>`: as for `s`. By default, the body's
+  runes in `[offset, offset+length)` are replaced by the box
+  at render time. The `placement=NAME` flag (below) can
+  change this to a non-replacing layout where the runes
+  render as text in the normal way and the box's visual
+  (e.g., an image) renders alongside them — see the
+  `placement=below` description for the round 4 details.
 - `<width>`, `<height>`: integer pixels. Must be >= 0.
+  **`0 0` means "renderer probes":** the consumer ignores the
+  positional dimensions and uses the image's intrinsic
+  dimensions (loaded via its image cache). Producers that
+  don't know an image's size emit `0 0` and let the renderer
+  decide. Producers that need pixel-exact placement emit
+  positive values, which the renderer honors as overrides.
+  Phase 3 round 4 added this canonical sentinel; existing
+  producers continue to work unchanged.
 - `<fg>`, `<bg>`: optional, same format as `s`.
-- `<flag>...`: same as `s`.
-- `<payload>...`: optional trailing tokens preserved verbatim
-  as the box's payload string. Currently used for image
-  references: a payload starting with `image:` followed by a
-  path (e.g. `image:/path/to/img.png`) renders the image; any
-  other payload is currently ignored at render time.
+- `<flag>...`: same as `s`, plus `placement=NAME` (round 4).
+- `<payload>...`: optional trailing tokens. **First token is
+  the URL spec** (currently `image:URL`). **Subsequent
+  tokens are space-separated `key=value` parameters**
+  interpreted by the consumer (not by the parser). v1
+  recognizes:
+  - `width=N` — pixel-width override (parity with the
+    in-tree path's `width=Npx` title-attribute convention;
+    `px` suffix dropped on the wire — pure integers).
+  Future image params (`alt=ENCODED`, `caption=ENCODED`,
+  `align=NAME`, etc.) extend the payload, NOT the wire
+  format. Unknown params are silently ignored by older
+  renderers (forward-compat). Anything before the first
+  recognized URL prefix is preserved as-is for non-image
+  box uses.
+
+**`placement=NAME`** (added Phase 3 round 4):
+- Single-token namespaced value. Selects the box's layout
+  mode. v1 values:
+  - `replace` — existing semantic. The box's `length` runes
+    are replaced by the box at render time. This is also
+    the default when the flag is absent.
+  - `below` — the box covers the runes `[offset,
+    offset+length)` but does NOT replace them. The
+    renderer renders those source runes as text in the
+    normal way (preserving `![alt](url)` markup
+    visibility, consistent with rounds 1-3's
+    markup-stays-visible stance), AND paints the image on
+    the same line, anchored below the line's text. Line
+    height grows additively by the image's height.
+    `length` is the rune span the directive covers —
+    typically the rune count of the source `![alt](url)`
+    syntax. Multiple `placement=below b` lines on adjacent
+    runes stack their images top-to-bottom in emission
+    order.
+- Future placements (`above`, `center`, `right`, etc.)
+  extend the value vocabulary by way of their own Phase 3
+  rounds, not by adding new flags. The parser deliberately
+  rejects unknown values so producer mistakes surface
+  loudly.
 
 **Examples**:
 ```
 b 0 1 100 50 - - image:/path/to/img.png
-b 5 1 20 20 #ff0000           ; 20×20 red box, no image
+b 5 1 20 20 #ff0000                                ; 20×20 red box, no image
+b 12 11 0 0 - - placement=below image:./pic.png    ; image rendered below source
+b 12 11 0 0 - - placement=below image:./pic.png width=200
+b 0 1 100 50 - - placement=replace image:./pic.png ; explicit form of the default
 ```
 
 ## Per-write ordering rules
@@ -267,10 +338,13 @@ update this spec in lockstep:
   `scale=N.N` (e.g. `scale=2.0` for H1). See above.
 - **Round 2 — font family**: ✓ landed (April 2026). New `<flag>`
   `family=NAME` with v1-recognized value `code`. See above.
-- **Round 3 — inline rule**: new directive (or new box payload
-  kind `rule:width:height`).
-- **Round 4 — slide / images**: tool-side only; protocol
-  unchanged.
+- **Round 3 — inline rule**: ✓ landed (April 2026). New
+  `<flag>` `hrule`. See above.
+- **Round 4 — inline images**: ✓ landed (April 2026). New
+  `<flag>` `placement=NAME` on `b` directives (v1 values:
+  `replace`, `below`); canonical `0 0` W/H sentinel for
+  "renderer probes"; payload-parameter convention (`width=N`
+  recognized in v1). See above.
 - **Round 5 — block code (region)**: `begin region` /
   `end region` directives; first region primitive.
 - **Rounds 6-7 — blockquote, lists**: region kinds + parameters.

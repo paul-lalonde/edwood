@@ -262,6 +262,146 @@ func TestFormatSpansFamilyWithFlags(t *testing.T) {
 	}
 }
 
+// --- HRule emission tests (Phase 3 round 3) -----------------------------
+
+// TestFormatSpansHRuleEmitted: HRule=true produces an `hrule`
+// flag; absent when HRule=false.
+func TestFormatSpansHRuleEmitted(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 3, HRule: true}}, 3)
+	want := "s 0 3 - hrule\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansHRuleOmittedWhenFalse: HRule=false → no
+// `hrule` flag.
+func TestFormatSpansHRuleOmittedWhenFalse(t *testing.T) {
+	got := FormatSpans([]Span{{Offset: 0, Length: 3}}, 3)
+	want := "s 0 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansHRuleSurvivesGapClipping: a styled HRule span
+// whose start is clipped by fillGaps (overlap-defense path)
+// must keep HRule=true on the emitted run. Pins the
+// HRule-passthrough field copy in fillGaps.
+func TestFormatSpansHRuleSurvivesGapClipping(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 5, Italic: true},
+		{Offset: 3, Length: 4, HRule: true}, // overlaps; clips to [5, 7).
+	}, 10)
+	want := "s 0 5 - italic\ns 5 2 - hrule\ns 7 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// --- Box emission tests (Phase 3 round 4) -----------------------------
+
+// TestFormatSpansBoxAtStart: a placement=below box at
+// offset 0 covers the source markdown runes [0, length);
+// emit produces a single `b` line plus a trailing default
+// fill for the rest of the body.
+func TestFormatSpansBoxAtStart(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 5,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "b 0 5 0 0 - - placement=below image:./pic.png\n" +
+		"s 5 5 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxMidBuffer: a placement=below box at
+// offset 4 (length=5) covering source runes [4, 9). Emit
+// produces default fill [0, 4), the box, then default fill
+// [9, 10).
+func TestFormatSpansBoxMidBuffer(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 4, Length: 5,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 4 -\n" +
+		"b 4 5 0 0 - - placement=below image:./pic.png\n" +
+		"s 9 1 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxWithWidthParam: payload includes a
+// width=N parameter; emitter passes it through verbatim
+// (parameters are space-separated tokens after the URL).
+func TestFormatSpansBoxWithWidthParam(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 4, Length: 5,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png width=200",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 4 -\n" +
+		"b 4 5 0 0 - - placement=below image:./pic.png width=200\n" +
+		"s 9 1 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxPlacementReplaceExplicit: a box with
+// placement="replace" emits placement=replace on the wire
+// (round-trip). Useful for producers that want to be
+// explicit about the existing replacing semantic.
+func TestFormatSpansBoxPlacementReplaceExplicit(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 1,
+			IsBox:        true,
+			BoxWidth:     100, BoxHeight: 50,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "replace",
+		},
+	}, 10)
+	want := "b 0 1 100 50 - - placement=replace image:./pic.png\n" +
+		"s 1 9 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxPlacementOmittedWhenEmpty: a box with
+// BoxPlacement="" omits the placement= flag (default
+// replacing semantic).
+func TestFormatSpansBoxPlacementOmittedWhenEmpty(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 1,
+			IsBox:      true,
+			BoxWidth:   100, BoxHeight: 50,
+			BoxPayload: "image:./pic.png",
+		},
+	}, 10)
+	want := "b 0 1 100 50 - - image:./pic.png\n" +
+		"s 1 9 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {

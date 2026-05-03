@@ -220,6 +220,111 @@ func TestParseEmphasisDoesNotSpanParagraphs(t *testing.T) {
 	}
 }
 
+// --- Horizontal rule tests (Phase 3 round 3) ---------------------------
+
+// TestParseHRuleDash covers basic `---` recognition: a span over
+// the marker runes with HRule=true, no other styling.
+func TestParseHRuleDash(t *testing.T) {
+	src := "---"
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleAsterisk and Underscore: the other two ATX
+// rule markers also work.
+func TestParseHRuleAsterisk(t *testing.T) {
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse("***"), want)
+}
+
+func TestParseHRuleUnderscore(t *testing.T) {
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse("___"), want)
+}
+
+// TestParseHRuleLongerRun: 4+ markers also count as a rule.
+func TestParseHRuleLongerRun(t *testing.T) {
+	src := "-----"
+	want := []Span{{Offset: 0, Length: 5, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleTrailingWhitespace: trailing whitespace allowed.
+func TestParseHRuleTrailingWhitespace(t *testing.T) {
+	src := "---   "
+	// The Span covers only the marker runes (not the trailing
+	// spaces). HRule=true; mdrender draws the rule across the
+	// whole frame width regardless of span length.
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleCRLF: `\r` is allowed as trailing whitespace.
+// Pins the CRLF-input case so a Windows-edited markdown file
+// still recognizes its rule lines. The `\r` is the line
+// terminator's first byte; scanParagraphs strips the `\n` and
+// detectHRule's whitespace check accepts the trailing `\r`.
+func TestParseHRuleCRLF(t *testing.T) {
+	src := "---\r\nafter"
+	// Paragraph rune offsets:
+	//   --- = 0..2 (3)   \r = 3   \n = 4
+	//   after = 5..9
+	// HRule span over the marker runes only.
+	want := []Span{{Offset: 0, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseHRuleNotAList: `- item` is a list (later round),
+// NOT an HRule. v1 leaves it as plain text — emphasis tokenizer
+// ignores `-`. No spans.
+func TestParseHRuleNotAList(t *testing.T) {
+	if got := Parse("- item"); len(got) != 0 {
+		t.Errorf("Parse(\"- item\") = %v, want empty (list, not HRule)", got)
+	}
+}
+
+// TestParseHRuleNotMixedMarkers: `--*` (mixed) is not a rule.
+func TestParseHRuleNotMixedMarkers(t *testing.T) {
+	// `--*` has 2 dashes then a star. The HRule detector
+	// requires 3+ same character. So no rule. The trailing `*`
+	// is a single-rune emphasis opener with nothing to close →
+	// no emphasis span either. Result: empty.
+	if got := Parse("--*"); len(got) != 0 {
+		t.Errorf("Parse(\"--*\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleNotShort: `--` (2 markers) is not an HRule.
+func TestParseHRuleNotShort(t *testing.T) {
+	if got := Parse("--"); len(got) != 0 {
+		t.Errorf("Parse(\"--\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleNotWithContent: `--- title` is not an HRule
+// per v1 (markers followed by content). v1 leaves as plain.
+func TestParseHRuleNotWithContent(t *testing.T) {
+	if got := Parse("--- title"); len(got) != 0 {
+		t.Errorf("Parse(\"--- title\") = %v, want empty", got)
+	}
+}
+
+// TestParseHRuleBetweenParagraphs: an HRule line ends the prior
+// paragraph and is its own one-line paragraph. Subsequent
+// non-blank lines start a new paragraph.
+func TestParseHRuleBetweenParagraphs(t *testing.T) {
+	src := "intro\n\n---\n\nafter"
+	// Runes:
+	//   intro=0..4 (5)  \n=5
+	//   blank=6 (\n)
+	//   ---=7..9 (3)    \n=10
+	//   blank=11 (\n)
+	//   after=12..16 (5)
+	// HRule span at offset 7, length 3. No other spans.
+	want := []Span{{Offset: 7, Length: 3, HRule: true}}
+	assertSpansEqual(t, Parse(src), want)
+}
+
 // --- Inline code tests (Phase 3 round 2) -------------------------------
 
 // TestParseInlineCode covers basic backtick-delimited inline
@@ -501,4 +606,209 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 			t.Errorf("span[%d]:\n  got:  %+v\n  want: %+v", i, got[i], want[i])
 		}
 	}
+}
+
+// --- Image syntax tests (Phase 3 round 4) ------------------------------
+
+// TestParseImageBasic covers the `![alt](url)` syntax: emits a
+// single box record (IsBox=true, BoxPlacement="below",
+// BoxPayload="image:URL") covering the source runes
+// [offset, offset+length). The renderer renders those source
+// markers as text in the normal way AND paints the image
+// below the line; emit-time gap-fill is not involved (the
+// box's covered runes ARE the source text).
+func TestParseImageBasic(t *testing.T) {
+	src := "![alt](pic.png)"
+	// Runes: !=0 [=1 a=2 l=3 t=4 ]=5 (=6 p=7 i=8 c=9 .=10 p=11 n=12 g=13 )=14
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       15,
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageWithTitleNoWidth: title attr without
+// width=Npx → payload is just `image:URL` (no width param).
+func TestParseImageWithTitleNoWidth(t *testing.T) {
+	src := `![alt](p.png "no width here")`
+	// 29 runes total (![alt](p.png "no width here"))
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       29,
+			IsBox:        true,
+			BoxPayload:   "image:p.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageWithWidth: title attr with `width=Npx` flows
+// into the box's payload as `width=N` (px suffix dropped).
+func TestParseImageWithWidth(t *testing.T) {
+	src := `![alt](p.png "width=200px")`
+	// 27 runes (![alt](p.png "width=200px"))
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       27,
+			IsBox:        true,
+			BoxPayload:   "image:p.png width=200",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageEmptyAlt: `![](url)` is valid — alt is
+// optional in CommonMark. The box is still emitted.
+func TestParseImageEmptyAlt(t *testing.T) {
+	src := "![](pic.png)"
+	// 12 runes (![](pic.png))
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       12,
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMidParagraph: image syntax mid-paragraph
+// anchors at its start position; covers the source runes.
+func TestParseImageMidParagraph(t *testing.T) {
+	src := "see ![cat](c.png) here"
+	// Runes: s=0 e=1 e=2 ' '=3 ![cat](c.png)=4..16 (13 runes) ' '=17 here=18..21
+	want := []Span{
+		{
+			Offset:       4,
+			Length:       13,
+			IsBox:        true,
+			BoxPayload:   "image:c.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMultiplePerParagraph: two images in one
+// paragraph emit two box records, anchored at their
+// respective start positions; each covers its own source
+// runes.
+func TestParseImageMultiplePerParagraph(t *testing.T) {
+	src := "![a](x.png) and ![b](y.png)"
+	// First image: !=0 ... )=10 (11 runes)
+	// Second image at position 16: !=16 ... )=26 (11 runes)
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       11,
+			IsBox:        true,
+			BoxPayload:   "image:x.png",
+			BoxPlacement: "below",
+		},
+		{
+			Offset:       16,
+			Length:       11,
+			IsBox:        true,
+			BoxPayload:   "image:y.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageAdjacentToLink: an image followed by a
+// link produces two distinct spans (one box, one link).
+// The image takes precedence over the link tokenizer
+// (image discriminator is `!`).
+func TestParseImageAdjacentToLink(t *testing.T) {
+	src := "![a](x.png) [b](y)"
+	// Image: !=0 ...)=10 (11 runes). Link: ' '=11, [=12, b=13, ]=14, (=15, y=16, )=17.
+	// Link text "b" → offset 13 length 1.
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       11,
+			IsBox:        true,
+			BoxPayload:   "image:x.png",
+			BoxPlacement: "below",
+		},
+		{Offset: 13, Length: 1, Fg: linkBlue},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMalformed: malformed image syntax falls
+// through as literal text, no span emitted. Same fallback
+// as the in-tree path's recognizer.
+func TestParseImageMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"unclosed bracket", "![alt"},
+		{"bracket no paren", "![alt] no paren"},
+		{"open paren no close", "![alt](no close"},
+		{"bang only", "!alone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Parse(tc.src); len(got) != 0 {
+				t.Errorf("Parse(%q) = %v, want empty (malformed image → literal)", tc.src, got)
+			}
+		})
+	}
+}
+
+// TestParseImageURLWithTitleSeparator: a URL followed by
+// a `"title"` is correctly separated; the URL excludes the
+// space-quote separator and the title runs through the
+// width=Npx parser.
+func TestParseImageURLWithTitleSeparator(t *testing.T) {
+	src := `![alt](path/to/file.png "width=100px")`
+	// 38 runes total
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       38,
+			IsBox:        true,
+			BoxPayload:   "image:path/to/file.png width=100",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageURLWithEmbeddedSpace: a URL containing a
+// raw space (no title attr) is preserved verbatim through
+// to the closing `)`. CommonMark technically requires URL
+// escaping for spaces, but v1 doesn't enforce that — the
+// payload tokenizer would mis-parse a space-containing URL
+// (it splits on whitespace), so this test pins the v1
+// behavior: parsed but consumer-side tokenization will see
+// `image:pa` as the URL and `th.png` as a "param". Worth
+// pinning so the limitation is documented executable.
+func TestParseImageURLWithEmbeddedSpace(t *testing.T) {
+	src := "![alt](pa th.png)"
+	// 17 runes
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       17,
+			IsBox:        true,
+			BoxPayload:   "image:pa th.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
 }

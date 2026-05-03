@@ -1088,3 +1088,208 @@ func TestParseBoxFamily(t *testing.T) {
 		t.Errorf("Family = %q, want code", runs[0].Style.Family)
 	}
 }
+
+// --- HRule flag tests (Phase 3 round 3) ----------------------------------
+
+// TestParseSpanHRule: `hrule` flag parses to HRule=true.
+func TestParseSpanHRule(t *testing.T) {
+	data := "s 0 3 - hrule"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if !runs[0].Style.HRule {
+		t.Error("HRule should be true")
+	}
+}
+
+// TestParseSpanHRuleAbsentMeansFalse: omitting the flag leaves
+// HRule at its zero value (false).
+func TestParseSpanHRuleAbsentMeansFalse(t *testing.T) {
+	data := "s 0 5 - bold"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.HRule {
+		t.Error("HRule should be false when flag absent")
+	}
+}
+
+// TestParseSpanHRuleWithOtherFlags: hrule coexists with bold,
+// italic, scale, family in any order.
+func TestParseSpanHRuleWithOtherFlags(t *testing.T) {
+	cases := []string{
+		"s 0 3 - hrule bold",
+		"s 0 3 - bold hrule",
+		"s 0 3 - scale=1.0 hrule",
+		"s 0 3 - family=code hrule",
+		"s 0 3 - hrule family=code",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			runs, _, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Fatalf("parseSpanMessage: %v", err)
+			}
+			if !runs[0].Style.HRule {
+				t.Errorf("HRule not parsed; line was %q", data)
+			}
+		})
+	}
+}
+
+// TestParseBoxHRule: hrule flag also applies to b-lines.
+func TestParseBoxHRule(t *testing.T) {
+	data := "b 0 1 100 1 - - hrule"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if !runs[0].Style.HRule {
+		t.Error("HRule should be true")
+	}
+}
+
+// --- placement=NAME flag tests (Phase 3 round 4) -----------------------
+
+// TestParseBoxPlacementBelow: `placement=below` covers the
+// source markdown runes [offset, offset+length); the
+// renderer renders the source text normally and paints the
+// image below the line. W=H=0 is the canonical
+// "renderer-probes" sentinel for image dimensions.
+func TestParseBoxPlacementBelow(t *testing.T) {
+	data := "b 5 11 0 0 - - placement=below image:./pic.png"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(runs))
+	}
+	if runs[0].Style.BoxPlacement != "below" {
+		t.Errorf("BoxPlacement = %q, want %q", runs[0].Style.BoxPlacement, "below")
+	}
+	if !runs[0].Style.IsBox {
+		t.Error("IsBox should be true on a b-line")
+	}
+	if runs[0].Style.BoxWidth != 0 || runs[0].Style.BoxHeight != 0 {
+		t.Errorf("expected W=H=0 (probe sentinel), got W=%d H=%d",
+			runs[0].Style.BoxWidth, runs[0].Style.BoxHeight)
+	}
+	if runs[0].Style.BoxPayload != "image:./pic.png" {
+		t.Errorf("BoxPayload = %q, want %q", runs[0].Style.BoxPayload, "image:./pic.png")
+	}
+	if runs[0].Len != 11 {
+		t.Errorf("Len = %d, want 11 (source rune count)", runs[0].Len)
+	}
+}
+
+// TestParseBoxPlacementReplaceExplicit: `placement=replace`
+// is allowed and parses to BoxPlacement="replace". The
+// renderer treats it the same as the absent flag (existing
+// replacing semantic) — but the storage preserves the
+// explicit value for round-trip fidelity.
+func TestParseBoxPlacementReplaceExplicit(t *testing.T) {
+	data := "b 0 1 100 50 - - placement=replace image:./pic.png"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.BoxPlacement != "replace" {
+		t.Errorf("BoxPlacement = %q, want %q", runs[0].Style.BoxPlacement, "replace")
+	}
+}
+
+// TestParseBoxPlacementAbsentMeansEmpty: a b-line without
+// the `placement=` flag has BoxPlacement="" (the unset
+// sentinel — existing replacing semantics apply, matching
+// pre-round-4 producers).
+func TestParseBoxPlacementAbsentMeansEmpty(t *testing.T) {
+	data := "b 0 1 100 50 - - image:./pic.png"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if runs[0].Style.BoxPlacement != "" {
+		t.Errorf("BoxPlacement = %q, want empty", runs[0].Style.BoxPlacement)
+	}
+}
+
+// TestParseBoxPlacementUnknownRejected: unknown values are
+// rejected (mirrors family=NAME; future placements extend
+// the spec, not the parser via silent acceptance).
+func TestParseBoxPlacementUnknownRejected(t *testing.T) {
+	cases := []string{
+		"b 0 0 0 0 - - placement=center image:./p.png",
+		"b 0 0 0 0 - - placement=above image:./p.png",
+		"b 0 0 0 0 - - placement= image:./p.png",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			_, _, _, err := parseSpanMessage(data, 100)
+			if err == nil {
+				t.Errorf("expected error for %q; got nil", data)
+			}
+		})
+	}
+}
+
+// TestParseBoxPlacementWithOtherFlags: placement coexists
+// with bold/italic/scale/family in any order. The flags
+// apply to the box's covered runes (which render as text
+// for placement=below).
+func TestParseBoxPlacementWithOtherFlags(t *testing.T) {
+	cases := []string{
+		"b 0 11 0 0 - - placement=below bold image:./p.png",
+		"b 0 11 0 0 - - bold placement=below image:./p.png",
+		"b 0 11 0 0 - - scale=1.5 placement=below image:./p.png",
+		"b 0 11 0 0 - - placement=below family=code image:./p.png",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			runs, _, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Fatalf("parseSpanMessage: %v", err)
+			}
+			if runs[0].Style.BoxPlacement != "below" {
+				t.Errorf("BoxPlacement not parsed; line was %q", data)
+			}
+		})
+	}
+}
+
+// TestParseBoxPlacementBelowContiguity: a placement=below b
+// at offset N (length=L) followed by a span at offset N+L
+// satisfies the contiguity rule.
+func TestParseBoxPlacementBelowContiguity(t *testing.T) {
+	data := "s 0 5 -\n" +
+		"b 5 11 0 0 - - placement=below image:./p.png\n" +
+		"s 16 4 -\n"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("expected 3 runs, got %d", len(runs))
+	}
+	if runs[1].Style.BoxPlacement != "below" {
+		t.Error("middle run should be a placement=below box")
+	}
+}
+
+// TestParseBoxPayloadWithParams: a placement=below b with
+// `image:URL width=N` payload preserves the multi-token
+// payload string verbatim. Param interpretation happens in
+// the consumer (boxStyleToRichStyle), not the parser.
+func TestParseBoxPayloadWithParams(t *testing.T) {
+	data := "b 5 11 0 0 - - placement=below image:./p.png width=200"
+	runs, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	want := "image:./p.png width=200"
+	if runs[0].Style.BoxPayload != want {
+		t.Errorf("BoxPayload = %q, want %q", runs[0].Style.BoxPayload, want)
+	}
+}

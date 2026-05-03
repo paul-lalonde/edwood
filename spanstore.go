@@ -31,11 +31,34 @@ type StyleAttrs struct {
 	// in Phase 3 round 2.
 	Family string
 
+	// HRule indicates that this span represents a horizontal
+	// rule line. The renderer keeps the span's text visible
+	// (source markers `---`/`***`/`___` render normally) and
+	// rich/mdrender's paintHorizontalRules draws a 1px line
+	// across the frame on the same row — the user sees both
+	// the markers and the rule. Wire format: `hrule` flag on
+	// s/b directives. Added in Phase 3 round 3 (text-suppress
+	// behavior was reverted in the round-3 follow-up).
+	HRule bool
+
 	// Box fields (zero values = not a box)
 	IsBox      bool
-	BoxWidth   int    // pixels
-	BoxHeight  int    // pixels
-	BoxPayload string // opaque, e.g. "image:/path/to/img.png"
+	BoxWidth   int    // pixels; 0 means "renderer probes" (Phase 3 round 4)
+	BoxHeight  int    // pixels; 0 means "renderer probes" (Phase 3 round 4)
+	BoxPayload string // opaque, e.g. "image:/path/to/img.png [key=value...]"
+	// BoxPlacement is the layout-mode discriminator for box
+	// rendering. Empty string is the default (existing
+	// replacing semantic — the box's `length` runes are
+	// replaced by the box at render time). v1 also recognizes
+	// "below" (the box covers source runes that render as
+	// text in the normal way; the renderer additionally
+	// paints the image below the line on which they sit).
+	// The protocol uses a namespaced `placement=NAME` flag to
+	// keep future placements (above, center, etc.) from
+	// expanding the wire-format flag set; the parser
+	// validates against a closed set. Added in Phase 3 round
+	// 4 for inline-image rendering with source kept visible.
+	BoxPlacement string
 }
 
 // colorEqual compares two color.Color values, handling nil.
@@ -66,10 +89,12 @@ func (a StyleAttrs) Equal(b StyleAttrs) bool {
 		a.Hidden == b.Hidden &&
 		a.Scale == b.Scale &&
 		a.Family == b.Family &&
+		a.HRule == b.HRule &&
 		a.IsBox == b.IsBox &&
 		a.BoxWidth == b.BoxWidth &&
 		a.BoxHeight == b.BoxHeight &&
-		a.BoxPayload == b.BoxPayload
+		a.BoxPayload == b.BoxPayload &&
+		a.BoxPlacement == b.BoxPlacement
 }
 
 // StyleRun is a contiguous range of runes sharing the same style.

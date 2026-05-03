@@ -35,36 +35,81 @@ func FormatSpans(styled []Span, totalRunes int) string {
 	contiguous := fillGaps(styled, totalRunes)
 	var b strings.Builder
 	for _, s := range contiguous {
-		fg := s.Fg
-		if fg == "" {
-			fg = "-"
+		if s.IsBox {
+			writeBoxLine(&b, s)
+		} else {
+			writeSpanLine(&b, s)
 		}
-		fmt.Fprintf(&b, "s %d %d %s", s.Offset, s.Length, fg)
-		if s.Bold {
-			b.WriteString(" bold")
-		}
-		if s.Italic {
-			b.WriteString(" italic")
-		}
-		// Scale==0 is the unset sentinel (renders at 1.0
-		// baseline). Omit the flag in that case so plain text
-		// produces minimal wire output. A producer that
-		// chooses to emit explicit scale=1.0 (Span.Scale=1.0)
-		// will get that on the wire — it round-trips through
-		// the parser as Scale=1.0, distinct from unset.
-		if s.Scale != 0 {
-			fmt.Fprintf(&b, " scale=%g", s.Scale)
-		}
-		// Family=="" is the unset sentinel; omit the flag.
-		// v1's recognized values are {"code"}; the parser
-		// rejects anything else, so emitting an unknown name
-		// here would produce a write the consumer rejects.
-		if s.Family != "" {
-			fmt.Fprintf(&b, " family=%s", s.Family)
-		}
-		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// writeSpanLine emits one `s OFFSET LENGTH FG flags...`
+// line for a non-box styled run.
+func writeSpanLine(b *strings.Builder, s Span) {
+	fg := s.Fg
+	if fg == "" {
+		fg = "-"
+	}
+	fmt.Fprintf(b, "s %d %d %s", s.Offset, s.Length, fg)
+	writeStyleFlags(b, s)
+	b.WriteByte('\n')
+}
+
+// writeBoxLine emits one `b OFFSET LENGTH WIDTH HEIGHT FG
+// BG flags... payload` line for a box. Round 4 producers
+// emit IsBox spans for inline images; the placement= flag
+// and the payload (including any width=N param) are
+// formatted here.
+func writeBoxLine(b *strings.Builder, s Span) {
+	fg := s.Fg
+	if fg == "" {
+		fg = "-"
+	}
+	// Box format requires the BG slot. md2spans emits "-"
+	// for default; future producers may set Bg.
+	fmt.Fprintf(b, "b %d %d %d %d %s -", s.Offset, s.Length, s.BoxWidth, s.BoxHeight, fg)
+	writeStyleFlags(b, s)
+	if s.BoxPlacement != "" {
+		fmt.Fprintf(b, " placement=%s", s.BoxPlacement)
+	}
+	if s.BoxPayload != "" {
+		fmt.Fprintf(b, " %s", s.BoxPayload)
+	}
+	b.WriteByte('\n')
+}
+
+// writeStyleFlags emits the optional flag tokens shared by
+// `s` and `b` lines: bold, italic, scale=N.N, family=NAME,
+// hrule. Flags are emitted in a stable order (matching the
+// spec examples) so producers / fixtures round-trip
+// byte-exactly.
+func writeStyleFlags(b *strings.Builder, s Span) {
+	if s.Bold {
+		b.WriteString(" bold")
+	}
+	if s.Italic {
+		b.WriteString(" italic")
+	}
+	// Scale==0 is the unset sentinel (renders at 1.0
+	// baseline). Omit the flag so plain text produces
+	// minimal wire output. A producer that chooses to emit
+	// explicit scale=1.0 (Span.Scale=1.0) gets that on the
+	// wire — it round-trips through the parser as
+	// Scale=1.0, distinct from unset.
+	if s.Scale != 0 {
+		fmt.Fprintf(b, " scale=%g", s.Scale)
+	}
+	// Family=="" is the unset sentinel; omit the flag.
+	// v1's recognized values are {"code"}; the parser
+	// rejects anything else, so emitting an unknown name
+	// here would produce a write the consumer rejects.
+	if s.Family != "" {
+		fmt.Fprintf(b, " family=%s", s.Family)
+	}
+	if s.HRule {
+		b.WriteString(" hrule")
+	}
 }
 
 // fillGaps returns a contiguous span list covering [0, totalRunes)
@@ -100,13 +145,19 @@ func fillGaps(styled []Span, totalRunes int) []Span {
 			out = append(out, Span{Offset: cursor, Length: start - cursor})
 		}
 		out = append(out, Span{
-			Offset: start,
-			Length: end - start,
-			Fg:     s.Fg,
-			Bold:   s.Bold,
-			Italic: s.Italic,
-			Scale:  s.Scale,
-			Family: s.Family,
+			Offset:       start,
+			Length:       end - start,
+			Fg:           s.Fg,
+			Bold:         s.Bold,
+			Italic:       s.Italic,
+			Scale:        s.Scale,
+			Family:       s.Family,
+			HRule:        s.HRule,
+			IsBox:        s.IsBox,
+			BoxWidth:     s.BoxWidth,
+			BoxHeight:    s.BoxHeight,
+			BoxPayload:   s.BoxPayload,
+			BoxPlacement: s.BoxPlacement,
 		})
 		cursor = end
 	}

@@ -156,7 +156,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 		}
 	}
 
-	var bold, italic, hidden bool
+	var bold, italic, hidden, hrule bool
 	var scale float64
 	var family string
 	for _, flag := range fields[flagStart:] {
@@ -167,6 +167,8 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			italic = true
 		case flag == "hidden":
 			hidden = true
+		case flag == "hrule":
+			hrule = true
 		case strings.HasPrefix(flag, "scale="):
 			s, perr := parseScaleFlag(flag)
 			if perr != nil {
@@ -194,6 +196,7 @@ func parseSpanLine(fields []string) (offset, length int, run StyleRun, err error
 			Hidden: hidden,
 			Scale:  scale,
 			Family: family,
+			HRule:  hrule,
 		},
 	}
 	return offset, length, run, nil
@@ -224,6 +227,37 @@ func parseFamilyFlag(flag string) (string, error) {
 	}
 	if !validFamilies[val] {
 		return "", fmt.Errorf("unknown family name: %q", flag)
+	}
+	return val, nil
+}
+
+// validPlacements lists the placement-name values v1 accepts
+// on `b` directives. The empty/absent flag and the explicit
+// "replace" both denote the existing replacing semantic;
+// "below" is Phase 3 round 4's new layout mode (image
+// rendered below the line containing Offset, source runes
+// preserved). Future placements (above, center, etc.) extend
+// this set per their own Phase 3 rounds; the parser rejects
+// unknown values so producer mistakes surface loudly.
+var validPlacements = map[string]bool{
+	"replace": true,
+	"below":   true,
+}
+
+// parsePlacementFlag parses a "placement=NAME" flag token
+// and returns the validated placement name. Rejects empty
+// values and any name not in validPlacements. Per Phase 3
+// round 4 design: placement values select a layout mode for
+// the box; `replace` is the existing replacing semantic and
+// `below` covers source runes that render as text while the
+// image renders below the line.
+func parsePlacementFlag(flag string) (string, error) {
+	val := strings.TrimPrefix(flag, "placement=")
+	if val == "" {
+		return "", fmt.Errorf("placement flag missing value: %q", flag)
+	}
+	if !validPlacements[val] {
+		return "", fmt.Errorf("unknown placement name: %q", flag)
 	}
 	return val, nil
 }
@@ -290,9 +324,9 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 
 	// Parse optional colors, flags, and payload from remaining fields.
 	var fg, bg color.Color
-	var bold, italic, hidden bool
+	var bold, italic, hidden, hrule bool
 	var scale float64
-	var family string
+	var family, placement string
 	var payloadParts []string
 	idx := 4
 	inPayload := false
@@ -346,6 +380,9 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 		case f == "hidden":
 			hidden = true
 			idx++
+		case f == "hrule":
+			hrule = true
+			idx++
 		case strings.HasPrefix(f, "scale="):
 			s, perr := parseScaleFlag(f)
 			if perr != nil {
@@ -360,6 +397,13 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 			}
 			family = fam
 			idx++
+		case strings.HasPrefix(f, "placement="):
+			p, perr := parsePlacementFlag(f)
+			if perr != nil {
+				return 0, 0, StyleRun{}, perr
+			}
+			placement = p
+			idx++
 		default:
 			// Start of payload — collect this and all remaining tokens.
 			inPayload = true
@@ -373,17 +417,19 @@ func parseBoxLine(fields []string) (offset, length int, run StyleRun, err error)
 	run = StyleRun{
 		Len: length,
 		Style: StyleAttrs{
-			Fg:         fg,
-			Bg:         bg,
-			Bold:       bold,
-			Italic:     italic,
-			Hidden:     hidden,
-			Scale:      scale,
-			Family:     family,
-			IsBox:      true,
-			BoxWidth:   width,
-			BoxHeight:  height,
-			BoxPayload: payload,
+			Fg:           fg,
+			Bg:           bg,
+			Bold:         bold,
+			Italic:       italic,
+			Hidden:       hidden,
+			Scale:        scale,
+			Family:       family,
+			HRule:        hrule,
+			IsBox:        true,
+			BoxWidth:     width,
+			BoxHeight:    height,
+			BoxPayload:   payload,
+			BoxPlacement: placement,
 		},
 	}
 	return offset, length, run, nil

@@ -1168,6 +1168,198 @@ func TestLayoutImageLineHeight(t *testing.T) {
 	})
 }
 
+// TestLayoutImageBelowAdditiveLineHeight covers the Phase 3
+// round 4 contract: a line containing one or more
+// ImageBelow boxes has effective Height = textHeight + sum
+// of imageBelow heights (additive, not max). The image
+// renders below the line text rather than competing with
+// it for vertical space.
+func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	t.Run("text plus one ImageBelow: height is text + image", func(t *testing.T) {
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
+		boxes := []Box{
+			{Text: []byte("hello"), Nrune: 5, Style: DefaultStyle()},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "p.png", Scale: 1.0},
+				ImageData: img,
+			},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		// Text height ~14 + image height 50 = ~64.
+		got := lines[0].Height
+		want := 14 + 50
+		if got != want {
+			t.Errorf("Line.Height = %d, want %d (textHeight + imageHeight)", got, want)
+		}
+	})
+
+	t.Run("text plus two ImageBelow: heights stack", func(t *testing.T) {
+		a := &CachedImage{Width: 100, Height: 30, Path: "a.png"}
+		b := &CachedImage{Width: 100, Height: 50, Path: "b.png"}
+		boxes := []Box{
+			{Text: []byte("hi"), Nrune: 2, Style: DefaultStyle()},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "a.png", Scale: 1.0},
+				ImageData: a,
+			},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "b.png", Scale: 1.0},
+				ImageData: b,
+			},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		got := lines[0].Height
+		want := 14 + 30 + 50
+		if got != want {
+			t.Errorf("Line.Height = %d, want %d (textHeight + sum(imageHeights))", got, want)
+		}
+	})
+
+	t.Run("ImageBelow does not advance xPos", func(t *testing.T) {
+		img := &CachedImage{Width: 200, Height: 50, Path: "p.png"}
+		boxes := []Box{
+			{Text: []byte("a"), Nrune: 1, Style: DefaultStyle()},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "p.png", Scale: 1.0},
+				ImageData: img,
+			},
+			{Text: []byte("b"), Nrune: 1, Style: DefaultStyle()},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		// "a" and "b" should be adjacent — the ImageBelow box
+		// in between contributes zero horizontal advance. Find
+		// the boxes by their text content.
+		var aX, bX int = -1, -1
+		for _, pb := range lines[0].Boxes {
+			if string(pb.Box.Text) == "a" {
+				aX = pb.X
+			}
+			if string(pb.Box.Text) == "b" {
+				bX = pb.X
+			}
+		}
+		if aX < 0 || bX < 0 {
+			t.Fatalf("could not locate a/b boxes (aX=%d bX=%d)", aX, bX)
+		}
+		// "a" is one rune wide; bX should equal aX + width of "a".
+		// We verify the smaller invariant: bX < 200 (the image
+		// width). If ImageBelow had advanced xPos by 200, bX
+		// would be > 200.
+		if bX >= 200 {
+			t.Errorf("bX = %d, suggests ImageBelow advanced xPos by image width", bX)
+		}
+	})
+
+	t.Run("ImageBelow contribution resets across newlines", func(t *testing.T) {
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
+		boxes := []Box{
+			{Text: []byte("first"), Nrune: 5, Style: DefaultStyle()},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "p.png", Scale: 1.0},
+				ImageData: img,
+			},
+			{Text: nil, Nrune: -1, Bc: '\n', Style: DefaultStyle()},
+			{Text: []byte("second"), Nrune: 6, Style: DefaultStyle()},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines, got %d", len(lines))
+		}
+		// First line: text + image height (14 + 50 = 64).
+		if lines[0].Height != 64 {
+			t.Errorf("line[0].Height = %d, want 64", lines[0].Height)
+		}
+		// Second line: just text height (14). The ImageBelow
+		// accumulator must have reset.
+		if lines[1].Height != 14 {
+			t.Errorf("line[1].Height = %d, want 14 (no carryover)", lines[1].Height)
+		}
+	})
+
+	t.Run("ImageBelow at line start does not get gutter indent", func(t *testing.T) {
+		// Bug fix: rich/layout.go's indent-calculation branch
+		// used to include `(box.Style.Image && !box.Style.FixedBox)`
+		// without the !ImageBelow exclusion the wrapped-line
+		// analog had. Effect was: an ImageBelow box at xPos=0
+		// got shifted to gutterIndent. Pin the fixed contract:
+		// an ImageBelow box at line start renders at xPos==0
+		// (or whatever the inherited indent is from list/
+		// blockquote, which is 0 for plain text).
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
+		// Source text covering `![](p.png)` (10 runes wide
+		// at 10px/char = 100 pixels) at start of line.
+		boxes := []Box{
+			{
+				Text: []byte("![](p.png)"), Nrune: 10,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "p.png", Scale: 1.0,
+				},
+				ImageData: img,
+			},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		if len(lines[0].Boxes) != 1 {
+			t.Fatalf("expected 1 box on line, got %d", len(lines[0].Boxes))
+		}
+		// X must be 0 (no gutter indent for plain ImageBelow).
+		if lines[0].Boxes[0].X != 0 {
+			t.Errorf("ImageBelow at line start: X = %d, want 0 (no gutter indent)",
+				lines[0].Boxes[0].X)
+		}
+	})
+
+	t.Run("ImageBelow plus inline image on same line", func(t *testing.T) {
+		below := &CachedImage{Width: 100, Height: 40, Path: "below.png"}
+		inline := &CachedImage{Width: 100, Height: 30, Path: "inline.png"}
+		boxes := []Box{
+			{Text: []byte("x"), Nrune: 1, Style: DefaultStyle()},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageURL: "inline.png", Scale: 1.0},
+				ImageData: inline,
+			},
+			{
+				Text: nil, Nrune: 0,
+				Style: Style{Image: true, ImageBelow: true, ImageURL: "below.png", Scale: 1.0},
+				ImageData: below,
+			},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		// Inline image expands content height to max(text=14, img=30) = 30.
+		// ImageBelow adds 40. Total = 30 + 40 = 70.
+		got := lines[0].Height
+		want := 30 + 40
+		if got != want {
+			t.Errorf("Line.Height = %d, want %d (max(text,inlineImg) + sum(belowImgs))", got, want)
+		}
+	})
+}
+
 // TestLayoutWithCache tests that layout can use an ImageCache to load images.
 // When a cache is provided, layout should use it to retrieve image data for sizing.
 func TestLayoutWithCache(t *testing.T) {

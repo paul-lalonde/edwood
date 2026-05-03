@@ -28,6 +28,18 @@ R2. The HRule-skip in `paintPhaseText` (`rich/frame.go` around the
     updated to point at `mdrender` rather than at the (now
     removed) phase number.
 
+    **Update (Phase 3 round 3, April 2026)**: the HRule-skip in
+    `paintPhaseText` was REMOVED. Smoke-test feedback flagged that
+    suppressing marker text made HRule visually inconsistent with
+    every other md2spans-emitted feature (emphasis, code, headings,
+    links all keep their markers visible). Today, HRule-styled boxes
+    render their text normally and `paintHorizontalRules` draws the
+    rule line on top — both visible together. R2 here is preserved
+    as historical context for the 1.3 move; the contemporary
+    contract is documented in
+    [`docs/designs/features/phase3-r3-hrule.md`](../../docs/designs/features/phase3-r3-hrule.md)
+    (§"Markers stay visible").
+
 R3. `Renderer.Redraw` calls a new `paintHorizontalRules()` after
     `paintBlockquoteBorders()`. Order between the two wrapper-
     side phases doesn't matter functionally (rules and bars

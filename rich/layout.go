@@ -111,8 +111,11 @@ func boxWidth(box *Box, font draw.Font) int {
 	if box.IsNewline() || box.IsTab() {
 		return 0
 	}
-	// For image boxes with ImageData, return the image width
-	if box.IsImage() {
+	// For inline-replacing image boxes with ImageData, return
+	// the image width. ImageBelow boxes (Phase 3 round 4) flow
+	// through to the text-width branch — their horizontal
+	// advance is the rendered text's width, not the image's.
+	if box.IsImage() && !box.Style.ImageBelow {
 		return box.ImageData.Width
 	}
 	if len(box.Text) == 0 {
@@ -319,10 +322,12 @@ func adjustLayoutForSlides(lines []Line, regions []SlideRegion, frameHeight int)
 }
 
 // blockLeftIndent returns the X position of the first block-styled box on the
-// given line, which is the left indent of the block content area.
+// given line, which is the left indent of the block content area. ImageBelow
+// boxes (Phase 3 round 4) are NOT block-level — they flow inline alongside
+// text — so they don't establish a block left indent.
 func blockLeftIndent(line *Line) int {
 	for _, pb := range line.Boxes {
-		if pb.Box.Style.Block || pb.Box.Style.Table || pb.Box.IsImage() {
+		if pb.Box.Style.Block || pb.Box.Style.Table || (pb.Box.IsImage() && !pb.Box.Style.ImageBelow) {
 			return pb.X
 		}
 	}
@@ -460,7 +465,10 @@ func lineBlockKind(line *Line) (BlockKind, bool) {
 		if pb.Box.Style.Table {
 			return BlockTable, true
 		}
-		if pb.Box.IsImage() {
+		// ImageBelow boxes (Phase 3 round 4) are not block-level —
+		// they flow inline; only inline-replacing images participate
+		// in block-region scrolling.
+		if pb.Box.IsImage() && !pb.Box.Style.ImageBelow {
 			return BlockImage, true
 		}
 	}
@@ -507,6 +515,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	pendingParaBreak := false // Track if we just had a paragraph break
 	currentListIndent := 0    // Track current list indentation level for wrapped lines
 	actualLineHeight := 0     // Track actual max height of content boxes on current line
+	imagesBelowHeight := 0    // Sum of ImageBelow box heights on the current line (Phase 3 round 4)
 
 	for i := range boxes {
 		box := &boxes[i]
@@ -514,10 +523,21 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		// Update line height if this box uses a taller font
 		boxHeight := getFontHeight(box.Style)
 
-		// For image boxes with ImageData, use the image's scaled height
+		// For image boxes with ImageData:
+		//   - inline-replacing images expand the line height to the
+		//     image's height (max(text, image)).
+		//   - ImageBelow images (Phase 3 round 4) DON'T compete with
+		//     text height; instead, they contribute additively to the
+		//     line height via the imagesBelowHeight accumulator. The
+		//     box's source text renders normally in paintPhaseText
+		//     and advances xPos by its text width like any other
+		//     text box.
 		if box.IsImage() {
 			_, imgHeight := imageBoxDimensions(box, frameWidth)
-			if imgHeight > boxHeight {
+			if box.Style.ImageBelow {
+				imagesBelowHeight += imgHeight
+				// boxHeight stays at the text font height; no max with imgHeight.
+			} else if imgHeight > boxHeight {
 				boxHeight = imgHeight
 			}
 		} else if box.IsFixedBox() {
@@ -547,6 +567,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			if actualLineHeight > 0 {
 				currentLine.Height = actualLineHeight
 			}
+			// ImageBelow boxes add height below the line text (Phase 3 round 4).
+			currentLine.Height += imagesBelowHeight
 			lines = append(lines, currentLine)
 
 			// Calculate Y offset based on the finalized line height
@@ -565,6 +587,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			xPos = 0
 			currentListIndent = 0 // Reset list indent on explicit newline
 			actualLineHeight = 0  // Reset for next line
+			imagesBelowHeight = 0 // Reset for next line
 
 			// Mark that we have a pending paragraph break if this newline is a para break
 			if box.Style.ParaBreak {
@@ -599,9 +622,10 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				// instead of using the full gutter
 				indentPixels += ListIndentWidth
 			}
-		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox) {
+		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox && !box.Style.ImageBelow) {
 			// All scrollable block elements get gutter indentation
-			// (FixedBox elements from the spans protocol are inline, not block)
+			// (FixedBox elements from the spans protocol are inline, not block;
+			// ImageBelow boxes flow inline with text — Phase 3 round 4)
 			indentPixels = gutterIndent
 		}
 
@@ -610,12 +634,15 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			xPos = indentPixels
 		}
 
-		// Calculate width for this box using the style-specific font
+		// Calculate width for this box using the style-specific font.
+		// ImageBelow boxes flow through the text-width branch — their
+		// horizontal advance is the rendered text width, not the
+		// image's pixel width. Phase 3 round 4.
 		var width int
 		if box.IsTab() {
 			width = tabBoxWidth(box, xPos, 0, maxtab)
-		} else if box.IsImage() {
-			// For image boxes, use scaled dimensions
+		} else if box.IsImage() && !box.Style.ImageBelow {
+			// For inline-replacing image boxes, use scaled dimensions
 			width, _ = imageBoxDimensions(box, frameWidth)
 		} else if box.IsFixedBox() {
 			width = box.Style.ImageWidth
@@ -623,8 +650,11 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			width = boxWidth(box, getFontForStyle(box.Style))
 		}
 
-		// For block-level code, tables, or images, don't wrap - allow horizontal overflow
-		if (box.Style.Block && box.Style.Code) || box.Style.Table || box.IsImage() {
+		// For block-level code, tables, or inline-replacing images,
+		// don't wrap — allow horizontal overflow. ImageBelow boxes
+		// wrap as normal text since their horizontal extent IS the
+		// source text's width.
+		if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.IsImage() && !box.Style.ImageBelow) {
 			box.Wid = width
 			currentLine.Boxes = append(currentLine.Boxes, PositionedBox{Box: *box, X: xPos})
 			xPos += width
@@ -639,7 +669,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		if box.Style.Blockquote {
 			currentIndent += box.Style.BlockquoteDepth * ListIndentWidth
 		}
-		if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox) {
+		if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox && !box.Style.ImageBelow) {
 			currentIndent = gutterIndent
 		}
 
@@ -655,6 +685,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				if actualLineHeight > 0 {
 					currentLine.Height = actualLineHeight
 				}
+				// ImageBelow contribution closes out with the line.
+				currentLine.Height += imagesBelowHeight
 				lines = append(lines, currentLine)
 				currentLine = Line{
 					Y:      currentLine.Y + currentLine.Height,
@@ -662,7 +694,8 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				}
 				// Maintain indentation on wrapped lines
 				xPos = currentIndent
-				actualLineHeight = 0 // Reset for new line
+				actualLineHeight = 0  // Reset for new line
+				imagesBelowHeight = 0 // Reset for new line
 
 				// Recalculate tab width at new position
 				if box.IsTab() {
@@ -675,6 +708,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				if actualLineHeight > 0 {
 					currentLine.Height = actualLineHeight
 				}
+				currentLine.Height += imagesBelowHeight
 				lines = append(lines, currentLine)
 				currentLine = Line{
 					Y:      currentLine.Y + currentLine.Height,
@@ -682,6 +716,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				}
 				xPos = currentIndent
 				actualLineHeight = 0
+				imagesBelowHeight = 0
 				lines, currentLine, xPos = splitBoxAcrossLinesWithIndent(lines, currentLine, box, font, frameWidth, currentLine.Height, getFontHeight, getFontForStyle, currentIndent)
 				continue
 			}
@@ -702,6 +737,13 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 
 	// Don't forget the last line (if it has content)
 	if len(currentLine.Boxes) > 0 {
+		// Use actual content height if we had content (matches the
+		// newline-close-out path); otherwise leave Height as the
+		// inherited value. Then add ImageBelow contribution.
+		if actualLineHeight > 0 {
+			currentLine.Height = actualLineHeight
+		}
+		currentLine.Height += imagesBelowHeight
 		lines = append(lines, currentLine)
 	}
 
@@ -712,14 +754,16 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	}
 
 	// Compute ContentWidth for non-wrapping lines.
-	// For lines containing Block && Code boxes or images, ContentWidth is the
-	// rightmost box extent (X + Wid). For normal text lines, ContentWidth stays 0.
+	// For lines containing Block && Code boxes or inline-replacing
+	// images, ContentWidth is the rightmost box extent (X + Wid).
+	// ImageBelow boxes (Phase 3 round 4) wrap normally and don't
+	// trigger non-wrap layout.
 	for i := range lines {
 		line := &lines[i]
 		isNonWrap := false
 		maxExtent := 0
 		for _, pb := range line.Boxes {
-			if (pb.Box.Style.Block && pb.Box.Style.Code) || pb.Box.Style.Table || pb.Box.IsImage() {
+			if (pb.Box.Style.Block && pb.Box.Style.Code) || pb.Box.Style.Table || (pb.Box.IsImage() && !pb.Box.Style.ImageBelow) {
 				isNonWrap = true
 			}
 			extent := pb.X + pb.Box.Wid

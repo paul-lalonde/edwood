@@ -291,6 +291,26 @@ func TestTableStyleFields(t *testing.T) {
 	})
 }
 
+// TestImageBelowField pins the Phase 3 round 4 contract: a
+// new bool field on Style signals "render this image
+// anchored to the line at the rune offset, painted below
+// the line text, growing line height by image height."
+// The default style does not set it; ImageBelow composes
+// with the existing Image / ImageURL / ImageWidth /
+// ImageHeight fields rather than replacing them.
+func TestImageBelowField(t *testing.T) {
+	if DefaultStyle().ImageBelow {
+		t.Error("DefaultStyle().ImageBelow = true, want false")
+	}
+	s := Style{ImageBelow: true, Image: true, ImageURL: "/x.png", Scale: 1.0}
+	if !s.ImageBelow {
+		t.Error("ImageBelow not set")
+	}
+	if !s.Image || s.ImageURL == "" {
+		t.Error("ImageBelow should compose with Image/ImageURL fields")
+	}
+}
+
 func TestLinkStyleColor(t *testing.T) {
 	// StyleLink should have a blue foreground color for rendering links
 	if StyleLink.Fg == nil {

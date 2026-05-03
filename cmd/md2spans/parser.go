@@ -1,6 +1,10 @@
 package main
 
-import "unicode/utf8"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // Span is a styled rune range in the body. Offset and Length are
 // in runes (matching the spans-protocol convention used by
@@ -29,6 +33,26 @@ type Span struct {
 	// emits Family="code"; inside a heading, the merge attaches
 	// the heading's Scale alongside (see phase3-r2-font-family.md).
 	Family string
+	// HRule signals that this span represents a horizontal-rule
+	// line (`---` / `***` / `___` markdown form). emit() formats
+	// it as the `hrule` flag; the consumer suppresses the
+	// span's text and draws a rule line. See phase3-r3-hrule.md.
+	HRule bool
+	// Box fields (Phase 3 round 4). When IsBox is true, emit
+	// formats this Span as a `b` directive instead of `s`.
+	// BoxPlacement maps to the wire `placement=NAME` flag
+	// (v1 values: "below" for non-replacing inline images;
+	// "" or "replace" for the existing replacing semantic —
+	// md2spans v1 only emits "below"). BoxPayload carries
+	// the URL plus optional `key=value` params (e.g.
+	// "image:./pic.png width=200"). BoxWidth/BoxHeight are
+	// zero in v1 to use the renderer-probes sentinel; the
+	// payload's `width=N` provides any explicit override.
+	IsBox        bool
+	BoxWidth     int
+	BoxHeight    int
+	BoxPayload   string
+	BoxPlacement string
 }
 
 // Parse takes the markdown source and returns the list of styled
@@ -40,13 +64,39 @@ type Span struct {
 func Parse(src string) []Span {
 	var spans []Span
 	for _, p := range scanParagraphs(src) {
-		if p.HeadingLevel > 0 {
+		switch {
+		case p.IsHRule:
+			spans = append(spans, parseHRuleParagraph(src, p)...)
+		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
-		} else {
+		default:
 			spans = append(spans, parseParagraph(src, p)...)
 		}
 	}
 	return spans
+}
+
+// parseHRuleParagraph emits a single Span over the HRule
+// marker runes with HRule=true. The wrapper renderer
+// (rich/mdrender) suppresses the span's text and draws a
+// horizontal line spanning the frame width on the line.
+//
+// Trailing whitespace (allowed after the markers) is NOT part
+// of the emitted span — the rule visually overlays the marker
+// region; the trailing whitespace gets a default-styled fill
+// from emit.go's fillGaps.
+func parseHRuleParagraph(src string, p paragraphRange) []Span {
+	n := detectHRule(src, p.ByteStart, p.ByteEnd)
+	if n <= 0 {
+		// Defensive: scanParagraphs only sets IsHRule when
+		// detectHRule returns > 0, so this shouldn't happen.
+		return nil
+	}
+	return []Span{{
+		Offset: p.RuneStart,
+		Length: n,
+		HRule:  true,
+	}}
 }
 
 // parseHeadingParagraph emits scaled spans for an ATX heading
@@ -121,15 +171,25 @@ func parseHeadingParagraph(src string, p paragraphRange) []Span {
 	return out
 }
 
-// parseInlineSpans runs the emphasis, link, and inline-code
-// tokenizers over `runes` (a paragraph's content), returning
-// Span values whose Offsets are body-absolute (runeStart +
-// per-paragraph index). Reused by both parseParagraph and
-// parseHeadingParagraph.
+// parseInlineSpans runs the emphasis, link, image, and
+// inline-code tokenizers over `runes` (a paragraph's content),
+// returning Span values whose Offsets are body-absolute
+// (runeStart + per-paragraph index). Reused by both
+// parseParagraph and parseHeadingParagraph.
+//
+// Image syntax (`![alt](url)`) is recognized BEFORE the link
+// tokenizer; the discriminating character is `!`. Phase 3
+// round 4.
 func parseInlineSpans(runes []rune, runeStart int) []Span {
 	var spans []Span
 	for i := 0; i < len(runes); {
 		switch c := runes[i]; {
+		case c == '!':
+			s, advance, ok := tryImage(runes, i, runeStart)
+			if ok {
+				spans = append(spans, s)
+			}
+			i += advance
 		case c == '*' || c == '_':
 			s, advance, ok := tryEmphasis(runes, i, runeStart)
 			if ok {
@@ -191,10 +251,16 @@ func tryCode(runes []rune, i, runeStart int) (Span, int, bool) {
 // (`# h1` through `###### h6`). Heading paragraphs are exactly
 // one source line; scanParagraphs splits a heading line into
 // its own paragraph regardless of surrounding blank lines.
+//
+// IsHRule is true for horizontal-rule lines (`---` / `***` /
+// `___` per phase3-r3-hrule.md). Like headings, HRule lines
+// are split into their own one-line paragraphs by
+// scanParagraphs regardless of surrounding blank lines.
 type paragraphRange struct {
 	ByteStart, ByteEnd int
 	RuneStart          int
 	HeadingLevel       int
+	IsHRule            bool
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -209,6 +275,49 @@ var headingScale = [7]float64{
 	4:   1.1,  // H4
 	5:   1.05, // H5
 	6:   1.0,  // H6 (visually distinct via bold; same scale as body)
+}
+
+// detectHRule returns the rune-length of an HRule line, or 0
+// if the line is not a horizontal rule. An HRule line consists
+// of 3+ identical marker characters (`-`, `*`, or `_`) at the
+// line start, optionally followed by trailing whitespace, with
+// no other content.
+//
+// `start` and `end` are byte offsets bracketing the line (no
+// trailing newline). The returned length is the number of
+// marker runes (which equals byte count for these ASCII
+// markers) — used by parseHRuleParagraph to size the emitted
+// span.
+func detectHRule(src string, start, end int) int {
+	if start >= end {
+		return 0
+	}
+	c := src[start]
+	if c != '-' && c != '*' && c != '_' {
+		return 0
+	}
+	// Count the run of identical markers.
+	n := 0
+	for start+n < end && src[start+n] == c {
+		n++
+	}
+	if n < 3 {
+		return 0
+	}
+	// Anything after the marker run must be whitespace.
+	for i := start + n; i < end; i++ {
+		switch src[i] {
+		case ' ', '\t', '\r':
+		default:
+			return 0
+		}
+	}
+	// Safe to return n as a rune count: the marker characters
+	// (`-`, `*`, `_`) are all 1-byte ASCII, enforced by the
+	// equality check on src[start+n] above. If the recognized
+	// marker set is ever broadened to include a multi-byte rune,
+	// this must convert n from bytes to runes before returning.
+	return n
 }
 
 // detectHeadingLevel returns the ATX heading level (1-6) for a
@@ -296,6 +405,18 @@ func scanParagraphs(src string) []paragraphRange {
 			})
 			return
 		}
+		// HRule line: same handling as a heading — own
+		// one-line paragraph, ends any prior plain paragraph.
+		if detectHRule(src, lineStart, lineEnd) > 0 {
+			commit(lineStart)
+			out = append(out, paragraphRange{
+				ByteStart: lineStart,
+				ByteEnd:   lineEnd,
+				RuneStart: lineRuneStart,
+				IsHRule:   true,
+			})
+			return
+		}
 		if !inParagraph {
 			cur = paragraphRange{
 				ByteStart: lineStart,
@@ -380,6 +501,144 @@ func tryEmphasis(runes []rune, i, runeStart int) (Span, int, bool) {
 		Bold:   n == 2 || n == 3,
 		Italic: n == 1 || n == 3,
 	}, closerIdx + n - i, true
+}
+
+// tryImage attempts to parse a CommonMark inline image
+// `![alt](url)` (or `![alt](url "title")`) starting at
+// runes[i] (which must be `!`). On match, returns a single
+// IsBox=true span with BoxPlacement="below" and a payload
+// of `image:URL` (plus optional ` width=N` if the title
+// attribute contains `width=Npx`). The span's Length is the
+// rune count of the entire `![alt](url ...)` source, and the
+// span is anchored at the start of the syntax — the renderer
+// renders those source runes as text in the normal way AND
+// paints the image below the line on which they sit, so the
+// user sees the markers AND the image.
+//
+// On no-match (no `[` after `!`, no `]`, no `(URL)`),
+// returns ok=false and 1 (skip past the `!` as literal).
+//
+// runeStart is the body-relative rune offset of runes[0].
+// Phase 3 round 4.
+func tryImage(runes []rune, i, runeStart int) (Span, int, bool) {
+	if i+1 >= len(runes) || runes[i+1] != '[' {
+		return Span{}, 1, false
+	}
+	parts, ok := findInlineImage(runes, i)
+	if !ok {
+		return Span{}, 1, false
+	}
+	url := string(runes[parts.urlStart:parts.urlEnd])
+	payload := "image:" + url
+	if parts.titleStart > 0 && parts.titleEnd > 0 {
+		title := string(runes[parts.titleStart:parts.titleEnd])
+		if w := parseImageWidthPx(title); w > 0 {
+			payload = fmt.Sprintf("%s width=%d", payload, w)
+		}
+	}
+	advance := parts.closeParen + 1 - i
+	return Span{
+		Offset: runeStart + i,
+		// Length covers the source `![alt](url ...)` runes.
+		// The renderer renders these source markers as text
+		// (consistent with markup-stays-visible from rounds
+		// 1-3) and ALSO paints the image below the line via
+		// the placement=below contract.
+		Length:       advance,
+		IsBox:        true,
+		BoxPayload:   payload,
+		BoxPlacement: "below",
+	}, advance, true
+}
+
+// imageParts captures the rune-index bounds of an
+// `![alt](url)` (or with title) match. urlStart is the rune
+// just after `(`; urlEnd is the rune at which the URL stops
+// (either closeParen when there's no title, or the space
+// preceding `"...` when there is). titleStart/titleEnd
+// bracket the title's content (excluding quotes); both are 0
+// when no title is present. closeParen is the closing `)`.
+type imageParts struct {
+	closeBracket int
+	closeParen   int
+	urlStart     int
+	urlEnd       int
+	titleStart   int
+	titleEnd     int
+}
+
+// findInlineImage looks for the `![alt](url)` or
+// `![alt](url "title")` pattern starting at runes[start]
+// (which must be `!`). On match returns ok=true and the
+// rune bounds in imageParts. On no-match (no `[`, no `]`,
+// no `(URL)`, no closing `)`, malformed title quoting)
+// returns ok=false.
+func findInlineImage(runes []rune, start int) (imageParts, bool) {
+	var p imageParts
+	if start+1 >= len(runes) || runes[start] != '!' || runes[start+1] != '[' {
+		return p, false
+	}
+	p.closeBracket = indexRune(runes, start+2, ']')
+	if p.closeBracket < 0 {
+		return p, false
+	}
+	if p.closeBracket+1 >= len(runes) || runes[p.closeBracket+1] != '(' {
+		return p, false
+	}
+	p.urlStart = p.closeBracket + 2
+	cp := indexRune(runes, p.urlStart, ')')
+	if cp < 0 {
+		return p, false
+	}
+	p.closeParen = cp
+	p.urlEnd = cp // URL extends to closeParen unless a title is found
+	// Optional title: scan for ` "` opener within [urlStart, closeParen).
+	for j := p.urlStart; j < p.closeParen-1; j++ {
+		if runes[j] == ' ' && runes[j+1] == '"' {
+			tStart := j + 2
+			tEnd := indexRune(runes, tStart, '"')
+			if tEnd > 0 && tEnd < p.closeParen {
+				p.urlEnd = j // URL ends at the space before `"`
+				p.titleStart = tStart
+				p.titleEnd = tEnd
+				// Closing `)` must be after the closing `"`.
+				cp2 := indexRune(runes, tEnd+1, ')')
+				if cp2 < 0 {
+					return imageParts{}, false
+				}
+				p.closeParen = cp2
+				break
+			}
+		}
+	}
+	return p, true
+}
+
+// parseImageWidthPx parses a `width=Npx` substring out of a
+// title attribute and returns N, or 0 if not present /
+// malformed. Mirrors markdown/parse.go:parseImageWidth so
+// md2spans honors the same authoring convention.
+func parseImageWidthPx(title string) int {
+	const prefix = "width="
+	const suffix = "px"
+	idx := strings.Index(title, prefix)
+	if idx < 0 {
+		return 0
+	}
+	rest := title[idx+len(prefix):]
+	pxIdx := strings.Index(rest, suffix)
+	if pxIdx <= 0 {
+		return 0
+	}
+	numStr := rest[:pxIdx]
+	n := 0
+	for _, c := range numStr {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // tryLink attempts to parse an inline link `[text](url)`

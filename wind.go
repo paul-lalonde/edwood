@@ -6,6 +6,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2417,17 +2418,70 @@ func (w *Window) initStyledMode() {
 		rtOpts = append(rtOpts, WithRichTextCodeFont(codeFont))
 	}
 
-	// Create an image cache for box elements that reference images.
+	// Create an image cache for box elements that reference
+	// images (initStyledMode is the only mode that
+	// lazily allocates; previewcmd guards on a nil cache).
 	if w.imageCache == nil {
 		w.imageCache = rich.NewImageCache(0)
 	}
-	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+
+	// Image-related options (cache + onImageLoaded callback +
+	// basePath) are routed through a shared helper so the
+	// preview and styled paths stay in parity. Three rounds
+	// of bugs (rounds 1/2 missed font registration; round 4
+	// missed basePath; the post-review sweep caught the
+	// missed onImageLoaded callback) all came from
+	// previewcmd updating without initStyledMode following.
+	// See addImageRichTextOptions for the rationale.
+	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.styledMode })
 
 	rt.Init(display, font, rtOpts...)
 
 	w.richBody = rt
 	w.styledMode = true
 	w.styledSuppressed = false
+}
+
+// addImageRichTextOptions appends the image-related options
+// to the rich-text option list: image cache, async-load
+// callback, and base path for relative image resolution.
+// Both initStyledMode and previewcmd use this — extracting
+// the shared set keeps them in lockstep so a new image-related
+// option doesn't have to be remembered in two places. Each
+// call site passes a closure (`isCurrentMode`) that gates the
+// async-load redraw on the caller's specific mode flag
+// (styledMode vs previewMode); when the closure returns false
+// or the rich body is gone, the redraw is skipped.
+//
+// Background: rounds 1, 2, and 4 each shipped a bug-fix that
+// added a missing option to initStyledMode that previewcmd
+// already had. The recurring pattern motivated this helper.
+func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode func() bool) []RichTextOption {
+	if w.imageCache != nil {
+		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
+	}
+	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
+		go func() {
+			global.row.lk.Lock()
+			defer global.row.lk.Unlock()
+			if !isCurrentMode() || w.richBody == nil {
+				return
+			}
+			w.richBody.Render(w.body.all)
+			if w.display != nil {
+				w.display.Flush()
+			}
+		}()
+	}))
+	name := w.body.file.Name()
+	basePath := name
+	if !filepath.IsAbs(basePath) {
+		if abs, err := filepath.Abs(basePath); err == nil {
+			basePath = abs
+		}
+	}
+	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
+	return rtOpts
 }
 
 // exitStyledMode switches the window from styled rendering back to plain mode.
@@ -2565,34 +2619,10 @@ func (w *Window) rebuildPreviewFont() {
 		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
 	}
 
-	if w.imageCache != nil {
-		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
-	}
-
-	// Wire async image load callback.
-	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
-		go func() {
-			global.row.lk.Lock()
-			defer global.row.lk.Unlock()
-			if !w.previewMode || w.richBody == nil {
-				return
-			}
-			w.richBody.Render(w.body.all)
-			if w.display != nil {
-				w.display.Flush()
-			}
-		}()
-	}))
-
-	// Set base path for relative image resolution.
-	name := w.body.file.Name()
-	basePath := name
-	if !filepath.IsAbs(basePath) {
-		if abs, err := filepath.Abs(basePath); err == nil {
-			basePath = abs
-		}
-	}
-	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
+	// Image-related options (cache + onImageLoaded callback +
+	// basePath) — shared with initStyledMode so the two paths
+	// stay in lockstep. See addImageRichTextOptions.
+	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.previewMode })
 
 	rt.Init(display, font, rtOpts...)
 
@@ -2676,6 +2706,13 @@ func (w *Window) buildStyledContent() rich.Content {
 // rejects unknown family names upstream, so this branch never
 // sees them in production; the defensive ignore prevents a
 // stale span store from breaking the rendering.
+//
+// HRule: passes through directly. The renderer keeps the span's
+// text visible (source markers `---`/`***`/`___` render
+// normally) and rich/mdrender's paintHorizontalRules draws a 1px
+// line across the frame on the same row. Added in Phase 3 round
+// 3; the original "suppress text" behavior was reverted in the
+// round-3 follow-up.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
@@ -2690,6 +2727,7 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	if sa.Family == "code" {
 		s.Code = true
 	}
+	s.HRule = sa.HRule
 	return s
 }
 
@@ -2714,14 +2752,65 @@ func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
 	if sa.Family == "code" {
 		s.Code = true
 	}
-
-	// Parse payload: if it starts with "image:", set Image + ImageURL.
-	if strings.HasPrefix(sa.BoxPayload, "image:") {
-		s.Image = true
-		s.ImageURL = strings.TrimPrefix(sa.BoxPayload, "image:")
+	s.HRule = sa.HRule
+	// BoxPlacement="below" → render image anchored to the
+	// line, painted below the line text (Phase 3 round 4).
+	// "" and "replace" both denote the existing replacing
+	// semantic.
+	if sa.BoxPlacement == "below" {
+		s.ImageBelow = true
 	}
 
+	// Parse payload. v1 convention: first token is `image:URL`;
+	// subsequent space-separated tokens are key=value params
+	// interpreted by the consumer (this function), not by the
+	// wire-format parser. Unknown params are silently ignored
+	// for forward-compat. Phase 3 round 4.
+	applyImagePayload(&s, sa.BoxPayload)
+
 	return s
+}
+
+// applyImagePayload parses a box's payload string and applies
+// the recognized parts to the rich.Style:
+//   - First token `image:URL` enables image rendering and sets
+//     ImageURL to URL (without the `image:` prefix).
+//   - Subsequent `key=value` tokens are recognized for v1's
+//     small set:
+//   - `width=N` sets ImageWidth to N (overrides any prior
+//     value, including a wire-format BoxWidth).
+//
+// Anything else (unknown prefix on the first token, unknown
+// param names, malformed values like `width=abc`) is silently
+// ignored. Phase 3 round 4.
+func applyImagePayload(s *rich.Style, payload string) {
+	if payload == "" {
+		return
+	}
+	tokens := strings.Fields(payload)
+	if len(tokens) == 0 {
+		return
+	}
+	first := tokens[0]
+	if !strings.HasPrefix(first, "image:") {
+		return
+	}
+	s.Image = true
+	s.ImageURL = strings.TrimPrefix(first, "image:")
+	for _, tok := range tokens[1:] {
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 {
+			continue
+		}
+		key, val := tok[:eq], tok[eq+1:]
+		switch key {
+		case "width":
+			n, err := strconv.Atoi(val)
+			if err == nil && n > 0 {
+				s.ImageWidth = n
+			}
+		}
+	}
 }
 
 // HandleStyledMouse handles mouse events when the window is in styled rendering
