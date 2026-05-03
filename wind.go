@@ -2705,6 +2705,13 @@ func (w *Window) UpdateStyledView() {
 }
 
 // buildStyledContent builds rich.Content from the body text and span store.
+// If a regionStore is present (Phase 3 round 5), each rich.Span gains
+// per-rune Style flags derived from its enclosing region: a `code`
+// region adds Block + Code + Bg(InlineCodeBg), driving the existing
+// rich.Frame block-element layout (gutter indent, full-line bg,
+// monospace font). The bridge walks regions ancestor-first so future
+// nested kinds (round 6+ blockquote outside, code inside) layer their
+// flags correctly.
 func (w *Window) buildStyledContent() rich.Content {
 	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
 		return rich.Plain(w.body.file.String())
@@ -2727,6 +2734,13 @@ func (w *Window) buildStyledContent() rich.Content {
 			style = styleAttrsToRichStyle(run.Style)
 		}
 
+		// Region expansion: layer the enclosing region's
+		// flags onto the per-rune style. v1 (round 5)
+		// recognizes only `code`; rounds 6-8 add more.
+		if w.regionStore != nil {
+			applyEnclosingRegions(&style, w.regionStore.EnclosingAt(offset))
+		}
+
 		span := rich.Span{
 			Text:  text,
 			Style: style,
@@ -2735,6 +2749,38 @@ func (w *Window) buildStyledContent() rich.Content {
 		offset += run.Len
 	})
 	return rich.Content(content)
+}
+
+// applyEnclosingRegions walks from the deepest region up
+// through its ancestors, OR-ing each region's kind-specific
+// flags into s. Walking ancestor-aware (rather than just
+// reading the deepest kind) is necessary for round 6+ where
+// a code block inside a blockquote needs BOTH the code's
+// Bg AND the blockquote's depth flags.
+//
+// v1 of round 5 recognizes only "code". Future kinds add
+// cases here.
+//
+// Producer-responsibility note: the bridge applies region
+// flags per spanStore run based on the run's START offset.
+// A producer that emits a single run spanning both inside
+// and outside a region will have its style flags applied
+// only based on the run's start position — i.e., either all
+// inside or all outside the region. For correct rendering,
+// producers MUST emit separate s/b directives at region
+// boundaries. md2spans v1 satisfies this naturally (the
+// `family=code` run inside the region differs in style from
+// the default-styled run outside, and the spanStore won't
+// coalesce them).
+func applyEnclosingRegions(s *rich.Style, deepest *Region) {
+	for r := deepest; r != nil; r = r.Parent {
+		switch r.Kind {
+		case "code":
+			s.Block = true
+			s.Code = true
+			s.Bg = rich.InlineCodeBg
+		}
+	}
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
