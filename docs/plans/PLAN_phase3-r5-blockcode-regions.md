@@ -135,10 +135,10 @@ have something to integrate with.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (doc) | — | — |
-| [ ] Tests | n/a (doc) | — | — |
-| [ ] Iterate | spans-protocol.md gains `begin region` / `end region` directive sections; documents v1 kinds (code) and params (lang=NAME); md2spans README v1 scope flips "Block code with bg" to ✓ (fenced); notes indented as deferred | — | — |
-| [ ] Commit | — | — | `docs: spans protocol gains region directives; md2spans handles fenced code` |
+| [x] Design | n/a (doc) | — | — |
+| [x] Tests | n/a (doc) | — | — |
+| [x] Iterate | spans-protocol.md gains begin/end region directive section + per-write rule #5 (regions atomic) + Phase 3 roadmap entry for round 5; README flips "Fenced code blocks" to ✓ and adds a separate "Indented code blocks — future" row | — | — |
+| [x] Commit | — | — | `docs: spans protocol gains region directives; md2spans handles fenced code` |
 
 ## Phase 3.5.10: Smoke test + merge prep
 

@@ -34,8 +34,8 @@ re-render styled spans (debounced 200 ms).
 | Inline code (`` `text` ``) | ✓ | Phase 3 round 2 — emits `family=code` over backtick-delimited content. Single-backtick form only; double-backtick form deferred. The backticks remain visible in the body. |
 | Horizontal rules (`---` / `***` / `___`) | ✓ | Phase 3 round 3 — emits `hrule` over the marker runes; the renderer keeps the markers visible and draws a horizontal line over the same row (matching the "markup remains visible" stance of every other v1 feature). Simple form only (3+ same-character markers, no internal spaces, no trailing content). v1 may render a setext-heading underline (`---` after a text line) as a rule rather than a heading; users who write `---` between paragraphs may see this. |
 | Inline images (`![alt](url)`, `![alt](url "width=Npx")`) | ✓ | Phase 3 round 4 — emits `b OFF 0 0 0 - - placement=below image:URL [width=N]` anchored at the start of the syntax. The image renders BELOW the line containing the source; `![alt](url ...)` text stays visible above (consistent with markers-stay-visible). Width comes from the title attr `width=Npx` if present; otherwise the renderer probes the file via its async cache. md2spans does no file IO — relative URLs are resolved by the consumer against the window's body file path. Inline-replacing form (length>0) is not emitted; users who want it keep using the in-tree markdown path until Phase 4. |
-| Fenced / indented code blocks | — | Phase 3 round 5 (regions) |
-| Block code with bg | — | Phase 3 round 5 (region) |
+| Fenced code blocks (` ``` `) | ✓ | Phase 3 round 5 — emits `begin region code [lang=NAME]` / `end region` around the body runes; the body has `family=code` so the renderer uses the monospace font, and the consumer's RegionStore drives the gutter indent + full-line background via the existing rich.Frame layout. The opening / closing fences themselves render as default-styled text (markup-stays-visible). |
+| Indented code blocks | — | Future round; v1 of round 5 covers fenced only. |
 | Blockquote | — | Phase 3 round 6 (region) |
 | Lists | — | Phase 3 round 7 (region) |
 | Tables | — | Phase 3 round 8 (region) |
