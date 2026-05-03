@@ -367,6 +367,26 @@ func TestInitStyledMode_WiresBasePath(t *testing.T) {
 	// on the test harness.
 }
 
+// TestInitStyledMode_WiresOnImageLoadedCallback pins the
+// async-image-load redraw plumbing: when an image cache-misses
+// in styled mode, the LoadAsync callback must trigger a
+// repaint of the styled view, otherwise the user sees the
+// loading placeholder until the next user action (scroll/edit).
+// previewcmd has done this since the in-tree markdown
+// renderer was added; styled mode was missing the wiring.
+// Same class of bug as initStyledMode missing fonts (rounds
+// 1, 2) and basePath (round 4 row 5).
+func TestInitStyledMode_WiresOnImageLoadedCallback(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.initStyledMode()
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	if w.richBody.onImageLoaded == nil {
+		t.Error("richBody.onImageLoaded is nil; styled mode should wire the async-load callback (parity with previewcmd)")
+	}
+}
+
 // TestInitStyledMode_BasePathMatchesBodyFile pins the
 // specific value: when the body's file has a concrete
 // name, initStyledMode resolves it to an absolute path and

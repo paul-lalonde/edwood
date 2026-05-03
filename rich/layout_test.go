@@ -1294,6 +1294,42 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 		}
 	})
 
+	t.Run("ImageBelow at line start does not get gutter indent", func(t *testing.T) {
+		// Bug fix: rich/layout.go's indent-calculation branch
+		// used to include `(box.Style.Image && !box.Style.FixedBox)`
+		// without the !ImageBelow exclusion the wrapped-line
+		// analog had. Effect was: an ImageBelow box at xPos=0
+		// got shifted to gutterIndent. Pin the fixed contract:
+		// an ImageBelow box at line start renders at xPos==0
+		// (or whatever the inherited indent is from list/
+		// blockquote, which is 0 for plain text).
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
+		// Source text covering `![](p.png)` (10 runes wide
+		// at 10px/char = 100 pixels) at start of line.
+		boxes := []Box{
+			{
+				Text: []byte("![](p.png)"), Nrune: 10,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "p.png", Scale: 1.0,
+				},
+				ImageData: img,
+			},
+		}
+		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		if len(lines[0].Boxes) != 1 {
+			t.Fatalf("expected 1 box on line, got %d", len(lines[0].Boxes))
+		}
+		// X must be 0 (no gutter indent for plain ImageBelow).
+		if lines[0].Boxes[0].X != 0 {
+			t.Errorf("ImageBelow at line start: X = %d, want 0 (no gutter indent)",
+				lines[0].Boxes[0].X)
+		}
+	})
+
 	t.Run("ImageBelow plus inline image on same line", func(t *testing.T) {
 		below := &CachedImage{Width: 100, Height: 40, Path: "below.png"}
 		inline := &CachedImage{Width: 100, Height: 30, Path: "inline.png"}

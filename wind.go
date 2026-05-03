@@ -2424,10 +2424,30 @@ func (w *Window) initStyledMode() {
 	}
 	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
 
+	// Wire async-image-load callback so cache-miss images
+	// trigger a repaint when the load completes. previewcmd
+	// has had this since the in-tree markdown renderer was
+	// added; styled mode was missing it (Phase 3 round 4
+	// post-merge fix), so md2spans-emitted images would only
+	// appear after the next unrelated user action.
+	rtOpts = append(rtOpts, WithRichTextOnImageLoaded(func(path string) {
+		go func() {
+			global.row.lk.Lock()
+			defer global.row.lk.Unlock()
+			if !w.styledMode || w.richBody == nil {
+				return
+			}
+			w.richBody.Render(w.body.all)
+			if w.display != nil {
+				w.display.Flush()
+			}
+		}()
+	}))
+
 	// Wire the body file's absolute path as basePath so
 	// relative image URLs (md2spans's `image:./pic.png`)
 	// resolve against the file's directory. previewcmd
-	// already does this (wind.go:2587-2596); styled mode
+	// already does this (wind.go:2604-2613); styled mode
 	// was missing the wiring, so md2spans-emitted relative
 	// paths failed to load. Phase 3 round 4 bug fix —
 	// same class as the rounds 1/2 missing-font-load bugs.

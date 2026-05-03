@@ -622,9 +622,10 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 				// instead of using the full gutter
 				indentPixels += ListIndentWidth
 			}
-		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox) {
+		} else if (box.Style.Block && box.Style.Code) || box.Style.Table || (box.Style.Image && !box.Style.FixedBox && !box.Style.ImageBelow) {
 			// All scrollable block elements get gutter indentation
-			// (FixedBox elements from the spans protocol are inline, not block)
+			// (FixedBox elements from the spans protocol are inline, not block;
+			// ImageBelow boxes flow inline with text — Phase 3 round 4)
 			indentPixels = gutterIndent
 		}
 
