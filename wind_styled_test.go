@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -336,6 +337,62 @@ func TestIsStyledMode_AfterExit(t *testing.T) {
 
 	if w.IsStyledMode() {
 		t.Error("IsStyledMode() = true after exitStyledMode()")
+	}
+}
+
+// TestInitStyledMode_WiresBasePath pins the Phase 3 round 4
+// bug fix: initStyledMode must set the rich text's basePath
+// to the body file's absolute path so relative image URLs
+// (like md2spans's `image:./pic.png`) resolve correctly.
+// previewcmd has done this since the in-tree markdown
+// renderer was added; styled mode was missing the wiring,
+// so md2spans-emitted relative paths failed to load.
+func TestInitStyledMode_WiresBasePath(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+
+	w.initStyledMode()
+
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	if w.richBody.basePath == "" {
+		t.Error("richBody.basePath is empty; want absolute path of body file")
+	}
+	// makeStyledWindow's body name is empty by default in
+	// the test harness, but initStyledMode should still
+	// produce SOME basePath value matching what previewcmd
+	// would produce — i.e., the absolute form of w.body.file.Name().
+	// We verify it was wired (non-empty after the body has a name)
+	// by checking the field is populated; the exact value depends
+	// on the test harness.
+}
+
+// TestInitStyledMode_BasePathMatchesBodyFile pins the
+// specific value: when the body's file has a concrete
+// name, initStyledMode resolves it to an absolute path and
+// passes it to the rich text. Mirrors previewcmd's
+// wind.go:2587-2596 logic.
+func TestInitStyledMode_BasePathMatchesBodyFile(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	// Set the body file's name to a relative path; the
+	// wiring should resolve it to absolute before passing
+	// to the rich text.
+	w.body.file.SetName("test.md")
+
+	w.initStyledMode()
+
+	if w.richBody == nil {
+		t.Fatal("richBody nil after initStyledMode")
+	}
+	bp := w.richBody.basePath
+	if bp == "" {
+		t.Fatal("basePath empty; want absolute form of test.md")
+	}
+	if !filepath.IsAbs(bp) {
+		t.Errorf("basePath = %q; want absolute path", bp)
+	}
+	if filepath.Base(bp) != "test.md" {
+		t.Errorf("basePath = %q; basename should be test.md", bp)
 	}
 }
 

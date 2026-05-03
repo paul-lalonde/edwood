@@ -2424,6 +2424,22 @@ func (w *Window) initStyledMode() {
 	}
 	rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
 
+	// Wire the body file's absolute path as basePath so
+	// relative image URLs (md2spans's `image:./pic.png`)
+	// resolve against the file's directory. previewcmd
+	// already does this (wind.go:2587-2596); styled mode
+	// was missing the wiring, so md2spans-emitted relative
+	// paths failed to load. Phase 3 round 4 bug fix —
+	// same class as the rounds 1/2 missing-font-load bugs.
+	name := w.body.file.Name()
+	basePath := name
+	if !filepath.IsAbs(basePath) {
+		if abs, err := filepath.Abs(basePath); err == nil {
+			basePath = abs
+		}
+	}
+	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
+
 	rt.Init(display, font, rtOpts...)
 
 	w.richBody = rt
