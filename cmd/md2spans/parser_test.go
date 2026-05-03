@@ -607,3 +607,178 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 		}
 	}
 }
+
+// --- Image syntax tests (Phase 3 round 4) ------------------------------
+
+// TestParseImageBasic covers the `![alt](url)` syntax: emits a
+// single box record (IsBox=true, BoxPlacement="below",
+// BoxPayload="image:URL", length=0) anchored at the start of
+// the syntax. Source markers stay visible (no s span emitted
+// for the source text — default styling applies via emit-time
+// gap-fill).
+func TestParseImageBasic(t *testing.T) {
+	src := "![alt](pic.png)"
+	// Runes: !=0 [=1 a=2 l=3 t=4 ]=5 (=6 p=7 i=8 c=9 .=10 p=11 n=12 g=13 )=14
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageWithTitleNoWidth: title attr without
+// width=Npx → payload is just `image:URL` (no width param).
+func TestParseImageWithTitleNoWidth(t *testing.T) {
+	src := `![alt](p.png "no width here")`
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:p.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageWithWidth: title attr with `width=Npx` flows
+// into the box's payload as `width=N` (px suffix dropped).
+func TestParseImageWithWidth(t *testing.T) {
+	src := `![alt](p.png "width=200px")`
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:p.png width=200",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageEmptyAlt: `![](url)` is valid — alt is
+// optional in CommonMark. The box is still emitted.
+func TestParseImageEmptyAlt(t *testing.T) {
+	src := "![](pic.png)"
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:pic.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMidParagraph: image syntax mid-paragraph
+// anchors at its start position, not at paragraph start.
+func TestParseImageMidParagraph(t *testing.T) {
+	src := "see ![cat](c.png) here"
+	// Runes: s=0 e=1 e=2 ' '=3 !=4 ...
+	want := []Span{
+		{
+			Offset:       4,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:c.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMultiplePerParagraph: two images in one
+// paragraph emit two box records, anchored at their
+// respective start positions.
+func TestParseImageMultiplePerParagraph(t *testing.T) {
+	src := "![a](x.png) and ![b](y.png)"
+	// First image: !=0 ... )=10 (11 runes)
+	// Second image at position 16: !=16 ... )=26
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:x.png",
+			BoxPlacement: "below",
+		},
+		{
+			Offset:       16,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:y.png",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageAdjacentToLink: an image followed by a
+// link produces two distinct spans (one box, one link).
+// The image takes precedence over the link tokenizer
+// (image discriminator is `!`).
+func TestParseImageAdjacentToLink(t *testing.T) {
+	src := "![a](x.png) [b](y)"
+	// Image: !=0 ...)=10. Link: ' '=11, [=12, b=13, ]=14, (=15, y=16, )=17.
+	// Link text "b" → offset 13 length 1.
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:x.png",
+			BoxPlacement: "below",
+		},
+		{Offset: 13, Length: 1, Fg: linkBlue},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageMalformed: malformed image syntax falls
+// through as literal text, no span emitted. Same fallback
+// as the in-tree path's recognizer.
+func TestParseImageMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"unclosed bracket", "![alt"},
+		{"bracket no paren", "![alt] no paren"},
+		{"open paren no close", "![alt](no close"},
+		{"bang only", "!alone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Parse(tc.src); len(got) != 0 {
+				t.Errorf("Parse(%q) = %v, want empty (malformed image → literal)", tc.src, got)
+			}
+		})
+	}
+}
+
+// TestParseImageURLWithSpace: a URL containing a space is
+// terminated at the space (the title attr starts after).
+// Without a title attr but with a space, `)` is the
+// terminator.
+func TestParseImageURLWithSpace(t *testing.T) {
+	src := `![alt](path/to/file.png "width=100px")`
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       0,
+			IsBox:        true,
+			BoxPayload:   "image:path/to/file.png width=100",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}

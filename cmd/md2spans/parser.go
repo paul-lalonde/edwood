@@ -1,6 +1,10 @@
 package main
 
-import "unicode/utf8"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // Span is a styled rune range in the body. Offset and Length are
 // in runes (matching the spans-protocol convention used by
@@ -34,6 +38,21 @@ type Span struct {
 	// it as the `hrule` flag; the consumer suppresses the
 	// span's text and draws a rule line. See phase3-r3-hrule.md.
 	HRule bool
+	// Box fields (Phase 3 round 4). When IsBox is true, emit
+	// formats this Span as a `b` directive instead of `s`.
+	// BoxPlacement maps to the wire `placement=NAME` flag
+	// (v1 values: "below" for non-replacing inline images;
+	// "" or "replace" for the existing replacing semantic —
+	// md2spans v1 only emits "below"). BoxPayload carries
+	// the URL plus optional `key=value` params (e.g.
+	// "image:./pic.png width=200"). BoxWidth/BoxHeight are
+	// zero in v1 to use the renderer-probes sentinel; the
+	// payload's `width=N` provides any explicit override.
+	IsBox        bool
+	BoxWidth     int
+	BoxHeight    int
+	BoxPayload   string
+	BoxPlacement string
 }
 
 // Parse takes the markdown source and returns the list of styled
@@ -152,15 +171,25 @@ func parseHeadingParagraph(src string, p paragraphRange) []Span {
 	return out
 }
 
-// parseInlineSpans runs the emphasis, link, and inline-code
-// tokenizers over `runes` (a paragraph's content), returning
-// Span values whose Offsets are body-absolute (runeStart +
-// per-paragraph index). Reused by both parseParagraph and
-// parseHeadingParagraph.
+// parseInlineSpans runs the emphasis, link, image, and
+// inline-code tokenizers over `runes` (a paragraph's content),
+// returning Span values whose Offsets are body-absolute
+// (runeStart + per-paragraph index). Reused by both
+// parseParagraph and parseHeadingParagraph.
+//
+// Image syntax (`![alt](url)`) is recognized BEFORE the link
+// tokenizer; the discriminating character is `!`. Phase 3
+// round 4.
 func parseInlineSpans(runes []rune, runeStart int) []Span {
 	var spans []Span
 	for i := 0; i < len(runes); {
 		switch c := runes[i]; {
+		case c == '!':
+			s, advance, ok := tryImage(runes, i, runeStart)
+			if ok {
+				spans = append(spans, s)
+			}
+			i += advance
 		case c == '*' || c == '_':
 			s, advance, ok := tryEmphasis(runes, i, runeStart)
 			if ok {
@@ -472,6 +501,137 @@ func tryEmphasis(runes []rune, i, runeStart int) (Span, int, bool) {
 		Bold:   n == 2 || n == 3,
 		Italic: n == 1 || n == 3,
 	}, closerIdx + n - i, true
+}
+
+// tryImage attempts to parse a CommonMark inline image
+// `![alt](url)` (or `![alt](url "title")`) starting at
+// runes[i] (which must be `!`). On match, returns a single
+// IsBox=true span with BoxPlacement="below" and a payload
+// of `image:URL` (plus optional ` width=N` if the title
+// attribute contains `width=Npx`). The span has Length=0 and
+// is anchored at the start of the syntax — the renderer
+// uses the line containing Offset to anchor the painted
+// image while the source markers stay visible.
+//
+// On no-match (no `[` after `!`, no `]`, no `(URL)`),
+// returns ok=false and 1 (skip past the `!` as literal).
+//
+// runeStart is the body-relative rune offset of runes[0].
+// Phase 3 round 4.
+func tryImage(runes []rune, i, runeStart int) (Span, int, bool) {
+	if i+1 >= len(runes) || runes[i+1] != '[' {
+		return Span{}, 1, false
+	}
+	parts, ok := findInlineImage(runes, i)
+	if !ok {
+		return Span{}, 1, false
+	}
+	url := string(runes[parts.urlStart:parts.urlEnd])
+	payload := "image:" + url
+	if parts.titleStart > 0 && parts.titleEnd > 0 {
+		title := string(runes[parts.titleStart:parts.titleEnd])
+		if w := parseImageWidthPx(title); w > 0 {
+			payload = fmt.Sprintf("%s width=%d", payload, w)
+		}
+	}
+	advance := parts.closeParen + 1 - i
+	return Span{
+		Offset:       runeStart + i,
+		Length:       0,
+		IsBox:        true,
+		BoxPayload:   payload,
+		BoxPlacement: "below",
+	}, advance, true
+}
+
+// imageParts captures the rune-index bounds of an
+// `![alt](url)` (or with title) match. urlStart is the rune
+// just after `(`; urlEnd is the rune at which the URL stops
+// (either closeParen when there's no title, or the space
+// preceding `"...` when there is). titleStart/titleEnd
+// bracket the title's content (excluding quotes); both are 0
+// when no title is present. closeParen is the closing `)`.
+type imageParts struct {
+	closeBracket int
+	closeParen   int
+	urlStart     int
+	urlEnd       int
+	titleStart   int
+	titleEnd     int
+}
+
+// findInlineImage looks for the `![alt](url)` or
+// `![alt](url "title")` pattern starting at runes[start]
+// (which must be `!`). On match returns ok=true and the
+// rune bounds in imageParts. On no-match (no `[`, no `]`,
+// no `(URL)`, no closing `)`, malformed title quoting)
+// returns ok=false.
+func findInlineImage(runes []rune, start int) (imageParts, bool) {
+	var p imageParts
+	if start+1 >= len(runes) || runes[start] != '!' || runes[start+1] != '[' {
+		return p, false
+	}
+	p.closeBracket = indexRune(runes, start+2, ']')
+	if p.closeBracket < 0 {
+		return p, false
+	}
+	if p.closeBracket+1 >= len(runes) || runes[p.closeBracket+1] != '(' {
+		return p, false
+	}
+	p.urlStart = p.closeBracket + 2
+	cp := indexRune(runes, p.urlStart, ')')
+	if cp < 0 {
+		return p, false
+	}
+	p.closeParen = cp
+	p.urlEnd = cp // URL extends to closeParen unless a title is found
+	// Optional title: scan for ` "` opener within [urlStart, closeParen).
+	for j := p.urlStart; j < p.closeParen-1; j++ {
+		if runes[j] == ' ' && runes[j+1] == '"' {
+			tStart := j + 2
+			tEnd := indexRune(runes, tStart, '"')
+			if tEnd > 0 && tEnd < p.closeParen {
+				p.urlEnd = j // URL ends at the space before `"`
+				p.titleStart = tStart
+				p.titleEnd = tEnd
+				// Closing `)` must be after the closing `"`.
+				cp2 := indexRune(runes, tEnd+1, ')')
+				if cp2 < 0 {
+					return imageParts{}, false
+				}
+				p.closeParen = cp2
+				break
+			}
+		}
+	}
+	return p, true
+}
+
+// parseImageWidthPx parses a `width=Npx` substring out of a
+// title attribute and returns N, or 0 if not present /
+// malformed. Mirrors markdown/parse.go:parseImageWidth so
+// md2spans honors the same authoring convention.
+func parseImageWidthPx(title string) int {
+	const prefix = "width="
+	const suffix = "px"
+	idx := strings.Index(title, prefix)
+	if idx < 0 {
+		return 0
+	}
+	rest := title[idx+len(prefix):]
+	pxIdx := strings.Index(rest, suffix)
+	if pxIdx <= 0 {
+		return 0
+	}
+	numStr := rest[:pxIdx]
+	n := 0
+	for _, c := range numStr {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // tryLink attempts to parse an inline link `[text](url)`
