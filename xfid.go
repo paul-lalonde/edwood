@@ -588,7 +588,9 @@ func xfidspanswrite(x *Xfid, w *Window) {
 	var err error
 
 	if isPrefixedFormat(data) {
-		runs, regionStart, isClear, err = parseSpanMessage(data, bufLen)
+		// regions returned but not yet consumed; row 3.5.4
+		// wires them into the window's regionStore.
+		runs, regionStart, _, isClear, err = parseSpanMessage(data, bufLen)
 	} else {
 		// Legacy format: handle "clear" command and unprefixed span defs.
 		if data == "clear" {

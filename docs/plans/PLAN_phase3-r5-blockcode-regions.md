@@ -63,19 +63,19 @@ have something to integrate with.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | `Region` struct (Start, End, Kind, Params, Parent, Children); `RegionStore` with roots forest; basic ops (Add, EnclosingAt, Clear) | base doc § "Storage" | Forest, not flat list — required for round 6+ nesting. |
-| [ ] Tests | Region equality; store Add places regions correctly (top-level vs. nested); EnclosingAt finds deepest match; Clear empties forest | `region_test.go` | — |
-| [ ] Iterate | Add region.go file with types + ops; no integration yet | `region.go` (new) | — |
-| [ ] Commit | — | — | `regions: add Region and RegionStore types for sidecar region tree` |
+| [x] Design | `Region` struct (Start, End, Kind, Params, Parent, Children); `RegionStore` with roots forest; basic ops (Add, EnclosingAt, Clear) | base doc § "Storage" | Forest, not flat list — required for round 6+ nesting. |
+| [x] Tests | Region equality; store Add places regions correctly (top-level vs. nested vs. parent-after-child); deeply-nested case (round 6+); EnclosingAt finds deepest match + boundary cases; multiple-siblings disambiguation; Clear empties forest | `region_test.go` | — |
+| [x] Iterate | Add region.go with types + ops; no integration yet | `region.go` (new) | — |
+| [x] Commit | — | — | `regions: add Region and RegionStore types for sidecar region tree` |
 
 ## Phase 3.5.2: Region edits — Insert/Delete offset shift
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Insert(pos, length) shifts Start/End for regions at or after pos; Delete(pos, length) clips intersecting regions; v1 conservative — drop the region if its body is touched by Delete | base doc § "Region-store edits" | Mirror spanStore patterns. |
-| [ ] Tests | Insert before / inside / after a region; Delete entirely outside / partial overlap (drops region) / fully containing (drops region); regions with parents — children shift along | `region_test.go` | — |
-| [ ] Iterate | Add Insert/Delete to RegionStore | `region.go` | — |
-| [ ] Commit | — | — | `regions: Insert/Delete operations for body edits` |
+| [x] Design | Insert(pos, length) shifts Start/End for regions at or after pos; Delete(pos, length) drops regions whose body is touched, with the exception that a parent shrinks instead of dropping when a child fully contained the delete (the child takes the hit). | base doc § "Region-store edits" | Mirror spanStore patterns; "proper body" rule for parent vs child. |
+| [x] Tests | Insert at Start / inside / after / before; child shifts with parent; Delete before (shift) / after (untouched) / cross-boundary (drop) / fully-inside-body (drop) / drops-child-keeps-parent (the proper-body case) | `region_test.go` | — |
+| [x] Iterate | Add Insert/Delete to RegionStore + applyInsert/applyDelete/filterDelete recursive helpers | `region.go` | — |
+| [x] Commit | — | — | `regions: Insert/Delete operations for body edits` |
 
 ## Phase 3.5.3: Parser — `begin region` / `end region` directives
 

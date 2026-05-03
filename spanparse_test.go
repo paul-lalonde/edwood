@@ -604,7 +604,7 @@ func TestParseSpanDefs_SpanAtBufferStart(t *testing.T) {
 // =========================================================================
 
 func TestParseSpanMessage_Clear(t *testing.T) {
-	_, _, isClear, err := parseSpanMessage("c", 10)
+	_, _, _, isClear, err := parseSpanMessage("c", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestParseSpanMessage_Clear(t *testing.T) {
 }
 
 func TestParseSpanMessage_SingleSpan(t *testing.T) {
-	runs, regionStart, isClear, err := parseSpanMessage("s 0 10 #ff0000", 10)
+	runs, regionStart, _, isClear, err := parseSpanMessage("s 0 10 #ff0000", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestParseSpanMessage_SingleSpan(t *testing.T) {
 
 func TestParseSpanMessage_MultiSpanContiguous(t *testing.T) {
 	input := "s 0 4 #0000ff\ns 4 6 -"
-	runs, regionStart, _, err := parseSpanMessage(input, 10)
+	runs, regionStart, _, _, err := parseSpanMessage(input, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestParseSpanMessage_MultiSpanContiguous(t *testing.T) {
 }
 
 func TestParseSpanMessage_SpanWithFlags(t *testing.T) {
-	runs, _, _, err := parseSpanMessage("s 0 5 #ff0000 bold italic", 5)
+	runs, _, _, _, err := parseSpanMessage("s 0 5 #ff0000 bold italic", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -676,7 +676,7 @@ func TestParseSpanMessage_SpanWithFlags(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxBasic(t *testing.T) {
-	runs, regionStart, _, err := parseSpanMessage("b 0 5 200 150", 10)
+	runs, regionStart, _, _, err := parseSpanMessage("b 0 5 200 150", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestParseSpanMessage_BoxBasic(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxWithPayload(t *testing.T) {
-	runs, _, _, err := parseSpanMessage("b 10 5 200 150 image:/path with spaces/img.png", 20)
+	runs, _, _, _, err := parseSpanMessage("b 10 5 200 150 image:/path with spaces/img.png", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestParseSpanMessage_BoxWithPayload(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxWithColorsAndFlags(t *testing.T) {
-	runs, _, _, err := parseSpanMessage("b 0 8 200 150 #ff0000 #00ff00 bold image:/tmp/test.png", 20)
+	runs, _, _, _, err := parseSpanMessage("b 0 8 200 150 #ff0000 #00ff00 bold image:/tmp/test.png", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -742,7 +742,7 @@ func TestParseSpanMessage_BoxWithColorsAndFlags(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxWithFgOnly(t *testing.T) {
-	runs, _, _, err := parseSpanMessage("b 0 5 100 50 #ff0000 bold image:foo.png", 10)
+	runs, _, _, _, err := parseSpanMessage("b 0 5 100 50 #ff0000 bold image:foo.png", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -767,7 +767,7 @@ func TestParseSpanMessage_BoxWithFgOnly(t *testing.T) {
 
 func TestParseSpanMessage_MixedSpansAndBoxes(t *testing.T) {
 	input := "s 0 10 #0000cc\ns 10 5 - bold\nb 15 8 200 150 image:/tmp/diagram.png\ns 23 12 #008000 italic"
-	runs, regionStart, _, err := parseSpanMessage(input, 100)
+	runs, regionStart, _, _, err := parseSpanMessage(input, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestParseSpanMessage_MixedSpansAndBoxes(t *testing.T) {
 
 func TestParseSpanMessage_NonContiguous(t *testing.T) {
 	input := "s 0 5 #ff0000\ns 7 3 #00ff00"
-	_, _, _, err := parseSpanMessage(input, 10)
+	_, _, _, _, err := parseSpanMessage(input, 10)
 	if err == nil {
 		t.Fatal("expected error for non-contiguous spans")
 	}
@@ -813,7 +813,7 @@ func TestParseSpanMessage_NonContiguous(t *testing.T) {
 }
 
 func TestParseSpanMessage_UnknownPrefix(t *testing.T) {
-	_, _, _, err := parseSpanMessage("x 0 5 #ff0000", 10)
+	_, _, _, _, err := parseSpanMessage("x 0 5 #ff0000", 10)
 	if err == nil {
 		t.Fatal("expected error for unknown prefix")
 	}
@@ -823,7 +823,7 @@ func TestParseSpanMessage_UnknownPrefix(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxMissingFields(t *testing.T) {
-	_, _, _, err := parseSpanMessage("b 0 5 200", 10)
+	_, _, _, _, err := parseSpanMessage("b 0 5 200", 10)
 	if err == nil {
 		t.Fatal("expected error for box with missing height")
 	}
@@ -833,7 +833,7 @@ func TestParseSpanMessage_BoxMissingFields(t *testing.T) {
 }
 
 func TestParseSpanMessage_ClearMustBeAlone(t *testing.T) {
-	_, _, _, err := parseSpanMessage("s 0 5 #ff0000\nc", 10)
+	_, _, _, _, err := parseSpanMessage("s 0 5 #ff0000\nc", 10)
 	if err == nil {
 		t.Fatal("expected error for clear after span")
 	}
@@ -843,7 +843,7 @@ func TestParseSpanMessage_ClearMustBeAlone(t *testing.T) {
 }
 
 func TestParseSpanMessage_BoxClampToBuffer(t *testing.T) {
-	runs, _, _, err := parseSpanMessage("b 0 20 200 150 image:test.png", 10)
+	runs, _, _, _, err := parseSpanMessage("b 0 20 200 150 image:test.png", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestIsPrefixedFormat(t *testing.T) {
 // to StyleAttrs.Scale = 2.0.
 func TestParseSpanScaleBasic(t *testing.T) {
 	data := "s 0 5 - scale=2.0"
-	runs, _, isClear, err := parseSpanMessage(data, 100)
+	runs, _, _, isClear, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestParseSpanScaleBasic(t *testing.T) {
 // leaves Scale at its zero value (the unset sentinel).
 func TestParseSpanScaleAbsentMeansZero(t *testing.T) {
 	data := "s 0 5 - bold"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -928,7 +928,7 @@ func TestParseSpanScaleWithOtherFlags(t *testing.T) {
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
-			runs, _, _, err := parseSpanMessage(data, 100)
+			runs, _, _, _, err := parseSpanMessage(data, 100)
 			if err != nil {
 				t.Fatalf("parseSpanMessage: %v", err)
 			}
@@ -952,7 +952,7 @@ func TestParseSpanScaleFractional(t *testing.T) {
 		"s 0 5 - scale=0.5":   0.5,
 	}
 	for data, want := range cases {
-		runs, _, _, err := parseSpanMessage(data, 100)
+		runs, _, _, _, err := parseSpanMessage(data, 100)
 		if err != nil {
 			t.Errorf("parseSpanMessage(%q): %v", data, err)
 			continue
@@ -979,7 +979,7 @@ func TestParseSpanScaleErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.why, func(t *testing.T) {
-			_, _, _, err := parseSpanMessage(tc.data, 100)
+			_, _, _, _, err := parseSpanMessage(tc.data, 100)
 			if err == nil {
 				t.Errorf("%q: expected error (%s), got nil", tc.data, tc.why)
 			}
@@ -990,7 +990,7 @@ func TestParseSpanScaleErrors(t *testing.T) {
 // TestParseBoxScale: scale flag also applies to b-lines.
 func TestParseBoxScale(t *testing.T) {
 	data := "b 0 1 100 50 - - scale=1.5 image:foo.png"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1010,7 +1010,7 @@ func TestParseBoxScale(t *testing.T) {
 // TestParseSpanFamilyCode: `family=code` parses to Family="code".
 func TestParseSpanFamilyCode(t *testing.T) {
 	data := "s 0 5 - family=code"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1023,7 +1023,7 @@ func TestParseSpanFamilyCode(t *testing.T) {
 // Family at its zero value ("").
 func TestParseSpanFamilyAbsentMeansEmpty(t *testing.T) {
 	data := "s 0 5 - bold"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1043,7 +1043,7 @@ func TestParseSpanFamilyWithOtherFlags(t *testing.T) {
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
-			runs, _, _, err := parseSpanMessage(data, 100)
+			runs, _, _, _, err := parseSpanMessage(data, 100)
 			if err != nil {
 				t.Fatalf("parseSpanMessage: %v", err)
 			}
@@ -1069,7 +1069,7 @@ func TestParseSpanFamilyErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.why, func(t *testing.T) {
-			_, _, _, err := parseSpanMessage(tc.data, 100)
+			_, _, _, _, err := parseSpanMessage(tc.data, 100)
 			if err == nil {
 				t.Errorf("%q: expected error (%s), got nil", tc.data, tc.why)
 			}
@@ -1080,7 +1080,7 @@ func TestParseSpanFamilyErrors(t *testing.T) {
 // TestParseBoxFamily: family flag also applies to b-lines.
 func TestParseBoxFamily(t *testing.T) {
 	data := "b 0 1 100 50 - - family=code"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1094,7 +1094,7 @@ func TestParseBoxFamily(t *testing.T) {
 // TestParseSpanHRule: `hrule` flag parses to HRule=true.
 func TestParseSpanHRule(t *testing.T) {
 	data := "s 0 3 - hrule"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1107,7 +1107,7 @@ func TestParseSpanHRule(t *testing.T) {
 // HRule at its zero value (false).
 func TestParseSpanHRuleAbsentMeansFalse(t *testing.T) {
 	data := "s 0 5 - bold"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1128,7 +1128,7 @@ func TestParseSpanHRuleWithOtherFlags(t *testing.T) {
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
-			runs, _, _, err := parseSpanMessage(data, 100)
+			runs, _, _, _, err := parseSpanMessage(data, 100)
 			if err != nil {
 				t.Fatalf("parseSpanMessage: %v", err)
 			}
@@ -1142,7 +1142,7 @@ func TestParseSpanHRuleWithOtherFlags(t *testing.T) {
 // TestParseBoxHRule: hrule flag also applies to b-lines.
 func TestParseBoxHRule(t *testing.T) {
 	data := "b 0 1 100 1 - - hrule"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1160,7 +1160,7 @@ func TestParseBoxHRule(t *testing.T) {
 // "renderer-probes" sentinel for image dimensions.
 func TestParseBoxPlacementBelow(t *testing.T) {
 	data := "b 5 11 0 0 - - placement=below image:./pic.png"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1192,7 +1192,7 @@ func TestParseBoxPlacementBelow(t *testing.T) {
 // explicit value for round-trip fidelity.
 func TestParseBoxPlacementReplaceExplicit(t *testing.T) {
 	data := "b 0 1 100 50 - - placement=replace image:./pic.png"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1207,7 +1207,7 @@ func TestParseBoxPlacementReplaceExplicit(t *testing.T) {
 // pre-round-4 producers).
 func TestParseBoxPlacementAbsentMeansEmpty(t *testing.T) {
 	data := "b 0 1 100 50 - - image:./pic.png"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1227,7 +1227,7 @@ func TestParseBoxPlacementUnknownRejected(t *testing.T) {
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
-			_, _, _, err := parseSpanMessage(data, 100)
+			_, _, _, _, err := parseSpanMessage(data, 100)
 			if err == nil {
 				t.Errorf("expected error for %q; got nil", data)
 			}
@@ -1248,7 +1248,7 @@ func TestParseBoxPlacementWithOtherFlags(t *testing.T) {
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
-			runs, _, _, err := parseSpanMessage(data, 100)
+			runs, _, _, _, err := parseSpanMessage(data, 100)
 			if err != nil {
 				t.Fatalf("parseSpanMessage: %v", err)
 			}
@@ -1266,7 +1266,7 @@ func TestParseBoxPlacementBelowContiguity(t *testing.T) {
 	data := "s 0 5 -\n" +
 		"b 5 11 0 0 - - placement=below image:./p.png\n" +
 		"s 16 4 -\n"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
@@ -1278,13 +1278,179 @@ func TestParseBoxPlacementBelowContiguity(t *testing.T) {
 	}
 }
 
+// --- Region directive tests (Phase 3 round 5) --------------------------
+
+// TestParseSpanMessageBeginEndRegion: a balanced begin/end
+// region pair around s directives produces a single region
+// in the result.
+func TestParseSpanMessageBeginEndRegion(t *testing.T) {
+	data := "s 0 5 -\n" +
+		"begin region code\n" +
+		"s 5 10 - family=code\n" +
+		"end region\n" +
+		"s 15 5 -"
+	runs, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Errorf("got %d runs, want 3", len(runs))
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	r := regions[0]
+	if r.Kind != "code" {
+		t.Errorf("region.Kind = %q, want %q", r.Kind, "code")
+	}
+	if r.Start != 5 || r.End != 15 {
+		t.Errorf("region range = [%d, %d), want [5, 15)", r.Start, r.End)
+	}
+	if len(r.Params) != 0 {
+		t.Errorf("region.Params = %v, want empty", r.Params)
+	}
+}
+
+// TestParseSpanMessageRegionWithLangParam: the optional
+// language hint lands in Params.
+func TestParseSpanMessageRegionWithLangParam(t *testing.T) {
+	data := "begin region code lang=go\n" +
+		"s 0 5 - family=code\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if got := regions[0].Params["lang"]; got != "go" {
+		t.Errorf("Params[lang] = %q, want %q", got, "go")
+	}
+}
+
+// TestParseSpanMessageRegionDoesNotAdvanceCursor: the
+// directives slot between s/b directives without breaking
+// contiguity.
+func TestParseSpanMessageRegionDoesNotAdvanceCursor(t *testing.T) {
+	data := "s 0 5 -\n" +
+		"begin region code\n" +
+		"s 5 5 -\n" +
+		"end region\n" +
+		"s 10 5 -"
+	_, _, _, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Errorf("expected no error from contiguous spans around region; got %v", err)
+	}
+}
+
+// TestParseSpanMessageRegionUnmatchedBegin: a begin without
+// matching end is a protocol error.
+func TestParseSpanMessageRegionUnmatchedBegin(t *testing.T) {
+	data := "begin region code\n" +
+		"s 0 5 - family=code"
+	_, _, _, _, err := parseSpanMessage(data, 100)
+	if err == nil {
+		t.Error("expected error for unmatched begin; got nil")
+	}
+}
+
+// TestParseSpanMessageRegionUnmatchedEnd: an end without
+// matching begin is a protocol error.
+func TestParseSpanMessageRegionUnmatchedEnd(t *testing.T) {
+	data := "s 0 5 -\n" +
+		"end region"
+	_, _, _, _, err := parseSpanMessage(data, 100)
+	if err == nil {
+		t.Error("expected error for unmatched end; got nil")
+	}
+}
+
+// TestParseSpanMessageRegionUnknownKind: only v1-recognized
+// kinds parse; anything else is a protocol error.
+func TestParseSpanMessageRegionUnknownKind(t *testing.T) {
+	cases := []string{
+		"begin region UNKNOWN_KIND\nend region",
+		"begin region\nend region",             // missing kind
+		"begin region blockquote\nend region",  // future, not v1
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			_, _, _, _, err := parseSpanMessage(data, 100)
+			if err == nil {
+				t.Errorf("expected error for %q; got nil", data)
+			}
+		})
+	}
+}
+
+// TestParseSpanMessageRegionMalformedParam: empty / missing-=
+// params are silently ignored (forward-compat).
+func TestParseSpanMessageRegionMalformedParam(t *testing.T) {
+	cases := []string{
+		"begin region code lang=\nend region",
+		"begin region code unknownkey=val\nend region",
+		"begin region code malformedtoken\nend region",
+	}
+	for _, data := range cases {
+		t.Run(data, func(t *testing.T) {
+			_, _, regions, _, err := parseSpanMessage(data, 100)
+			if err != nil {
+				t.Errorf("expected no error for %q; got %v", data, err)
+			}
+			if len(regions) != 1 {
+				t.Errorf("got %d regions, want 1", len(regions))
+			}
+		})
+	}
+}
+
+// TestParseSpanMessageRegionNested: parser handles nested
+// begin/end. Round 5 doesn't emit nesting from md2spans;
+// the parser accepts it for forward-compat. Returned flat —
+// Region.Parent/Children set later by the store.
+func TestParseSpanMessageRegionNested(t *testing.T) {
+	data := "begin region code\n" +
+		"begin region code\n" +
+		"s 0 5 - family=code\n" +
+		"end region\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 2 {
+		t.Errorf("got %d regions, want 2 (outer + inner)", len(regions))
+	}
+}
+
+// TestParseSpanMessageRegionEmpty: a begin immediately
+// followed by end with no spans inside produces a region
+// with Start == End.
+func TestParseSpanMessageRegionEmpty(t *testing.T) {
+	data := "s 0 5 -\n" +
+		"begin region code\n" +
+		"end region\n" +
+		"s 5 5 -"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Start != 5 || regions[0].End != 5 {
+		t.Errorf("empty region: [%d, %d), want [5, 5)", regions[0].Start, regions[0].End)
+	}
+}
+
 // TestParseBoxPayloadWithParams: a placement=below b with
 // `image:URL width=N` payload preserves the multi-token
 // payload string verbatim. Param interpretation happens in
 // the consumer (boxStyleToRichStyle), not the parser.
 func TestParseBoxPayloadWithParams(t *testing.T) {
 	data := "b 5 11 0 0 - - placement=below image:./p.png width=200"
-	runs, _, _, err := parseSpanMessage(data, 100)
+	runs, _, _, _, err := parseSpanMessage(data, 100)
 	if err != nil {
 		t.Fatalf("parseSpanMessage: %v", err)
 	}
