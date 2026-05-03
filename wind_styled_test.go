@@ -867,6 +867,51 @@ func TestBoxStyleToRichStylePayloadInvalidWidth(t *testing.T) {
 	}
 }
 
+// TestBoxStyleToRichStylePayloadMalformedFirstToken: when
+// the first payload token doesn't have an `image:` prefix,
+// applyImagePayload silently returns without setting any
+// image fields. This protects the consumer from a stale or
+// misshapen payload (e.g., "widget:foo" or "image" alone or
+// just "garbage"); Style.Image stays false and the rich.Style
+// renders as a plain box.
+func TestBoxStyleToRichStylePayloadMalformedFirstToken(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"non-image prefix", "widget:foo width=200"},
+		{"image without colon", "image width=200"},
+		{"empty payload", ""},
+		{"only whitespace", "   "},
+		{"plain text", "garbage payload"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sa := StyleAttrs{
+				IsBox:        true,
+				BoxWidth:     100,
+				BoxHeight:    50,
+				BoxPayload:   tc.payload,
+				BoxPlacement: "below",
+			}
+			got := boxStyleToRichStyle(sa, "alt")
+			if got.Image {
+				t.Errorf("Image = true for malformed payload %q; want false", tc.payload)
+			}
+			if got.ImageURL != "" {
+				t.Errorf("ImageURL = %q for malformed payload %q; want empty",
+					got.ImageURL, tc.payload)
+			}
+			// Width param shouldn't apply if the URL token didn't
+			// match (param parsing should bail early).
+			if got.ImageWidth != sa.BoxWidth {
+				t.Errorf("ImageWidth = %d for malformed payload %q; want %d (wire-format BoxWidth unchanged)",
+					got.ImageWidth, tc.payload, sa.BoxWidth)
+			}
+		})
+	}
+}
+
 // =========================================================================
 // buildStyledContent with boxes tests
 // =========================================================================

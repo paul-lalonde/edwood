@@ -770,11 +770,11 @@ func TestParseImageMalformed(t *testing.T) {
 	}
 }
 
-// TestParseImageURLWithSpace: a URL containing a space is
-// terminated at the space (the title attr starts after).
-// Without a title attr but with a space, `)` is the
-// terminator.
-func TestParseImageURLWithSpace(t *testing.T) {
+// TestParseImageURLWithTitleSeparator: a URL followed by
+// a `"title"` is correctly separated; the URL excludes the
+// space-quote separator and the title runs through the
+// width=Npx parser.
+func TestParseImageURLWithTitleSeparator(t *testing.T) {
 	src := `![alt](path/to/file.png "width=100px")`
 	// 38 runes total
 	want := []Span{
@@ -783,6 +783,30 @@ func TestParseImageURLWithSpace(t *testing.T) {
 			Length:       38,
 			IsBox:        true,
 			BoxPayload:   "image:path/to/file.png width=100",
+			BoxPlacement: "below",
+		},
+	}
+	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestParseImageURLWithEmbeddedSpace: a URL containing a
+// raw space (no title attr) is preserved verbatim through
+// to the closing `)`. CommonMark technically requires URL
+// escaping for spaces, but v1 doesn't enforce that — the
+// payload tokenizer would mis-parse a space-containing URL
+// (it splits on whitespace), so this test pins the v1
+// behavior: parsed but consumer-side tokenization will see
+// `image:pa` as the URL and `th.png` as a "param". Worth
+// pinning so the limitation is documented executable.
+func TestParseImageURLWithEmbeddedSpace(t *testing.T) {
+	src := "![alt](pa th.png)"
+	// 17 runes
+	want := []Span{
+		{
+			Offset:       0,
+			Length:       17,
+			IsBox:        true,
+			BoxPayload:   "image:pa th.png",
 			BoxPlacement: "below",
 		},
 	}

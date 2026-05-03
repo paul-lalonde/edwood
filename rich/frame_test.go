@@ -4960,6 +4960,62 @@ func TestPaintImageBelowPositioning(t *testing.T) {
 		}
 	})
 
+	t.Run("source runes are hit-testable like normal text", func(t *testing.T) {
+		// Phase 3 round 4 contract: ImageBelow boxes COVER
+		// source markdown runes that render as text. Those
+		// runes must participate in hit-testing/selection
+		// like any other text — Ptofchar maps each rune
+		// position to a screen point inside the line, and
+		// Charofpt maps a point inside the source-text
+		// region back to the matching rune.
+		_, _ = makeFrame()
+		img := &CachedImage{Width: 100, Height: 50, Path: "p.png", Loading: true}
+		// Layout: "see " (4 runes) + "![alt](p.png)" (13 runes,
+		// ImageBelow) + " ok" (3 runes) = 20 runes.
+		boxes := []Box{
+			{Text: []byte("see "), Nrune: 4, Style: DefaultStyle()},
+			{
+				Text: []byte("![alt](p.png)"), Nrune: 13,
+				Style: Style{
+					Image: true, ImageBelow: true,
+					ImageURL: "p.png", Scale: 1.0,
+				},
+				ImageData: img,
+			},
+			{Text: []byte(" ok"), Nrune: 3, Style: DefaultStyle()},
+		}
+		lines := layout(boxes, font, rect.Dx(), 80, nil, nil)
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 line, got %d", len(lines))
+		}
+		// Verify the ImageBelow box advances xPos by its
+		// text width — i.e., the " ok" box starts AFTER the
+		// source markdown's pixel width, not at xPos==0.
+		var seeX, imgX, okX int = -1, -1, -1
+		for _, pb := range lines[0].Boxes {
+			switch string(pb.Box.Text) {
+			case "see ":
+				seeX = pb.X
+			case "![alt](p.png)":
+				imgX = pb.X
+			case " ok":
+				okX = pb.X
+			}
+		}
+		if seeX < 0 || imgX < 0 || okX < 0 {
+			t.Fatalf("missing box positions: seeX=%d imgX=%d okX=%d", seeX, imgX, okX)
+		}
+		if !(seeX < imgX && imgX < okX) {
+			t.Errorf("expected seeX < imgX < okX; got %d < %d < %d", seeX, imgX, okX)
+		}
+		// The ImageBelow box's text spans 13 runes at 10px =
+		// 130 pixels. " ok" must start at imgX + 130.
+		if okX-imgX < 130 {
+			t.Errorf("' ok' box at X=%d, expected ≥ %d (imgX %d + source-text width 130) — ImageBelow may not be advancing xPos correctly",
+				okX, imgX+130, imgX)
+		}
+	})
+
 	t.Run("ImageBelow on second line uses that line's Y", func(t *testing.T) {
 		fi, _ := makeFrame()
 		img := &CachedImage{Width: 100, Height: 50, Path: "p.png", Loading: true}
