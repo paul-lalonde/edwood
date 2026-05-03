@@ -2714,10 +2714,12 @@ func (w *Window) buildStyledContent() rich.Content {
 // sees them in production; the defensive ignore prevents a
 // stale span store from breaking the rendering.
 //
-// HRule: passes through directly. The wrapping renderer
-// (rich/mdrender's paintPhaseHorizontalRules from Phase 1.3)
-// suppresses the span's text and draws a 1px line spanning the
-// frame width. Added in Phase 3 round 3.
+// HRule: passes through directly. The renderer keeps the span's
+// text visible (source markers `---`/`***`/`___` render
+// normally) and rich/mdrender's paintHorizontalRules draws a 1px
+// line across the frame on the same row. Added in Phase 3 round
+// 3; the original "suppress text" behavior was reverted in the
+// round-3 follow-up.
 func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,

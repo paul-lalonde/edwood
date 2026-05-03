@@ -32,10 +32,13 @@ type StyleAttrs struct {
 	Family string
 
 	// HRule indicates that this span represents a horizontal
-	// rule line. The wrapping renderer (rich/mdrender)
-	// suppresses the span's text and draws a 1px line spanning
-	// the frame width. Wire format: `hrule` flag on s/b
-	// directives. Added in Phase 3 round 3.
+	// rule line. The renderer keeps the span's text visible
+	// (source markers `---`/`***`/`___` render normally) and
+	// rich/mdrender's paintHorizontalRules draws a 1px line
+	// across the frame on the same row — the user sees both
+	// the markers and the rule. Wire format: `hrule` flag on
+	// s/b directives. Added in Phase 3 round 3 (text-suppress
+	// behavior was reverted in the round-3 follow-up).
 	HRule bool
 
 	// Box fields (zero values = not a box)
@@ -47,10 +50,11 @@ type StyleAttrs struct {
 	// rendering. Empty string is the default (existing
 	// replacing semantic — the box's `length` runes are
 	// replaced by the box at render time). v1 also recognizes
-	// "below" (the box does not consume runes; the renderer
-	// anchors it to the line containing Offset and paints
-	// below the line text). The protocol uses a namespaced
-	// `placement=NAME` flag to keep future placements from
+	// "below" (the box covers source runes that render as
+	// text in the normal way; the renderer additionally
+	// paints the image below the line on which they sit).
+	// The protocol uses a namespaced `placement=NAME` flag to
+	// keep future placements (above, center, etc.) from
 	// expanding the wire-format flag set; the parser
 	// validates against a closed set. Added in Phase 3 round
 	// 4 for inline-image rendering with source kept visible.

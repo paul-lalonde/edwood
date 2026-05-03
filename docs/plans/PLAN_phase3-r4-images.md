@@ -69,9 +69,9 @@ the existing async cache). md2spans does no file IO.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [x] Design | Single-token flag with namespaced value; `placement=below` requires length=0; unknown values rejected (mirrors `family=NAME`); WIDTH=0/HEIGHT=0 already legal but newly canonical for "renderer probes" — no parser change needed there | base doc § "Wire-format change" | Mirrors round 2's `parseFamilyFlag` shape. |
-| [x] Tests | placement=below + length=0 OK; placement=below + length>0 error; unknown placement= rejected; placement=replace explicit form OK; coexistence with bold/italic/scale/family; W=H=0 with placement=below; absent flag → BoxPlacement=""; payload-with-params round-trips | `spanparse_test.go` | — |
-| [x] Iterate | Add `parsePlacementFlag` helper (validFamilies-style closed set); plumb into parseBoxLine flag switch; reject length>0 when placement=below | `spanparse.go` | — |
+| [x] Design | Single-token flag with namespaced value; unknown values rejected (mirrors `family=NAME`); WIDTH=0/HEIGHT=0 already legal but newly canonical for "renderer probes" — no parser change needed there. Length is unconstrained: placement=below covers source runes that render as text; placement=replace covers runes that render as the box. | base doc § "Wire-format change" | Mirrors round 2's `parseFamilyFlag` shape. The original draft required length=0 for placement=below; pivoted mid-round (commit dcb7323). |
+| [x] Tests | placement=below over length-N round-trips; unknown placement= rejected; placement=replace explicit form OK; coexistence with bold/italic/scale/family; W=H=0 with placement=below; absent flag → BoxPlacement=""; payload-with-params round-trips | `spanparse_test.go` | — |
+| [x] Iterate | Add `parsePlacementFlag` helper (validFamilies-style closed set); plumb into parseBoxLine flag switch | `spanparse.go` | — |
 | [x] Commit | — | — | `spans: parse placement=NAME flag on b directives` |
 
 ## Phase 3.4.3: rich — `Style.ImageBelow` field + layout/paint

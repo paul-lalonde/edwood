@@ -246,10 +246,11 @@ var validPlacements = map[string]bool{
 
 // parsePlacementFlag parses a "placement=NAME" flag token
 // and returns the validated placement name. Rejects empty
-// values and any name not in validPlacements. The legality
-// of length>0 with a particular placement is checked at the
-// caller (placement=below requires length=0). Added in
-// Phase 3 round 4.
+// values and any name not in validPlacements. Per Phase 3
+// round 4 design: placement values select a layout mode for
+// the box; `replace` is the existing replacing semantic and
+// `below` covers source runes that render as text while the
+// image renders below the line.
 func parsePlacementFlag(flag string) (string, error) {
 	val := strings.TrimPrefix(flag, "placement=")
 	if val == "" {

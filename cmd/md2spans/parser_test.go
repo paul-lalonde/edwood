@@ -612,10 +612,11 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 
 // TestParseImageBasic covers the `![alt](url)` syntax: emits a
 // single box record (IsBox=true, BoxPlacement="below",
-// BoxPayload="image:URL", length=0) anchored at the start of
-// the syntax. Source markers stay visible (no s span emitted
-// for the source text — default styling applies via emit-time
-// gap-fill).
+// BoxPayload="image:URL") covering the source runes
+// [offset, offset+length). The renderer renders those source
+// markers as text in the normal way AND paints the image
+// below the line; emit-time gap-fill is not involved (the
+// box's covered runes ARE the source text).
 func TestParseImageBasic(t *testing.T) {
 	src := "![alt](pic.png)"
 	// Runes: !=0 [=1 a=2 l=3 t=4 ]=5 (=6 p=7 i=8 c=9 .=10 p=11 n=12 g=13 )=14

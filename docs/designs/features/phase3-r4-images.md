@@ -362,11 +362,12 @@ paths. Round 4 mirrors `previewcmd`'s basePath wiring
 
 ## Test plan
 
-1. **`spanparse.go` tests**: `placement=below` flag round-trips on
-   `b` lines; `length>0` plus `placement=below` is rejected;
-   `length=0` plus `placement=replace` (or no flag) is the
-   existing degenerate case (allowed); unknown `placement=`
-   values rejected; `WIDTH=0 HEIGHT=0` parsed OK.
+1. **`spanparse.go` tests**: `placement=below` flag round-trips
+   on `b` lines covering a length-N source range; explicit
+   `placement=replace` round-trips equivalently to the absent
+   default; unknown `placement=` values rejected; `WIDTH=0
+   HEIGHT=0` parsed OK; payload preserves multi-token
+   `image:URL [width=N ...]` form.
 2. **`StyleAttrs.Equal` tests**: `BoxPlacement` participates
    in equality.
 3. **`boxStyleToRichStyle` tests**: `BoxPlacement="below"` →

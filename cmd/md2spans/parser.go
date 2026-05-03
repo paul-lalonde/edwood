@@ -508,10 +508,12 @@ func tryEmphasis(runes []rune, i, runeStart int) (Span, int, bool) {
 // runes[i] (which must be `!`). On match, returns a single
 // IsBox=true span with BoxPlacement="below" and a payload
 // of `image:URL` (plus optional ` width=N` if the title
-// attribute contains `width=Npx`). The span has Length=0 and
-// is anchored at the start of the syntax — the renderer
-// uses the line containing Offset to anchor the painted
-// image while the source markers stay visible.
+// attribute contains `width=Npx`). The span's Length is the
+// rune count of the entire `![alt](url ...)` source, and the
+// span is anchored at the start of the syntax — the renderer
+// renders those source runes as text in the normal way AND
+// paints the image below the line on which they sit, so the
+// user sees the markers AND the image.
 //
 // On no-match (no `[` after `!`, no `]`, no `(URL)`),
 // returns ok=false and 1 (skip past the `!` as literal).

@@ -163,9 +163,10 @@ Fields:
 - `<offset>`, `<length>`: as for `s`. By default, the body's
   runes in `[offset, offset+length)` are replaced by the box
   at render time. The `placement=NAME` flag (below) can
-  change this to a non-replacing layout where the box is
-  anchored at `offset` without consuming runes (`length`
-  must then be 0).
+  change this to a non-replacing layout where the runes
+  render as text in the normal way and the box's visual
+  (e.g., an image) renders alongside them — see the
+  `placement=below` description for the round 4 details.
 - `<width>`, `<height>`: integer pixels. Must be >= 0.
   **`0 0` means "renderer probes":** the consumer ignores the
   positional dimensions and uses the image's intrinsic
