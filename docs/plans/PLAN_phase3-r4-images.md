@@ -128,7 +128,7 @@ sub-row gets its own commit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [x] Design | Detect `![alt](url)` and `![alt](url "title")`; produce a single box record (length=0, W=H=0, placement=below, payload `image:URL [width=N]`) anchored at the start of the syntax. Source markers stay visible via emit-time gap-fill (default-styled `s`). | base doc § "md2spans parser change" | Tokenizer slot before the link tokenizer. |
+| [x] Design | Detect `![alt](url)` and `![alt](url "title")`; produce a single box record (length=N covering the source `![alt](url ...)` runes, W=H=0, placement=below, payload `image:URL [width=N]`). Source markers stay visible because the box's covered runes render as text. | base doc § "md2spans parser change" | Tokenizer slot before the link tokenizer. Originally drafted with length=0; pivoted mid-round (commit dcb7323). |
 | [x] Tests | Basic image; with title; with alt empty; with `width=Npx`; image mid-paragraph; multiple per paragraph; image adjacent to link; URL with slashes; malformed forms fall to literal | `cmd/md2spans/parser_test.go` | — |
 | [x] Iterate | Add Span.IsBox + box fields + BoxPlacement + BoxPayload; tryImage tokenizer + findInlineImage + parseImageWidthPx helpers | `cmd/md2spans/parser.go` | — |
 | [x] Commit | — | — | `md2spans: tokenize image syntax and emit non-replacing box record` |
@@ -137,9 +137,9 @@ sub-row gets its own commit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [x] Design | FormatSpans branches on IsBox; emits `b OFF 0 0 0 - - placement=below image:URL [width=N]`; fillGaps preserves length-0 boxes without splitting text coverage | base doc § "md2spans emit change" | Shared style-flag formatter applies to both `s` and `b`. |
-| [x] Tests | Box at start / middle / end; with width=N param; two boxes at same offset; adjacent to styled span; explicit placement=replace round-trip; empty BoxPlacement omitted | `cmd/md2spans/emit_test.go` | — |
-| [x] Iterate | Split FormatSpans into writeSpanLine + writeBoxLine + writeStyleFlags; fillGaps length-0-box special case + IsBox/Box* field passthrough | `cmd/md2spans/emit.go` | — |
+| [x] Design | FormatSpans branches on IsBox; emits `b OFF LEN 0 0 - - placement=below image:URL [width=N]`; fillGaps handles length-N boxes via the existing styled-span path | base doc § "md2spans emit change" | Shared style-flag formatter applies to both `s` and `b`. |
+| [x] Tests | Box at start / middle of buffer; with width=N param; adjacent to styled span; explicit placement=replace round-trip; empty BoxPlacement omitted | `cmd/md2spans/emit_test.go` | Post-pivot: tests use length=N covering source runes. |
+| [x] Iterate | Split FormatSpans into writeSpanLine + writeBoxLine + writeStyleFlags; fillGaps passes IsBox/Box* fields through (no length-0 special case) | `cmd/md2spans/emit.go` | — |
 | [x] Commit | — | — | `md2spans: emit placement=below b directive for inline images` |
 
 ## Phase 3.4.8: Spec + README
@@ -155,10 +155,10 @@ sub-row gets its own commit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | — | — |
-| [ ] Tests | All packages green | `go test ./...` | — |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with a markdown containing 1–3 images of varying formats | — | User-driven. |
-| [ ] Commit | — | — | n/a (no code change unless smoke surfaces something) |
+| [x] Design | n/a (validation) | — | — |
+| [x] Tests | All 26 packages green | `go test ./...` | — |
+| [x] Iterate | Build binaries; smoke-tested in real edwood with `test_images.md` containing multiple `![alt](url)` references. Initial result was no images rendered — prompted the length-0 → length-N pivot. Re-smoke-tested post-pivot: source markers visible above rendered images, as designed. | — | User-driven; pivot landed in commit dcb7323. |
+| [x] Commit | — | — | Pivot commit + design/plan refresh. |
 
 ---
 
@@ -181,4 +181,9 @@ verify line math holds before drawing.
 
 ## Status
 
-Plan + design refreshed. Awaiting commit.
+Round complete. All 9 plan rows landed plus a mid-round
+pivot (length-0 anchor → length-N source-covering, commit
+dcb7323) driven by smoke-test feedback. Source markers
+stay visible above rendered images as designed. All 26
+packages green; both binaries (./edwood, ./md2spans) build
+clean. Ready for review + merge to master.

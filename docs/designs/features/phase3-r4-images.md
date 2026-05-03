@@ -85,34 +85,46 @@ directive. v1 recognized values:
 
 - `replace` (the existing implicit default; the box's
   `length` runes are replaced by the box at render time)
-- `below` (Phase 3 round 4; the box does not consume runes
-  and renders below the line containing its `offset`)
+- `below` (Phase 3 round 4; the box COVERS source runes
+  but does not REPLACE them — the runes render as text
+  normally and the image renders below the line)
 
 When `placement=below`:
-- `length` MUST be 0. A producer emitting `length>0` plus
-  `placement=below` is a protocol error.
-- The box does NOT consume source runes. The rune at
-  `offset` is unaffected by the box's presence; `s`
-  directives covering that range render normally.
-- The renderer anchors the box to the LINE containing
-  `offset`, paints below the line text, and grows line
-  height by image height (see "Rendering" below).
+- `length` is the rune count of the SOURCE markdown
+  syntax the box covers — typically the rune count of
+  `![alt](url ...)`. The runes in `[offset, offset+length)`
+  remain part of the body and render as text in the
+  normal way (preserving the markup-stays-visible stance
+  established in rounds 1-3).
+- The renderer additionally paints the image on the same
+  line as the source, anchored at the line's left edge
+  (X=0) and drawn at Y = line.Y + textHeight + cumulative
+  prior image heights. The line's effective height grows
+  additively by the image height.
+- Two adjacent `placement=below b` lines stack their
+  images top-to-bottom in emission order.
 
 When `placement=replace` (or no `placement=` flag):
 - Existing `b` semantics apply unchanged. Round 4 does NOT
   modify replacing-box behavior.
 
-Per-write contiguity: a `placement=below b` line with
-`length=0` satisfies the contiguity rule trivially — the
-next directive's offset must equal `offset + 0 = offset`,
-i.e., continue from the same position. Two
-`placement=below b` lines may share an offset (e.g., two
-images anchored at the same paragraph end). The consumer
-paints them stacked, top-down in emission order.
-
 Unknown `placement=` values are an error (same as `family=`
 unknown values). Future rounds extend the value vocabulary
 through this spec; until then, the parser rejects.
+
+**Why "covers source" instead of length=0 anchor**: an
+earlier draft had `placement=below` use `length=0` to
+"anchor" the image without consuming runes. Three storage
+and rendering layers (SpanStore filters zero-length runs at
+insertion; buildStyledContent skips Len==0 runs;
+contentToBoxes skips empty-Text spans) made this awkward
+to plumb cleanly. The pivot to length=N source-covering
+uses the existing storage and rendering pipelines unchanged
+— the renderer already knows how to handle length-N runs;
+the only round-4 additions are (a) the `placement=below`
+flag, (b) the `Style.ImageBelow` field, and (c) a paint
+phase that renders the image below the line in addition
+to the text.
 
 ### `WIDTH=0 HEIGHT=0` semantics
 
@@ -198,38 +210,44 @@ the protocol's `placement=NAME` extensibility is independent.
 
 ## Rendering — image-below-line layout
 
-The non-replacing image is anchored at a rune offset on a
-line. The renderer:
+The `ImageBelow`-flagged box covers a contiguous range of
+source runes that render as text. The renderer additionally
+paints the image on the same line below the text:
 
-1. **Layout**: a line containing one or more `ImageBelow`
-   boxes has its effective height computed as
-   `text_height + sum(image_heights)`. `ImageBelow` boxes
-   contribute zero horizontal advance.
-2. **Paint**: the image-painting pass renders each
-   `ImageBelow`-flagged box at:
-   - `X = line.X` (left edge of the line; the offset within
-     the line determines stacking order, not horizontal
-     position).
-   - `Y = line.Y + text_height + sum(prior image_heights on
+1. **Layout (text)**: `ImageBelow` boxes flow through the
+   normal text-width branch. `boxWidth` returns the source
+   text's pixel width (not the image's pixel width); `xPos`
+   advances normally; line wrapping applies. The box is NOT
+   block-level — it doesn't enter the non-wrapping branch
+   that inline-replacing images use.
+2. **Layout (height)**: a line containing one or more
+   `ImageBelow` boxes has effective `Height = textHeight
+   + sum(imageHeights)`. The image-height contribution is
+   ADDITIVE, not max — text height is independent.
+3. **Paint (text)**: `paintPhaseText` renders the source
+   markers (`![alt](url ...)`) as ordinary text. The skip
+   for `Style.Image` is conditional on `!Style.ImageBelow`
+   so ImageBelow boxes pass through the text painter
+   normally.
+4. **Paint (image)**: `paintLineImagesBelow` walks each
+   line and draws each `ImageBelow`-flagged box at:
+   - `X = c.offset.X` (frame's left edge; the box's pb.X
+     within the line determines stacking order, not
+     horizontal position).
+   - `Y = line.Y + textHeight + sum(prior image_heights on
      this line)`.
    - dimensions from `imageBoxDimensions` (existing helper
      at `rich/layout.go:181`) — uses
      `box.ImageData.Width/Height` (intrinsic) by default,
      overridden by `Style.ImageWidth`/`ImageHeight` when set.
-3. **Multiple images on one line**: stacked top-to-bottom in
-   emission order. v1 keeps it simple — no horizontal
+5. **Multiple images on one line**: stacked top-to-bottom
+   in emission order. v1 keeps it simple — no horizontal
    layout of images.
-4. **Line wrap**: text wrapping ignores `ImageBelow` boxes;
-   the line's text content wraps as if the image weren't
-   there. The image is anchored to the LINE that contains
-   its offset, not to the visual position of the offset
-   within wrapped text.
-5. **Image not yet loaded**: line height grows by the cached
-   `box.ImageData.Height` if available, else by a
-   per-Renderer fallback (e.g., 150px). Async loads that
-   complete after layout trigger a re-layout via the
-   existing `onImageLoaded` callback path
-   (`rich/layout.go:880`).
+6. **Image not yet loaded**: line height grows by the cached
+   `box.ImageData.Height` if available, else by 0 until the
+   async load completes. The `onImageLoaded` callback
+   (`rich/layout.go:880`) re-triggers layout when the load
+   resolves.
 
 This sits in `rich.Frame`, not `rich/mdrender`. Image handling
 is in the lean `rich.Frame` contract per
@@ -253,19 +271,23 @@ Where:
 - TITLE is the optional double-quoted title (used for
   `width=Npx`).
 
-When detected, md2spans emits TWO records:
-1. An `s` span over `![alt](url ...)` with default styling
-   (Fg="", no flags). This keeps the source text visible.
-2. A `b` "span" (extended Span shape — see below) with:
-   - `Offset = end of the source `![alt](...)` syntax`
-   - `Length = 0`
-   - `BoxWidth = 0, BoxHeight = 0` — the renderer probes.
-   - `BoxPlacement = "below"`
-   - `BoxPayload = "image:" + url`, plus an optional
-     ` width=N` token if the title attr contains
-     `width=Npx`. URL passed through verbatim — relative
-     paths stay relative; the consumer resolves against the
-     window's basePath.
+When detected, md2spans emits a single record:
+- A `b` "span" (extended Span shape — see below) with:
+  - `Offset = start of the source `![` runes
+  - `Length = rune count of the entire source `![alt](url ...)` syntax`
+  - `BoxWidth = 0, BoxHeight = 0` — the renderer probes.
+  - `BoxPlacement = "below"`
+  - `BoxPayload = "image:" + url`, plus an optional
+    ` width=N` token if the title attr contains
+    `width=Npx`. URL passed through verbatim — relative
+    paths stay relative; the consumer resolves against the
+    window's basePath.
+
+No separate `s` span is needed for the source text — the
+box's covered runes ARE the source text and they render
+normally via the existing text-paint phase (`paintPhaseText`,
+which checks `Style.Image && !Style.ImageBelow` to decide
+whether to skip).
 
 The image syntax is recognized BEFORE the link syntax (`[..](..)`)
 in the inline tokenizer, since `!` is the discriminating
@@ -302,14 +324,16 @@ b OFFSET LENGTH WIDTH HEIGHT FG BG flags... payload
 instead of an `s` line. For round 4 image emission,
 `WIDTH=0 HEIGHT=0` and `BoxPlacement="below"` give:
 ```
-b 12 0 0 0 - - placement=below image:./pic.png
-b 12 0 0 0 - - placement=below image:./pic.png width=200
+b 12 11 0 0 - - placement=below image:./pic.png
+b 12 11 0 0 - - placement=below image:./pic.png width=200
 ```
 
-`fillGaps` skips `IsBox` spans when computing default-fill
-gaps — a box at `Offset=N, Length=0` does not bound any
-text region, so it sits "between" two text spans without
-splitting their coverage.
+(The `11` here is the rune count of `![alt](url)`; for a
+different URL or alt the LENGTH varies accordingly.)
+
+`fillGaps` handles round-4 boxes through the same length-N
+path as styled spans — the box covers a contiguous range of
+source runes, no special-case logic required.
 
 ## Path resolution
 
@@ -437,4 +461,25 @@ paths. Round 4 mirrors `previewcmd`'s basePath wiring
 
 ## Status
 
-Design — drafted (revised after review). Awaiting plan refresh.
+Round complete. All 9 plan rows landed plus a mid-round
+pivot.
+
+**Implementation pivot (May 2026)**: an end-to-end smoke
+test surfaced a bug in the original length=0-anchor model
+(no images rendered at all). Three storage and rendering
+layers (SpanStore filters Len==0 runs at insertion;
+buildStyledContent skips Len==0 runs; contentToBoxes skips
+empty-Text spans) made length=0 awkward to plumb. Pivoted
+mid-round to the length=N source-covering model documented
+above: `placement=below b` covers the full source rune
+range, those runes render as text in the normal way, and
+the renderer additionally paints the image below the line.
+The pivot uses the existing storage and rendering pipelines
+unchanged; the design above describes the post-pivot
+contract. See commit dcb7323 for the diff.
+
+Smoke test (May 2026): rendering verified in styled mode
+on a multi-image markdown file. Source markers stay
+visible; images render below the source line as designed.
+
+See [`docs/plans/PLAN_phase3-r4-images.md`](../../plans/PLAN_phase3-r4-images.md).
