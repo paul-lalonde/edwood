@@ -274,3 +274,169 @@ func TestRegionStore_Clear(t *testing.T) {
 		t.Errorf("after Clear, EnclosingAt(5) = %v, want nil", got)
 	}
 }
+
+// =========================================================================
+// RegionStore — Insert (body edit shifts offsets)
+// =========================================================================
+
+// TestRegionStore_InsertAtStart: a region [10, 20). Inserting
+// 5 runes at body position 0 shifts the region to [15, 25).
+func TestRegionStore_InsertAtStart(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Insert(0, 5)
+	if r.Start != 15 || r.End != 25 {
+		t.Errorf("after Insert(0, 5): [%d, %d), want [15, 25)", r.Start, r.End)
+	}
+}
+
+// TestRegionStore_InsertBeforeRegion: insert at the boundary
+// (pos == Start) is treated as before — region's Start
+// shifts. Mirrors the spanStore convention: text inserted
+// AT the start of a styled run is taken as part of that run
+// would be, but for regions the simpler convention is
+// "inserts at or before Start shift Start". Tested
+// explicitly to pin the contract.
+func TestRegionStore_InsertBeforeRegion(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Insert(10, 3)
+	if r.Start != 13 || r.End != 23 {
+		t.Errorf("after Insert(10, 3) at Start: [%d, %d), want [13, 23)", r.Start, r.End)
+	}
+}
+
+// TestRegionStore_InsertInsideRegion: insert at a body
+// position within the region's range grows the region's End.
+func TestRegionStore_InsertInsideRegion(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Insert(15, 4)
+	if r.Start != 10 || r.End != 24 {
+		t.Errorf("after Insert(15, 4) inside: [%d, %d), want [10, 24)", r.Start, r.End)
+	}
+}
+
+// TestRegionStore_InsertAfterRegion: insert after End leaves
+// the region untouched.
+func TestRegionStore_InsertAfterRegion(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Insert(25, 5)
+	if r.Start != 10 || r.End != 20 {
+		t.Errorf("after Insert(25, 5) after End: [%d, %d), want [10, 20)", r.Start, r.End)
+	}
+}
+
+// TestRegionStore_InsertChildShiftsWithParent: nested
+// regions stay nested when their containing range shifts.
+func TestRegionStore_InsertChildShiftsWithParent(t *testing.T) {
+	s := NewRegionStore()
+	parent := &Region{Start: 0, End: 100, Kind: "blockquote"}
+	child := &Region{Start: 20, End: 50, Kind: "code"}
+	s.Add(parent)
+	s.Add(child)
+
+	s.Insert(0, 5)
+	if parent.Start != 5 || parent.End != 105 {
+		t.Errorf("parent: [%d, %d), want [5, 105)", parent.Start, parent.End)
+	}
+	if child.Start != 25 || child.End != 55 {
+		t.Errorf("child: [%d, %d), want [25, 55)", child.Start, child.End)
+	}
+	if child.Parent != parent {
+		t.Error("child's Parent pointer should still be parent")
+	}
+}
+
+// =========================================================================
+// RegionStore — Delete (body edit shifts/clips/drops regions)
+// =========================================================================
+
+// TestRegionStore_DeleteAfterRegion: delete after End leaves
+// the region untouched.
+func TestRegionStore_DeleteAfterRegion(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Delete(25, 5)
+	if r.Start != 10 || r.End != 20 {
+		t.Errorf("after Delete(25, 5) after End: [%d, %d), want [10, 20)", r.Start, r.End)
+	}
+	if len(s.Roots()) != 1 {
+		t.Errorf("region should still be in store; got %d roots", len(s.Roots()))
+	}
+}
+
+// TestRegionStore_DeleteBeforeRegion: delete strictly before
+// the region shifts both Start and End down.
+func TestRegionStore_DeleteBeforeRegion(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Delete(0, 5)
+	if r.Start != 5 || r.End != 15 {
+		t.Errorf("after Delete(0, 5) before: [%d, %d), want [5, 15)", r.Start, r.End)
+	}
+}
+
+// TestRegionStore_DeleteIntersectsBodyDropsRegion: v1
+// conservative behavior — a delete that touches the
+// region's body removes the region entirely. The next
+// render rebuilds it from md2spans.
+func TestRegionStore_DeleteIntersectsBodyDropsRegion(t *testing.T) {
+	cases := []struct {
+		name     string
+		delPos   int
+		delLen   int
+	}{
+		{"deleted middle", 12, 3},
+		{"delete starts before, ends inside", 8, 5},
+		{"delete starts inside, ends after", 15, 10},
+		{"delete fully covers", 0, 30},
+		{"delete starts at Start", 10, 3},
+		{"delete ends at End-1", 17, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewRegionStore()
+			r := &Region{Start: 10, End: 20, Kind: "code"}
+			s.Add(r)
+			s.Delete(tc.delPos, tc.delLen)
+			if got := s.EnclosingAt(15); got != nil {
+				t.Errorf("region should be dropped; EnclosingAt(15) = %v", got)
+			}
+		})
+	}
+}
+
+// TestRegionStore_DeleteDropsChildKeepsParent: when a
+// delete intersects a child but not the parent, the child
+// is dropped and the parent shifts.
+func TestRegionStore_DeleteDropsChildKeepsParent(t *testing.T) {
+	s := NewRegionStore()
+	parent := &Region{Start: 0, End: 100, Kind: "blockquote"}
+	child := &Region{Start: 20, End: 50, Kind: "code"}
+	s.Add(parent)
+	s.Add(child)
+
+	// Delete inside child.
+	s.Delete(30, 5)
+
+	// Parent shrinks (5 runes deleted from inside).
+	if parent.End != 95 {
+		t.Errorf("parent.End = %d, want 95 (shrunk)", parent.End)
+	}
+	// Child is dropped.
+	if len(parent.Children) != 0 {
+		t.Errorf("parent should have 0 children after delete dropped child; got %d", len(parent.Children))
+	}
+	// EnclosingAt at the former-child range now returns parent.
+	if got := s.EnclosingAt(35); got != parent {
+		t.Errorf("EnclosingAt(35) = %v, want parent (child was dropped)", got)
+	}
+}
