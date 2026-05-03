@@ -325,6 +325,143 @@ func TestParseHRuleBetweenParagraphs(t *testing.T) {
 	assertSpansEqual(t, Parse(src), want)
 }
 
+// --- Fenced code block tests (Phase 3 round 5) -------------------------
+
+// TestParseFencedCodeBasic: a simple fenced block produces
+// a RegionBegin sentinel + a styled span over the body +
+// a RegionEnd sentinel. The opening/closing fence runes
+// stay visible in the body and render via emit-time
+// gap-fill (default styling).
+func TestParseFencedCodeBasic(t *testing.T) {
+	src := "```\nfoo\n```"
+	// Runes: ` ` ` \n f o o \n ` ` `
+	//        0 1 2 3 4 5 6 7 8 9 10 (11 total)
+	// Opening fence: 0..3 (then \n at 3). Body: 4..8
+	// ("foo\n" — body includes the trailing \n before the
+	// closing fence, matching CommonMark). Closing fence:
+	// 8..10. Body span has family=code so the renderer's
+	// monospace font applies even before the region machinery
+	// is consulted.
+	got := Parse(src)
+	if len(got) != 3 {
+		t.Fatalf("got %d spans, want 3 (begin + body + end); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "code" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
+	}
+	if got[0].Offset != 4 || got[0].Length != 0 {
+		t.Errorf("got[0] offset/length = (%d, %d), want (4, 0)", got[0].Offset, got[0].Length)
+	}
+	if got[1].Offset != 4 || got[1].Length != 4 {
+		t.Errorf("body span offset/length = (%d, %d), want (4, 4)", got[1].Offset, got[1].Length)
+	}
+	if got[1].Family != "code" {
+		t.Errorf("body span Family = %q, want %q", got[1].Family, "code")
+	}
+	if !got[2].RegionEnd {
+		t.Error("got[2].RegionEnd should be true")
+	}
+	if got[2].Offset != 8 || got[2].Length != 0 {
+		t.Errorf("got[2] offset/length = (%d, %d), want (8, 0)", got[2].Offset, got[2].Length)
+	}
+}
+
+// TestParseFencedCodeWithLang: an info string after the
+// opening fence becomes a `lang=NAME` param on the begin
+// region directive.
+func TestParseFencedCodeWithLang(t *testing.T) {
+	src := "```go\nfmt\n```"
+	got := Parse(src)
+	if len(got) != 3 {
+		t.Fatalf("got %d spans, want 3; spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "code" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
+	}
+	if got[0].RegionParams["lang"] != "go" {
+		t.Errorf("got[0].RegionParams[lang] = %q, want %q", got[0].RegionParams["lang"], "go")
+	}
+}
+
+// TestParseFencedCodeMultilineBody: body spans multiple
+// lines; the body span covers from after the opening
+// fence's newline to before the closing fence.
+func TestParseFencedCodeMultilineBody(t *testing.T) {
+	src := "```\nline1\nline2\nline3\n```"
+	// Opening fence: 0..3, \n at 3. Body: 4..21 ("line1\nline2\nline3\n"
+	// is 18 runes — but we want body up to BUT NOT INCLUDING the
+	// closing fence's start. Closing fence starts at... let me count:
+	// `(0) `(1) `(2) \n(3) l(4) i(5) n(6) e(7) 1(8) \n(9)
+	// l(10) i(11) n(12) e(13) 2(14) \n(15) l(16) i(17) n(18) e(19) 3(20) \n(21)
+	// `(22) `(23) `(24)
+	// So body is 4..22 (18 runes including trailing \n before closing).
+	got := Parse(src)
+	if len(got) != 3 {
+		t.Fatalf("got %d spans, want 3; spans: %+v", len(got), got)
+	}
+	if got[1].Offset != 4 || got[1].Length != 18 {
+		t.Errorf("body span offset/length = (%d, %d), want (4, 18)", got[1].Offset, got[1].Length)
+	}
+	if got[2].Offset != 22 {
+		t.Errorf("end region offset = %d, want 22", got[2].Offset)
+	}
+}
+
+// TestParseFencedCodeEmpty: ` ``` ` immediately followed by
+// closing ` ``` ` — body has zero rune content. Emit just
+// the begin/end pair with no body span.
+func TestParseFencedCodeEmpty(t *testing.T) {
+	src := "```\n```"
+	got := Parse(src)
+	if len(got) != 2 {
+		t.Fatalf("got %d spans, want 2 (begin + end, no body); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "code" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
+	}
+	if !got[1].RegionEnd {
+		t.Error("got[1].RegionEnd should be true")
+	}
+	if got[0].Offset != got[1].Offset {
+		t.Errorf("empty body: begin offset (%d) != end offset (%d)", got[0].Offset, got[1].Offset)
+	}
+}
+
+// TestParseFencedCodeBetweenParagraphs: a fenced block
+// embedded in a document with surrounding plain text. The
+// surrounding paragraphs produce no spans (default styling
+// via emit-time gap-fill).
+func TestParseFencedCodeBetweenParagraphs(t *testing.T) {
+	src := "intro\n\n```\nbody\n```\n\nafter"
+	got := Parse(src)
+	// Intro and after produce no spans. The fenced block
+	// produces 3 spans (begin + body + end).
+	if len(got) != 3 {
+		t.Fatalf("got %d spans, want 3 (just the fenced block); spans: %+v", len(got), got)
+	}
+}
+
+// TestParseFencedCodeUnclosed: an opening fence with no
+// matching close — treat the rest of the document as the
+// code body (matches CommonMark behavior: no closing fence
+// → block runs to EOF).
+func TestParseFencedCodeUnclosed(t *testing.T) {
+	src := "```\ndangling"
+	got := Parse(src)
+	if len(got) < 2 {
+		t.Fatalf("got %d spans, want at least 2 (begin + body); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "code" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
+	}
+	// Final span should be the end region — even unclosed,
+	// the parser closes the region at EOF.
+	last := got[len(got)-1]
+	if !last.RegionEnd {
+		t.Error("unclosed fenced block: last span should be RegionEnd at EOF")
+	}
+}
+
 // --- Inline code tests (Phase 3 round 2) -------------------------------
 
 // TestParseInlineCode covers basic backtick-delimited inline
@@ -602,10 +739,43 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 		return
 	}
 	for i := range got {
-		if got[i] != want[i] {
+		if !spansFieldEqual(got[i], want[i]) {
 			t.Errorf("span[%d]:\n  got:  %+v\n  want: %+v", i, got[i], want[i])
 		}
 	}
+}
+
+// spansFieldEqual compares two Spans field-by-field. Plain
+// `==` doesn't work because Span contains a RegionParams
+// map (Phase 3 round 5).
+func spansFieldEqual(a, b Span) bool {
+	if a.Offset != b.Offset || a.Length != b.Length {
+		return false
+	}
+	if a.Fg != b.Fg || a.Bold != b.Bold || a.Italic != b.Italic {
+		return false
+	}
+	if a.Scale != b.Scale || a.Family != b.Family || a.HRule != b.HRule {
+		return false
+	}
+	if a.IsBox != b.IsBox || a.BoxWidth != b.BoxWidth || a.BoxHeight != b.BoxHeight {
+		return false
+	}
+	if a.BoxPayload != b.BoxPayload || a.BoxPlacement != b.BoxPlacement {
+		return false
+	}
+	if a.RegionBegin != b.RegionBegin || a.RegionEnd != b.RegionEnd {
+		return false
+	}
+	if len(a.RegionParams) != len(b.RegionParams) {
+		return false
+	}
+	for k, v := range a.RegionParams {
+		if w, ok := b.RegionParams[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
 }
 
 // --- Image syntax tests (Phase 3 round 4) ------------------------------

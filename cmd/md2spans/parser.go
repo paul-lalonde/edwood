@@ -53,6 +53,17 @@ type Span struct {
 	BoxHeight    int
 	BoxPayload   string
 	BoxPlacement string
+	// Region directive sentinels (Phase 3 round 5). Mutually
+	// exclusive with each other and with IsBox / styled-span
+	// fields. When RegionBegin != "", this Span represents a
+	// `begin region <kind>` wire directive (kind is the
+	// string value); RegionParams carries optional key=value
+	// params. When RegionEnd is true, this Span represents
+	// `end region`. Length is 0 for both — the directives
+	// slot between styled runs without consuming runes.
+	RegionBegin  string
+	RegionEnd    bool
+	RegionParams map[string]string
 }
 
 // Parse takes the markdown source and returns the list of styled
@@ -65,6 +76,8 @@ func Parse(src string) []Span {
 	var spans []Span
 	for _, p := range scanParagraphs(src) {
 		switch {
+		case p.IsCodeBlock:
+			spans = append(spans, parseCodeBlockParagraph(src, p)...)
 		case p.IsHRule:
 			spans = append(spans, parseHRuleParagraph(src, p)...)
 		case p.HeadingLevel > 0:
@@ -74,6 +87,42 @@ func Parse(src string) []Span {
 		}
 	}
 	return spans
+}
+
+// parseCodeBlockParagraph emits the spans for a fenced code
+// block: a RegionBegin sentinel at the body's start, a
+// styled span over the body runes (family=code so the
+// renderer uses the monospace font even before the region
+// machinery is consulted), and a RegionEnd sentinel at the
+// body's end. The opening / closing fence runes are not
+// covered by any span — they render as default-styled text
+// via emit-time gap-fill, consistent with markup-stays-
+// visible. Phase 3 round 5.
+func parseCodeBlockParagraph(src string, p paragraphRange) []Span {
+	begin := Span{
+		Offset:      p.CodeBodyRuneStart,
+		Length:      0,
+		RegionBegin: "code",
+	}
+	if p.CodeLang != "" {
+		begin.RegionParams = map[string]string{"lang": p.CodeLang}
+	}
+	end := Span{
+		Offset:    p.CodeBodyRuneEnd,
+		Length:    0,
+		RegionEnd: true,
+	}
+	bodyLen := p.CodeBodyRuneEnd - p.CodeBodyRuneStart
+	if bodyLen == 0 {
+		// Empty body: emit just the begin/end pair.
+		return []Span{begin, end}
+	}
+	body := Span{
+		Offset: p.CodeBodyRuneStart,
+		Length: bodyLen,
+		Family: "code",
+	}
+	return []Span{begin, body, end}
 }
 
 // parseHRuleParagraph emits a single Span over the HRule
@@ -261,6 +310,16 @@ type paragraphRange struct {
 	RuneStart          int
 	HeadingLevel       int
 	IsHRule            bool
+	// IsCodeBlock is true for fenced code blocks (` ``` `
+	// per phase3-r5-blockcode-regions.md). The body's rune
+	// bounds (excluding the opening/closing fence lines)
+	// are CodeBodyRuneStart and CodeBodyRuneEnd. CodeLang is
+	// the optional language hint from the info string after
+	// the opening fence (e.g., "go", "python"); empty if
+	// absent. Phase 3 round 5.
+	IsCodeBlock      bool
+	CodeBodyRuneStart, CodeBodyRuneEnd int
+	CodeLang         string
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -370,6 +429,17 @@ func scanParagraphs(src string) []paragraphRange {
 	lineStart := 0
 	lineRuneStart := 0
 
+	// inFence: true while we're inside an open fenced code
+	// block (between the opening and closing ` ``` ` lines).
+	// fenceStartByte / fenceStartRune: the body start (just
+	// after the opening fence's newline).
+	// fenceLang: language hint from the opening fence's info
+	// string.
+	inFence := false
+	fenceStartByte := 0
+	fenceStartRune := 0
+	fenceLang := ""
+
 	commit := func(byteEnd int) {
 		if inParagraph {
 			cur.ByteEnd = byteEnd
@@ -378,7 +448,50 @@ func scanParagraphs(src string) []paragraphRange {
 		}
 	}
 
+	// emitFencedBlock builds a paragraphRange for the
+	// just-closed fenced code block. bodyEndByte is the byte
+	// position just before the closing fence's start (or the
+	// EOF position if the fence is unclosed). bodyEndRune is
+	// the corresponding rune count.
+	emitFencedBlock := func(bodyEndByte, bodyEndRune int) {
+		out = append(out, paragraphRange{
+			ByteStart:         fenceStartByte,
+			ByteEnd:           bodyEndByte,
+			RuneStart:         fenceStartRune,
+			IsCodeBlock:       true,
+			CodeBodyRuneStart: fenceStartRune,
+			CodeBodyRuneEnd:   bodyEndRune,
+			CodeLang:          fenceLang,
+		})
+		inFence = false
+		fenceLang = ""
+	}
+
 	flushLine := func(lineEnd int) {
+		// Inside an open fence: only check for the closing
+		// fence on this line; skip all other paragraph logic
+		// (headings, HRule, blank-line etc. don't apply
+		// inside code blocks).
+		if inFence {
+			if isFenceLine(src, lineStart, lineEnd) {
+				emitFencedBlock(lineStart, lineRuneStart)
+			}
+			return
+		}
+		// Open a new fenced block when this line is a fence.
+		if lang, ok := parseOpenFence(src, lineStart, lineEnd); ok {
+			commit(lineStart)
+			inFence = true
+			fenceStartByte = lineEnd + 1 // skip the \n
+			// Body's rune-start = next line's rune-start. We
+			// don't know yet exactly which rune that is until
+			// the outer loop crosses the \n. Compute as
+			// (current line's rune-start) + (rune count from
+			// lineStart to lineEnd) + 1 (the \n).
+			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd]) + 1
+			fenceLang = lang
+			return
+		}
 		// Detect blank-line: only whitespace between lineStart..lineEnd.
 		blank := true
 		for i := lineStart; i < lineEnd; i++ {
@@ -446,7 +559,68 @@ func scanParagraphs(src string) []paragraphRange {
 	} else {
 		commit(lineStart)
 	}
+	// Unclosed fence: emit the block covering everything
+	// from fence start to EOF (matches CommonMark behavior:
+	// no closing fence runs to end-of-document).
+	if inFence {
+		emitFencedBlock(len(src), runePos)
+	}
 	return out
+}
+
+// isFenceLine reports whether [start, end) is a fenced
+// code-block delimiter line: 3+ consecutive backticks
+// optionally followed by whitespace. Used for closing
+// fences (opening fences also satisfy this; parseOpenFence
+// is the higher-level wrapper that also extracts the info
+// string). Phase 3 round 5.
+func isFenceLine(src string, start, end int) bool {
+	n := 0
+	for start+n < end && src[start+n] == '`' {
+		n++
+	}
+	if n < 3 {
+		return false
+	}
+	// Anything after must be whitespace.
+	for i := start + n; i < end; i++ {
+		switch src[i] {
+		case ' ', '\t', '\r':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// parseOpenFence reports whether [start, end) is an opening
+// fenced code-block delimiter and extracts the language
+// hint from the info string after the backticks. Returns
+// (lang, true) on a fence; ("", false) otherwise.
+//
+// CommonMark allows a fence's info string to be any text
+// after the backticks. v1 takes the first
+// whitespace-delimited token as the language hint and
+// drops the rest.
+func parseOpenFence(src string, start, end int) (string, bool) {
+	n := 0
+	for start+n < end && src[start+n] == '`' {
+		n++
+	}
+	if n < 3 {
+		return "", false
+	}
+	// Skip leading whitespace before the info string.
+	i := start + n
+	for i < end && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	// Read up to the next whitespace as the language hint.
+	langStart := i
+	for i < end && src[i] != ' ' && src[i] != '\t' && src[i] != '\r' {
+		i++
+	}
+	return src[langStart:i], true
 }
 
 // linkBlue is the v1 foreground color for inline-link text.
