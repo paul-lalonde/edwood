@@ -299,6 +299,176 @@ func TestFormatSpansHRuleSurvivesGapClipping(t *testing.T) {
 	}
 }
 
+// --- Box emission tests (Phase 3 round 4) -----------------------------
+
+// TestFormatSpansBoxAtStart: a box at offset 0 (length=0)
+// emits a `b` line before the default-styled fill; the
+// default fill covers [0, totalRunes).
+func TestFormatSpansBoxAtStart(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "b 0 0 0 0 - - placement=below image:./pic.png\n" +
+		"s 0 10 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxMidBuffer: a box at offset 4 (length=0)
+// emits default fill [0, 4), the box, then default fill
+// [4, 10). The box's zero length keeps the contiguity
+// invariant trivially.
+func TestFormatSpansBoxMidBuffer(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 4, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 4 -\n" +
+		"b 4 0 0 0 - - placement=below image:./pic.png\n" +
+		"s 4 6 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxAtEnd: a box at offset==totalRunes
+// (length=0) emits the box at the end with no trailing
+// default fill (the buffer is fully covered).
+func TestFormatSpansBoxAtEnd(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 10, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 10 -\n" +
+		"b 10 0 0 0 - - placement=below image:./pic.png\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxWithWidthParam: payload includes a
+// width=N parameter; emitter passes it through verbatim
+// (parameters are space-separated tokens after the URL).
+func TestFormatSpansBoxWithWidthParam(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 4, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png width=200",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 4 -\n" +
+		"b 4 0 0 0 - - placement=below image:./pic.png width=200\n" +
+		"s 4 6 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansTwoBoxesSameOffset: two boxes at the same
+// offset emit one after another, both at that offset
+// (length=0 each); contiguity holds.
+func TestFormatSpansTwoBoxesSameOffset(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 5, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./a.png",
+			BoxPlacement: "below",
+		},
+		{
+			Offset: 5, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./b.png",
+			BoxPlacement: "below",
+		},
+	}, 10)
+	want := "s 0 5 -\n" +
+		"b 5 0 0 0 - - placement=below image:./a.png\n" +
+		"b 5 0 0 0 - - placement=below image:./b.png\n" +
+		"s 5 5 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxAndStyledSpan: a box adjacent to a
+// styled span — the box's length=0 means the styled span
+// can sit at the same offset without overlap.
+func TestFormatSpansBoxAndStyledSpan(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 5, Italic: true},
+		{
+			Offset: 5, Length: 0,
+			IsBox:        true,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "below",
+		},
+		{Offset: 5, Length: 5, Bold: true},
+	}, 10)
+	want := "s 0 5 - italic\n" +
+		"b 5 0 0 0 - - placement=below image:./pic.png\n" +
+		"s 5 5 - bold\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxPlacementReplaceExplicit: a box with
+// placement="replace" emits placement=replace on the wire
+// (round-trip). Useful for producers that want to be
+// explicit about the existing replacing semantic.
+func TestFormatSpansBoxPlacementReplaceExplicit(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 1,
+			IsBox:        true,
+			BoxWidth:     100, BoxHeight: 50,
+			BoxPayload:   "image:./pic.png",
+			BoxPlacement: "replace",
+		},
+	}, 10)
+	want := "b 0 1 100 50 - - placement=replace image:./pic.png\n" +
+		"s 1 9 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansBoxPlacementOmittedWhenEmpty: a box with
+// BoxPlacement="" omits the placement= flag (default
+// replacing semantic).
+func TestFormatSpansBoxPlacementOmittedWhenEmpty(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 1,
+			IsBox:      true,
+			BoxWidth:   100, BoxHeight: 50,
+			BoxPayload: "image:./pic.png",
+		},
+	}, 10)
+	want := "b 0 1 100 50 - - image:./pic.png\n" +
+		"s 1 9 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansSpanAtExactlyTotalRunes: a styled span starting
 // AT totalRunes (zero remaining body) is dropped.
 func TestFormatSpansSpanAtExactlyTotalRunes(t *testing.T) {
