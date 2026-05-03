@@ -160,22 +160,67 @@ rendered layout.
 
 Fields:
 
-- `<offset>`, `<length>`: as for `s`. The body's runes in
-  `[offset, offset+length)` are replaced by the box at render
-  time.
+- `<offset>`, `<length>`: as for `s`. By default, the body's
+  runes in `[offset, offset+length)` are replaced by the box
+  at render time. The `placement=NAME` flag (below) can
+  change this to a non-replacing layout where the box is
+  anchored at `offset` without consuming runes (`length`
+  must then be 0).
 - `<width>`, `<height>`: integer pixels. Must be >= 0.
+  **`0 0` means "renderer probes":** the consumer ignores the
+  positional dimensions and uses the image's intrinsic
+  dimensions (loaded via its image cache). Producers that
+  don't know an image's size emit `0 0` and let the renderer
+  decide. Producers that need pixel-exact placement emit
+  positive values, which the renderer honors as overrides.
+  Phase 3 round 4 added this canonical sentinel; existing
+  producers continue to work unchanged.
 - `<fg>`, `<bg>`: optional, same format as `s`.
-- `<flag>...`: same as `s`.
-- `<payload>...`: optional trailing tokens preserved verbatim
-  as the box's payload string. Currently used for image
-  references: a payload starting with `image:` followed by a
-  path (e.g. `image:/path/to/img.png`) renders the image; any
-  other payload is currently ignored at render time.
+- `<flag>...`: same as `s`, plus `placement=NAME` (round 4).
+- `<payload>...`: optional trailing tokens. **First token is
+  the URL spec** (currently `image:URL`). **Subsequent
+  tokens are space-separated `key=value` parameters**
+  interpreted by the consumer (not by the parser). v1
+  recognizes:
+  - `width=N` — pixel-width override (parity with the
+    in-tree path's `width=Npx` title-attribute convention;
+    `px` suffix dropped on the wire — pure integers).
+  Future image params (`alt=ENCODED`, `caption=ENCODED`,
+  `align=NAME`, etc.) extend the payload, NOT the wire
+  format. Unknown params are silently ignored by older
+  renderers (forward-compat). Anything before the first
+  recognized URL prefix is preserved as-is for non-image
+  box uses.
+
+**`placement=NAME`** (added Phase 3 round 4):
+- Single-token namespaced value. Selects the box's layout
+  mode. v1 values:
+  - `replace` — existing semantic. The box's `length` runes
+    are replaced by the box at render time. `length` may be
+    any non-negative value. This is also the default when
+    the flag is absent.
+  - `below` — non-replacing. The box does NOT consume source
+    runes; the renderer anchors it to the LINE containing
+    `offset`, paints below the line text, and grows line
+    height by the image's height. **`length` MUST be 0** —
+    the parser rejects positive `length` combined with
+    `placement=below`. Two `placement=below b` lines may
+    share an `offset` (e.g., two images stacked at the same
+    paragraph position); the consumer paints them in
+    emission order.
+- Future placements (`above`, `center`, `right`, etc.)
+  extend the value vocabulary by way of their own Phase 3
+  rounds, not by adding new flags. The parser deliberately
+  rejects unknown values so producer mistakes surface
+  loudly.
 
 **Examples**:
 ```
 b 0 1 100 50 - - image:/path/to/img.png
-b 5 1 20 20 #ff0000           ; 20×20 red box, no image
+b 5 1 20 20 #ff0000                              ; 20×20 red box, no image
+b 12 0 0 0 - - placement=below image:./pic.png   ; image rendered below source
+b 12 0 0 0 - - placement=below image:./pic.png width=200
+b 0 1 100 50 - - placement=replace image:./pic.png  ; explicit form of the default
 ```
 
 ## Per-write ordering rules
@@ -291,8 +336,11 @@ update this spec in lockstep:
   `family=NAME` with v1-recognized value `code`. See above.
 - **Round 3 — inline rule**: ✓ landed (April 2026). New
   `<flag>` `hrule`. See above.
-- **Round 4 — slide / images**: tool-side only; protocol
-  unchanged.
+- **Round 4 — inline images**: ✓ landed (April 2026). New
+  `<flag>` `placement=NAME` on `b` directives (v1 values:
+  `replace`, `below`); canonical `0 0` W/H sentinel for
+  "renderer probes"; payload-parameter convention (`width=N`
+  recognized in v1). See above.
 - **Round 5 — block code (region)**: `begin region` /
   `end region` directives; first region primitive.
 - **Rounds 6-7 — blockquote, lists**: region kinds + parameters.

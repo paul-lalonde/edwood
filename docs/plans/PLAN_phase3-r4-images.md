@@ -60,19 +60,19 @@ the existing async cache). md2spans does no file IO.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Add `BoxPlacement string` field; Equal() includes it. Default "" = replacing semantic. | base doc § "StyleAttrs change" | String, not bool — extensible value space. |
-| [ ] Tests | Equal() with same/different BoxPlacement; default zero value | `spanstore_test.go` | — |
-| [ ] Iterate | Add field; Equal() includes it | `spanstore.go` | — |
-| [ ] Commit | — | — | `spans: add BoxPlacement field to StyleAttrs` |
+| [x] Design | Add `BoxPlacement string` field; Equal() includes it. Default "" = replacing semantic. | base doc § "StyleAttrs change" | String, not bool — extensible value space. |
+| [x] Tests | Equal() with same/different BoxPlacement; default zero value | `spanstore_test.go` | — |
+| [x] Iterate | Add field; Equal() includes it | `spanstore.go` | — |
+| [x] Commit | — | — | `spans: add BoxPlacement field to StyleAttrs` |
 
 ## Phase 3.4.2: Parser — recognize `placement=NAME` flag and `0 0` W/H
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Single-token flag with namespaced value; `placement=below` requires length=0; unknown values rejected (mirrors `family=NAME`); WIDTH=0/HEIGHT=0 already legal but newly canonical for "renderer probes" — no parser change needed there | base doc § "Wire-format change" | Mirrors round 2's `parseFamilyFlag` shape. |
-| [ ] Tests | placement=below + length=0 OK; placement=below + length>0 error; unknown placement= rejected; placement=replace explicit form OK; coexistence with bold/italic/scale/family; W=H=0 with placement=below; absent flag → BoxPlacement="" | `spanparse_test.go` | — |
-| [ ] Iterate | Add `parsePlacementFlag` helper (validFamilies-style closed set); plumb into parseBoxLine flag switch; reject length>0 when placement=below | `spanparse.go` | — |
-| [ ] Commit | — | — | `spans: parse placement=NAME flag on b directives` |
+| [x] Design | Single-token flag with namespaced value; `placement=below` requires length=0; unknown values rejected (mirrors `family=NAME`); WIDTH=0/HEIGHT=0 already legal but newly canonical for "renderer probes" — no parser change needed there | base doc § "Wire-format change" | Mirrors round 2's `parseFamilyFlag` shape. |
+| [x] Tests | placement=below + length=0 OK; placement=below + length>0 error; unknown placement= rejected; placement=replace explicit form OK; coexistence with bold/italic/scale/family; W=H=0 with placement=below; absent flag → BoxPlacement=""; payload-with-params round-trips | `spanparse_test.go` | — |
+| [x] Iterate | Add `parsePlacementFlag` helper (validFamilies-style closed set); plumb into parseBoxLine flag switch; reject length>0 when placement=below | `spanparse.go` | — |
+| [x] Commit | — | — | `spans: parse placement=NAME flag on b directives` |
 
 ## Phase 3.4.3: rich — `Style.ImageBelow` field + layout/paint
 
@@ -83,64 +83,64 @@ sub-row gets its own commit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Add `ImageBelow bool` to rich.Style; document the contract (anchored to line, paints below text, grows line height additively) | base doc § "Rendering" | One field, no behavior. |
-| [ ] Tests | DefaultStyle().ImageBelow=false; can compose with Image/ImageURL fields | `rich/style_test.go` | — |
-| [ ] Iterate | Add field + doc comment | `rich/style.go` | — |
-| [ ] Commit | — | — | `rich: add Style.ImageBelow field for non-replacing image boxes` |
+| [x] Design | Add `ImageBelow bool` to rich.Style; document the contract (anchored to line, paints below text, grows line height additively) | base doc § "Rendering" | One field, no behavior. |
+| [x] Tests | DefaultStyle().ImageBelow=false; can compose with Image/ImageURL fields | `rich/style_test.go` | — |
+| [x] Iterate | Add field + doc comment | `rich/style.go` | — |
+| [x] Commit | — | — | `rich: add Style.ImageBelow field for non-replacing image boxes` |
 
 ### 3.4.3b: Layout — line height accounts for ImageBelow boxes
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | A line containing one or more `ImageBelow` boxes has effective `Height = textHeight + sum(image_heights)`. `ImageBelow` boxes contribute zero horizontal advance. Existing inline-replacing images keep `Height = max(text, image)` semantics. | base doc § "Rendering" item 1 | The layout loop at `rich/layout.go:475-573` computes line height inline; refactor extracts the accumulator pattern. |
-| [ ] Tests | Line height with one ImageBelow box; with two stacked; without (regression); with both inline-replacing AND ImageBelow on same line; image not yet loaded uses fallback height | `rich/layout_test.go` | — |
-| [ ] Iterate | Track `imagesBelowHeight` accumulator alongside existing `actualLineHeight`; finalize line height as `actualLineHeight + imagesBelowHeight` on newline; keep horizontal-advance unchanged for ImageBelow | `rich/layout.go` | — |
-| [ ] Commit | — | — | `rich: layout grows line height to fit ImageBelow boxes` |
+| [x] Design | A line containing one or more `ImageBelow` boxes has effective `Height = textHeight + sum(image_heights)`. `ImageBelow` boxes contribute zero horizontal advance. Existing inline-replacing images keep `Height = max(text, image)` semantics. | base doc § "Rendering" item 1 | Layout loop accumulates separately; finalizes at every line-end. |
+| [x] Tests | Line height with one ImageBelow; with two stacked; reset across newlines; no horizontal advance; coexistence with inline-replacing image on same line | `rich/layout_test.go` | — |
+| [x] Iterate | Add `imagesBelowHeight` accumulator alongside existing `actualLineHeight`; ImageBelow boxes take an early-exit branch (Wid=0, append at xPos, accumulator +=); finalize line height as `actualLineHeight + imagesBelowHeight` at every close-out (newline, wrap-fits, wrap-split, end-of-loop) | `rich/layout.go` | — |
+| [x] Commit | — | — | `rich: layout grows line height to fit ImageBelow boxes` |
 
 ### 3.4.3c: Paint — render ImageBelow boxes below the line
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | A new paint phase (or extension of the image paint phase) draws each `ImageBelow` box at `(line.X, line.Y + textHeight + sum_prior_images)`, using the existing image-load pipeline | base doc § "Rendering" item 2 | Reuse `box.ImageData` + existing draw helpers. |
-| [ ] Tests | One ImageBelow paints at expected (X, Y); two stack; the source `s` text on the same line still paints; no overlap with the next line | `rich/frame_test.go` | — |
-| [ ] Iterate | Add paint logic; update phase-ordering comment | `rich/frame.go` | — |
-| [ ] Commit | — | — | `rich: paint ImageBelow boxes below the line containing their offset` |
+| [x] Design | Extension of the image paint phase: `paintLineImagesBelow` walks the line after inline-image painting and draws each ImageBelow at `(c.offset.X, line.Y + textHeight + cumulative)` via the existing `paintImageBox` helper with a synthesized Line | base doc § "Rendering" item 2 | Reuses `box.ImageData` + existing draw helpers. |
+| [x] Tests | One ImageBelow paints below text; two stack with >= imageHeight spacing; ImageBelow on second line uses that line's Y | `rich/frame_test.go` | — |
+| [x] Iterate | Add `paintLineImagesBelow` + `lineTextHeight` helper; route ImageBelow boxes out of the inline-image branch | `rich/frame.go` | — |
+| [x] Commit | — | — | `rich: paint ImageBelow boxes below the line containing their offset` |
 
 ## Phase 3.4.4: `boxStyleToRichStyle` plumbs placement + payload params
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | `BoxPlacement="below"` → `Style.ImageBelow=true`. Payload tokenizer: split on whitespace; first token `image:URL` → `Style.ImageURL`; subsequent `key=value` tokens → field overrides (v1: `width=N` → `Style.ImageWidth`). Unknown params silently ignored. | base doc § "boxStyleToRichStyle change" + § "Payload parameters" | Tokenizer is small; encapsulate in helper. |
-| [ ] Tests | Placement passthrough; URL passthrough (unchanged); width=N override; unknown params ignored; multiple params; URL containing `=` (parsed as URL only because of `image:` prefix on first token) | `wind_styled_test.go` | — |
-| [ ] Iterate | Add `applyImagePayload` helper; wire into boxStyleToRichStyle | `wind.go` | — |
-| [ ] Commit | — | — | `wind: route BoxPlacement to ImageBelow; parse payload params` |
+| [x] Design | `BoxPlacement="below"` → `Style.ImageBelow=true`. Payload tokenizer: split on whitespace; first token `image:URL` → `Style.ImageURL`; subsequent `key=value` tokens → field overrides (v1: `width=N` → `Style.ImageWidth`). Unknown params silently ignored. | base doc § "boxStyleToRichStyle change" + § "Payload parameters" | Tokenizer is small; encapsulated in helper. |
+| [x] Tests | Placement passthrough; replace-explicit no-op; URL passthrough; width=N override; unknown params ignored; multiple params; payload-width-wins-over-wire-BoxWidth; invalid width=abc ignored | `wind_styled_test.go` | — |
+| [x] Iterate | Add `applyImagePayload` helper; wire into boxStyleToRichStyle; map BoxPlacement="below" → ImageBelow | `wind.go` | — |
+| [x] Commit | — | — | `wind: route BoxPlacement to ImageBelow; parse payload params` |
 
 ## Phase 3.4.5: `initStyledMode` — basePath wiring (bug fix)
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Mirror previewcmd's basePath wiring (wind.go:2587-2595) into initStyledMode so images with relative paths resolve correctly | base doc § "Path resolution" + bug-fix note | Same class as the rounds 1/2 missing-font-load bug. |
-| [ ] Tests | initStyledMode-built rich text has basePath set to the body file's absolute dir | `wind_styled_test.go` | — |
-| [ ] Iterate | Add the option to initStyledMode | `wind.go:initStyledMode` | — |
-| [ ] Commit | — | — | `wind: initStyledMode wires basePath for relative image resolution` |
+| [x] Design | Mirror previewcmd's basePath wiring (wind.go:2587-2595) into initStyledMode so images with relative paths resolve correctly | base doc § "Path resolution" + bug-fix note | Same class as the rounds 1/2 missing-font-load bug. |
+| [x] Tests | basePath non-empty after initStyledMode; basePath is absolute form of body file's name | `wind_styled_test.go` | — |
+| [x] Iterate | Add the option to initStyledMode | `wind.go:initStyledMode` | — |
+| [x] Commit | — | — | `wind: initStyledMode wires basePath for relative image resolution` |
 
 ## Phase 3.4.6: md2spans — parser tokenizes image syntax
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Detect `![alt](url)` and `![alt](url "title")`; produce `s` (default style, source visible) + box record (length=0, W=H=0, placement=below, payload `image:URL [width=N]`) | base doc § "md2spans parser change" | Tokenizer slot before the link tokenizer. |
-| [ ] Tests | Basic image; with title; with alt empty; with `width=Npx`; image at start of paragraph; image mid-paragraph; image adjacent to link; unclosed bracket falls back to literal | `cmd/md2spans/parser_test.go` | — |
-| [ ] Iterate | Add Span.IsBox + box fields + BoxPlacement + BoxPayload; image tokenizer | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: tokenize image syntax and emit non-replacing box record` |
+| [x] Design | Detect `![alt](url)` and `![alt](url "title")`; produce a single box record (length=0, W=H=0, placement=below, payload `image:URL [width=N]`) anchored at the start of the syntax. Source markers stay visible via emit-time gap-fill (default-styled `s`). | base doc § "md2spans parser change" | Tokenizer slot before the link tokenizer. |
+| [x] Tests | Basic image; with title; with alt empty; with `width=Npx`; image mid-paragraph; multiple per paragraph; image adjacent to link; URL with slashes; malformed forms fall to literal | `cmd/md2spans/parser_test.go` | — |
+| [x] Iterate | Add Span.IsBox + box fields + BoxPlacement + BoxPayload; tryImage tokenizer + findInlineImage + parseImageWidthPx helpers | `cmd/md2spans/parser.go` | — |
+| [x] Commit | — | — | `md2spans: tokenize image syntax and emit non-replacing box record` |
 
 ## Phase 3.4.7: md2spans — emit `b` lines with `placement=below`
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | FormatSpans recognizes IsBox; emits `b OFF 0 0 0 - - placement=below image:URL [width=N]`; fillGaps skips IsBox spans | base doc § "md2spans emit change" | Watch for contiguity invariant. |
-| [ ] Tests | Single image emits both `s` (source) + `b` (placement=below); two images per paragraph; image with title `width=200px` emits `width=200` payload param; W=H=0 emitted | `cmd/md2spans/emit_test.go` | — |
-| [ ] Iterate | FormatSpans box branch; fillGaps box-aware | `cmd/md2spans/emit.go` | — |
-| [ ] Commit | — | — | `md2spans: emit placement=below b directive for inline images` |
+| [x] Design | FormatSpans branches on IsBox; emits `b OFF 0 0 0 - - placement=below image:URL [width=N]`; fillGaps preserves length-0 boxes without splitting text coverage | base doc § "md2spans emit change" | Shared style-flag formatter applies to both `s` and `b`. |
+| [x] Tests | Box at start / middle / end; with width=N param; two boxes at same offset; adjacent to styled span; explicit placement=replace round-trip; empty BoxPlacement omitted | `cmd/md2spans/emit_test.go` | — |
+| [x] Iterate | Split FormatSpans into writeSpanLine + writeBoxLine + writeStyleFlags; fillGaps length-0-box special case + IsBox/Box* field passthrough | `cmd/md2spans/emit.go` | — |
+| [x] Commit | — | — | `md2spans: emit placement=below b directive for inline images` |
 
 ## Phase 3.4.8: Spec + README
 
