@@ -146,10 +146,10 @@ sub-row gets its own commit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (doc) | — | — |
-| [ ] Tests | n/a (doc) | — | — |
-| [ ] Iterate | spans-protocol.md gains `placement=NAME` doc, the `0 0` W/H sentinel, and the payload parameter convention; md2spans README v1 scope table flips Images to ✓ with caveats | — | — |
-| [ ] Commit | — | — | `docs: spans protocol gains placement= flag, W=H=0 sentinel, payload params` |
+| [x] Design | n/a (doc) | — | — |
+| [x] Tests | n/a (doc) | — | — |
+| [x] Iterate | spans-protocol.md gains `placement=NAME` doc, the `0 0` W/H sentinel, and the payload parameter convention; md2spans README v1 scope table flips Images to ✓ with caveats | — | — |
+| [x] Commit | — | — | `docs: spans protocol gains placement= flag, W=H=0 sentinel, payload params` |
 
 ## Phase 3.4.9: Smoke test + merge prep
 
