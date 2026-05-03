@@ -1435,23 +1435,78 @@ func (f *frameImpl) paintPhaseText(c *paintCtx) {
 // placeholders (loading / error), and fixed-rectangle boxes (Phase 5).
 // Images within a scrollable block region are shifted by -hOffset;
 // fixed boxes are not (they're full-width markers).
+//
+// ImageBelow boxes (Phase 3 round 4) are routed to a separate
+// helper that paints them stacked below the line's text rather
+// than at the line's top.
 func (f *frameImpl) paintPhaseImagesAndFixedBoxes(c *paintCtx) {
 	for lineIdx, line := range c.lines {
 		if line.Y >= c.frameHeight {
 			break
 		}
 		hOff := f.hOffsetForLine(c, lineIdx)
+		// Two passes per line: first inline-replacing images and
+		// fixed boxes (existing behavior), then ImageBelow boxes
+		// which paint below the line's text.
 		for _, pb := range line.Boxes {
 			if pb.Box.IsFixedBox() && !pb.Box.Style.Image {
 				pt := image.Point{X: c.offset.X + pb.X, Y: c.offset.Y + line.Y}
 				f.drawFixedBox(c.target, pt, pb.Box, c.frameWidth, c.frameHeight, c.offset)
 				continue
 			}
-			if pb.Box.Style.Image {
+			if pb.Box.Style.Image && !pb.Box.Style.ImageBelow {
 				f.paintImageBox(c, line, pb, hOff)
 			}
 		}
+		f.paintLineImagesBelow(c, line)
 	}
+}
+
+// paintLineImagesBelow paints any ImageBelow-styled boxes on the
+// given line, stacked top-to-bottom in box-emission order. Each
+// is anchored at the line's left edge (X = c.offset.X) and at
+// Y = line.Y + textHeight + sum(prior_below_image_heights), so
+// the source `s` text on the same line stays visible above it.
+// Phase 3 round 4.
+func (f *frameImpl) paintLineImagesBelow(c *paintCtx, line Line) {
+	textHeight := lineTextHeight(line, c.frameWidth)
+	cumulativeBelow := 0
+	for _, pb := range line.Boxes {
+		if !pb.Box.Style.Image || !pb.Box.Style.ImageBelow {
+			continue
+		}
+		_, imgHeight := imageBoxDimensions(&pb.Box, c.frameWidth)
+		// Place the image at the line's left edge; the box's pb.X
+		// (the rune-anchor's X within the line) only determines
+		// stacking order, not horizontal position.
+		shifted := pb
+		shifted.X = 0
+		// Synthesize a Line whose Y is at the image's draw row so
+		// drawImageTo/paintImageBox compute the right destination
+		// without needing a separate code path.
+		anchored := line
+		anchored.Y = line.Y + textHeight + cumulativeBelow
+		f.paintImageBox(c, anchored, shifted, 0)
+		cumulativeBelow += imgHeight
+	}
+}
+
+// lineTextHeight returns the line's text-only height: total
+// Height minus the sum of any ImageBelow heights on the line.
+// Inline-replacing images contribute to text height via
+// max(text, image) per the existing rule.
+func lineTextHeight(line Line, frameWidth int) int {
+	belowSum := 0
+	for _, pb := range line.Boxes {
+		if pb.Box.Style.Image && pb.Box.Style.ImageBelow {
+			_, h := imageBoxDimensions(&pb.Box, frameWidth)
+			belowSum += h
+		}
+	}
+	if line.Height-belowSum < 0 {
+		return 0
+	}
+	return line.Height - belowSum
 }
 
 // paintImageBox draws one image-styled box: a loading placeholder, an
