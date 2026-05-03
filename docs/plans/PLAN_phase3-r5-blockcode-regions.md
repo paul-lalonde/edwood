@@ -99,28 +99,28 @@ have something to integrate with.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | For each StyleRun, look up the enclosing region via regionStore.EnclosingAt; if kind=`code`, OR Style.Block=true, Code=true, Bg=InlineCodeBg into the resulting rich.Span's style | base doc § "Bridge (wind.go)" | "Translate regions to per-rune flags at consume time" — the X-toward-Y plan. |
-| [ ] Tests | Region of kind `code` over body runes produces spans with Block/Code/Bg flags set; runes outside the region are unaffected; nested-region case (synthetic — round 5 doesn't produce nesting, but bridge must handle it for round 6+); empty region produces no spans | `wind_styled_test.go` | — |
-| [ ] Iterate | Add region-expansion logic to buildStyledContent | `wind.go` | — |
-| [ ] Commit | — | — | `wind: expand region=code into Block/Code/Bg per-rune Style flags` |
+| [x] Design | For each StyleRun, look up the enclosing region via regionStore.EnclosingAt; ancestor walk (deepest-up) ORs kind-specific flags. v1 case: `code` → Block + Code + Bg(InlineCodeBg). | base doc § "Bridge (wind.go)" | "Translate regions to per-rune flags at consume time" — the X-toward-Y plan. Ancestor walk lays groundwork for round 6+ stacked kinds. |
+| [x] Tests | Run inside a code region picks up Block+Code+Bg; outer runs untouched; nil regionStore is a no-op; empty region (Start==End) doesn't affect any run | `wind_styled_test.go` | — |
+| [x] Iterate | Add applyEnclosingRegions helper + EnclosingAt call in buildStyledContent's per-run loop | `wind.go` | Producer-responsibility contract documented: producer must emit separate s/b runs at region boundaries (md2spans satisfies naturally). |
+| [x] Commit | — | — | `wind: expand region=code into Block/Code/Bg per-rune Style flags` |
 
 ## Phase 3.5.6: md2spans — fenced-code-block parser
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | scanParagraphs detects ` ``` ` fences; paragraphRange gains `IsCodeBlock` and `CodeLang` fields (or new ranges struct); body runes between fences are the region's content; opening/closing fences stay visible (markup-stays-visible). | base doc § "md2spans Parser" | Indented code deferred. |
-| [ ] Tests | Basic ` ```\nbody\n``` `; with language hint ` ```go\n...\n``` `; multi-line body; body containing inline-code backticks (single, doesn't conflict); unclosed fence (treat as code-to-EOF, matches CommonMark); fence inside a paragraph (must follow blank-line rule) | `cmd/md2spans/parser_test.go` | — |
-| [ ] Iterate | Detect fences; emit Span with appropriate fields; design how regions are represented in the Span list (likely an additional sentinel-Span discriminator or a parallel region list — to settle here) | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: parse fenced code blocks` |
+| [x] Design | scanParagraphs detects ` ``` ` fences; paragraphRange gains IsCodeBlock + CodeBodyRuneStart/End + CodeLang; body runes (incl. trailing \\n before closing fence) are the region's content; opening/closing fences stay outside the region for emit-time default fill | base doc § "md2spans Parser" | Indented code deferred. Span gains RegionBegin/RegionEnd/RegionParams sentinels for the wire-emission layer. |
+| [x] Tests | Basic block; with language hint; multi-line body with rune counting; empty body (begin+end only); fenced block between paragraphs; unclosed fence runs to EOF | `cmd/md2spans/parser_test.go` | spansFieldEqual replaces == comparison (RegionParams is a map). |
+| [x] Iterate | Add Span sentinel fields; paragraphRange code-block fields; isFenceLine + parseOpenFence helpers; scanParagraphs in-fence state machine; parseCodeBlockParagraph emits begin/body/end | `cmd/md2spans/parser.go` | — |
+| [x] Commit | — | — | `md2spans: parse fenced code blocks` |
 
 ## Phase 3.5.7: md2spans — emit `begin region` / `end region`
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | FormatSpans emits `begin region code [lang=NAME]` before the body's `s` lines and `end region` after. Region directives slot in the wire output without breaking contiguity. | base doc § "md2spans Emit" | Mirrors row 3.4.7's writeBoxLine split — likely a new writeBeginRegionLine/writeEndRegionLine. |
-| [ ] Tests | Single fenced block emits the expected wire output; with lang hint includes `lang=NAME`; body lines have `family=code` flag; surrounding plain text emitted normally; multiple fenced blocks emit independent regions | `cmd/md2spans/emit_test.go` | — |
-| [ ] Iterate | FormatSpans branch for region begin/end | `cmd/md2spans/emit.go` | — |
-| [ ] Commit | — | — | `md2spans: emit begin/end region directives for fenced code blocks` |
+| [x] Design | FormatSpans separates region-directive sentinels from styled/box spans, anchors fillGaps to split default fills at directive offsets, merges by offset (directives emit immediately before same-offset styled spans). New writeBeginRegionLine + writeEndRegionLine. | base doc § "md2spans Emit" | Two-pointer offset-merge handles ordering; same-offset directives emit in input order (begin-before-end for empty regions). |
+| [x] Tests | Basic block; with lang param; region at start (no leading fill); region at end (no trailing fill); empty region (begin+end at same offset) | `cmd/md2spans/emit_test.go` | — |
+| [x] Iterate | uniqueDirectiveOffsets + fillGapsWithAnchors + isDefaultFill helpers; FormatSpans 2-way merge; writeBegin/EndRegionLine | `cmd/md2spans/emit.go` | — |
+| [x] Commit | — | — | `md2spans: emit begin/end region directives for fenced code blocks` |
 
 ## Phase 3.5.8: md2spans — chunker honors region boundaries
 

@@ -28,20 +28,90 @@ import (
 // Preconditions: input styled spans must be sorted by Offset and
 // non-overlapping. Out-of-bounds spans are silently clipped to
 // [0, totalRunes).
-func FormatSpans(styled []Span, totalRunes int) string {
+func FormatSpans(input []Span, totalRunes int) string {
 	if totalRunes <= 0 {
 		return ""
 	}
-	contiguous := fillGaps(styled, totalRunes)
+	// Separate region directives (sentinels) from
+	// styled/box spans. Region directives have Length=0 and
+	// don't represent rune coverage; they slot between
+	// styled spans at their offsets. Phase 3 round 5.
+	var styled []Span
+	var directives []Span
+	for _, s := range input {
+		if s.RegionBegin != "" || s.RegionEnd {
+			directives = append(directives, s)
+		} else {
+			styled = append(styled, s)
+		}
+	}
+	// Anchors: offsets where region directives sit. fillGaps
+	// splits default-fill spans at these offsets so the
+	// interleaver can slot directives in. Without anchor
+	// splits, an empty region between two default-styled
+	// regions would have nowhere to insert its begin/end.
+	anchors := uniqueDirectiveOffsets(directives)
+	contiguous := fillGapsWithAnchors(styled, totalRunes, anchors)
 	var b strings.Builder
-	for _, s := range contiguous {
+	// Merge contiguous spans and directives by offset,
+	// preserving input order among same-offset directives.
+	// Rule: a directive at offset O is emitted IMMEDIATELY
+	// before any styled span starting at offset O. (For an
+	// `end region` after a styled span ending at O, this
+	// places the end at the boundary between the closing
+	// span and the next opening — which is the correct
+	// position regardless of which "side" you frame it as.)
+	emitSpan := func(s Span) {
 		if s.IsBox {
 			writeBoxLine(&b, s)
 		} else {
 			writeSpanLine(&b, s)
 		}
 	}
+	emitDirective := func(d Span) {
+		if d.RegionBegin != "" {
+			writeBeginRegionLine(&b, d)
+		} else {
+			writeEndRegionLine(&b, d)
+		}
+	}
+	si, di := 0, 0
+	for si < len(contiguous) || di < len(directives) {
+		if di >= len(directives) {
+			emitSpan(contiguous[si])
+			si++
+			continue
+		}
+		if si >= len(contiguous) {
+			emitDirective(directives[di])
+			di++
+			continue
+		}
+		if directives[di].Offset <= contiguous[si].Offset {
+			emitDirective(directives[di])
+			di++
+		} else {
+			emitSpan(contiguous[si])
+			si++
+		}
+	}
 	return b.String()
+}
+
+// writeBeginRegionLine emits a `begin region <kind>
+// [param=value...]` directive. Phase 3 round 5.
+func writeBeginRegionLine(b *strings.Builder, s Span) {
+	fmt.Fprintf(b, "begin region %s", s.RegionBegin)
+	for k, v := range s.RegionParams {
+		fmt.Fprintf(b, " %s=%s", k, v)
+	}
+	b.WriteByte('\n')
+}
+
+// writeEndRegionLine emits an `end region` directive.
+// Phase 3 round 5.
+func writeEndRegionLine(b *strings.Builder, s Span) {
+	b.WriteString("end region\n")
 }
 
 // writeSpanLine emits one `s OFFSET LENGTH FG flags...`
@@ -110,6 +180,72 @@ func writeStyleFlags(b *strings.Builder, s Span) {
 	if s.HRule {
 		b.WriteString(" hrule")
 	}
+}
+
+// uniqueDirectiveOffsets returns a sorted, deduplicated
+// list of offsets at which region directives sit. Used by
+// FormatSpans to force splits in the default-fill output so
+// directives can slot in. Phase 3 round 5.
+func uniqueDirectiveOffsets(directives []Span) []int {
+	seen := map[int]bool{}
+	for _, d := range directives {
+		seen[d.Offset] = true
+	}
+	out := make([]int, 0, len(seen))
+	for o := range seen {
+		out = append(out, o)
+	}
+	// Insertion sort (small N typical for region anchors).
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
+// fillGapsWithAnchors is fillGaps + an extra constraint:
+// default-fill spans are SPLIT at every anchor offset so
+// directives can be interleaved at those exact points.
+// Phase 3 round 5.
+func fillGapsWithAnchors(styled []Span, totalRunes int, anchors []int) []Span {
+	contiguous := fillGaps(styled, totalRunes)
+	if len(anchors) == 0 {
+		return contiguous
+	}
+	out := make([]Span, 0, len(contiguous)+len(anchors))
+	for _, s := range contiguous {
+		// Only default-fill spans get split — they have no
+		// styled fields. Styled spans either align with
+		// anchors (parser-emitted body spans) or don't,
+		// and don't need splitting.
+		if !isDefaultFill(s) {
+			out = append(out, s)
+			continue
+		}
+		cursor := s.Offset
+		end := s.Offset + s.Length
+		for _, a := range anchors {
+			if a <= cursor || a >= end {
+				continue
+			}
+			out = append(out, Span{Offset: cursor, Length: a - cursor})
+			cursor = a
+		}
+		if cursor < end {
+			out = append(out, Span{Offset: cursor, Length: end - cursor})
+		}
+	}
+	return out
+}
+
+// isDefaultFill reports whether s is a default-styled span
+// (one that fillGaps inserts between styled spans). These
+// are the only spans that fillGapsWithAnchors splits.
+func isDefaultFill(s Span) bool {
+	return !s.IsBox && s.RegionBegin == "" && !s.RegionEnd &&
+		s.Fg == "" && !s.Bold && !s.Italic && s.Scale == 0 &&
+		s.Family == "" && !s.HRule
 }
 
 // fillGaps returns a contiguous span list covering [0, totalRunes)
