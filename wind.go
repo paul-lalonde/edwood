@@ -92,9 +92,10 @@ type Window struct {
 	previewRenderPending bool        // a render was skipped due to throttle
 	previewDebounceTimer *time.Timer // trailing-edge timer for deferred render
 
-	spanStore        *SpanStore // styled text runs (nil when no spans)
-	styledMode       bool       // true when showing span-styled text via rich.Frame
-	styledSuppressed bool       // true when user explicitly chose Plain; suppresses auto-enable
+	spanStore        *SpanStore   // styled text runs (nil when no spans)
+	regionStore      *RegionStore // sidecar region tree (nil when no regions); Phase 3 round 5
+	styledMode       bool         // true when showing span-styled text via rich.Frame
+	styledSuppressed bool         // true when user explicitly chose Plain; suppresses auto-enable
 
 	fontTables map[string]*richFontTable // cached font tables, keyed by font path
 }
@@ -2482,6 +2483,50 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 	}
 	rtOpts = append(rtOpts, WithRichTextBasePath(basePath))
 	return rtOpts
+}
+
+// applyParsedSpans applies a successfully-parsed span/region
+// write to the window's spanStore and regionStore. Called
+// from xfidspanswrite after parseSpanMessage returns.
+//
+// The spanStore is created lazily and seeded with a default
+// run covering the buffer; subsequent writes apply via
+// RegionUpdate. The regionStore is created lazily on the
+// first write that contains regions; existing regions are
+// preserved across writes (the protocol's `c` directive is
+// the explicit reset). Phase 3 round 5.
+func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*Region, bufLen int) {
+	if w.spanStore == nil {
+		w.spanStore = NewSpanStore()
+		w.spanStore.Insert(0, bufLen)
+	} else if w.spanStore.TotalLen() != bufLen {
+		w.spanStore.Clear()
+		w.spanStore.Insert(0, bufLen)
+	}
+	w.spanStore.RegionUpdate(regionStart, runs)
+
+	if len(regions) > 0 {
+		if w.regionStore == nil {
+			w.regionStore = NewRegionStore()
+		}
+		for _, r := range regions {
+			w.regionStore.Add(r)
+		}
+	}
+}
+
+// clearSpansAndRegions empties both the spanStore and the
+// regionStore. Called from xfidspanswrite on the protocol's
+// `c` (clear) directive — `c` is a full reset of the
+// window's styling state including any begin/end region
+// directives previously written. Phase 3 round 5.
+func (w *Window) clearSpansAndRegions() {
+	if w.spanStore != nil {
+		w.spanStore.Clear()
+	}
+	if w.regionStore != nil {
+		w.regionStore.Clear()
+	}
 }
 
 // exitStyledMode switches the window from styled rendering back to plain mode.

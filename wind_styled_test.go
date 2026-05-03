@@ -913,6 +913,70 @@ func TestBoxStyleToRichStylePayloadMalformedFirstToken(t *testing.T) {
 }
 
 // =========================================================================
+// regionStore wiring tests (Phase 3 round 5 row 4)
+// =========================================================================
+
+// TestWindow_RegionStoreInitiallyNil: a newly-constructed
+// window has no regionStore (nil). The store is created
+// lazily on first write that produces regions.
+func TestWindow_RegionStoreInitiallyNil(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	if w.regionStore != nil {
+		t.Errorf("new window regionStore = %v, want nil", w.regionStore)
+	}
+}
+
+// TestWindow_ApplyParsedSpansPopulatesRegionStore: when
+// applyParsedSpans is called with parsed regions, the
+// window's regionStore is created (if nil) and the regions
+// are added.
+func TestWindow_ApplyParsedSpansPopulatesRegionStore(t *testing.T) {
+	w := makeStyledWindow(t, "hello world test!")
+	r := &Region{Start: 6, End: 11, Kind: "code"}
+	w.applyParsedSpans(0, []StyleRun{{Len: 17, Style: StyleAttrs{}}}, []*Region{r}, 17)
+
+	if w.regionStore == nil {
+		t.Fatal("regionStore nil after applyParsedSpans with regions")
+	}
+	if got := w.regionStore.EnclosingAt(8); got != r {
+		t.Errorf("EnclosingAt(8) = %v, want region %v", got, r)
+	}
+}
+
+// TestWindow_ApplyParsedSpansNoRegions: applyParsedSpans
+// with no regions doesn't disturb regionStore.
+func TestWindow_ApplyParsedSpansNoRegions(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.applyParsedSpans(0, []StyleRun{{Len: 5, Style: StyleAttrs{}}}, nil, 5)
+
+	if w.regionStore != nil {
+		if got := w.regionStore.EnclosingAt(2); got != nil {
+			t.Errorf("EnclosingAt(2) = %v, want nil (no regions added)", got)
+		}
+	}
+}
+
+// TestWindow_ClearSpansAndRegions: the helper clears both
+// stores. Used by xfidspanswrite on the protocol's `c`
+// directive.
+func TestWindow_ClearSpansAndRegions(t *testing.T) {
+	w := makeStyledWindow(t, "hello world")
+	r := &Region{Start: 0, End: 5, Kind: "code"}
+	w.applyParsedSpans(0, []StyleRun{{Len: 11, Style: StyleAttrs{}}}, []*Region{r}, 11)
+
+	w.clearSpansAndRegions()
+
+	if w.spanStore != nil && w.spanStore.TotalLen() != 0 {
+		t.Errorf("after clear, spanStore.TotalLen = %d, want 0", w.spanStore.TotalLen())
+	}
+	if w.regionStore != nil {
+		if got := w.regionStore.EnclosingAt(2); got != nil {
+			t.Errorf("after clear, EnclosingAt(2) = %v, want nil", got)
+		}
+	}
+}
+
+// =========================================================================
 // buildStyledContent with boxes tests
 // =========================================================================
 

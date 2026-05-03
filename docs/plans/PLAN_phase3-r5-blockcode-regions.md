@@ -81,19 +81,19 @@ have something to integrate with.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | New directive prefixes `begin` and `end`; parseSpanMessage returns regions alongside runs; balanced begin/end within a write; kind validation; param parsing (key=value, malformed silently ignored) | base doc § "Wire-format change" + "Per-write rules" | Region directives don't advance the contiguity cursor. |
-| [ ] Tests | Balanced round-trip; unbalanced begin error; unbalanced end error; unknown kind error; valid kinds (`code`); params (`lang=go`); whitespace handling; region directives don't advance cursor; mixed s/b and region directives in one write | `spanparse_test.go` | — |
-| [ ] Iterate | Add region parsing to parseSpanMessage; introduce parseBeginRegionLine / parseEndRegionLine helpers; validPlacements-style validKinds map | `spanparse.go` | — |
-| [ ] Commit | — | — | `spans: parse begin/end region directives` |
+| [x] Design | New directive prefixes `begin` and `end`; parseSpanMessage returns regions alongside runs; balanced begin/end within a write; kind validation; param parsing (key=value, malformed silently ignored) | base doc § "Wire-format change" + "Per-write rules" | Region directives don't advance the contiguity cursor. |
+| [x] Tests | Balanced round-trip with span content; lang=NAME param; cursor invariant under wrapped spans; unmatched begin error; unmatched end error; unknown kind / missing kind / future kind error; malformed param silently ignored; nested begin/end; empty region (Start==End) | `spanparse_test.go` | — |
+| [x] Iterate | Add region parsing to parseSpanMessage; parseBeginRegion / parseEndRegion helpers; validRegionKinds closed-set map; signature change adds `regions []*Region` return | `spanparse.go` | xfid.go's caller updated with `_` placeholder until row 3.5.4 wires regionStore. |
+| [x] Commit | — | — | `spans: parse begin/end region directives` |
 
 ## Phase 3.5.4: Consumer integration — Window.regionStore
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Window gains regionStore field; xfidspanswrite routes parser-returned regions into regionStore; `c` clears both stores | base doc § "Storage (xfid.go)" | — |
-| [ ] Tests | After a write with regions, regionStore contains them; after a `c` write, regionStore is empty | `wind_styled_test.go` | — |
-| [ ] Iterate | Add the field, wire it through xfidspanswrite, init it in Window construction | `wind.go`, `xfid.go` | — |
-| [ ] Commit | — | — | `wind: add regionStore for spans-protocol regions` |
+| [x] Design | Window gains regionStore field; xfidspanswrite routes parser-returned regions into regionStore via applyParsedSpans helper; `c` clears both stores via clearSpansAndRegions; text.go's Insert/Delete propagate to regionStore alongside spanStore | base doc § "Storage (xfid.go)" | applyParsedSpans / clearSpansAndRegions extracted as testable helpers. |
+| [x] Tests | New window has nil regionStore; applyParsedSpans with regions populates it; applyParsedSpans without regions doesn't disturb it; clearSpansAndRegions empties both | `wind_styled_test.go` | — |
+| [x] Iterate | Add regionStore field; applyParsedSpans + clearSpansAndRegions helpers; xfidspanswrite uses both helpers; text.go propagates Insert/Delete to regionStore | `wind.go`, `xfid.go`, `text.go` | — |
+| [x] Commit | — | — | `wind: add regionStore for spans-protocol regions` |
 
 ## Phase 3.5.5: Bridge — buildStyledContent expands code regions
 
