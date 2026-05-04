@@ -635,6 +635,79 @@ func TestLayoutListIndent(t *testing.T) {
 	})
 }
 
+// TestLayoutNestedListViaSourceWhitespace pins the
+// Phase 3 round 7.x nesting model: each list item is its
+// own region (no nesting in the wire), all items have
+// ListIndent=1, and the layout applies one ListIndent
+// Width of line indent uniformly. The visual nesting
+// comes from the SOURCE LEADING WHITESPACE that the
+// markup-stays-visible stance preserves.
+//
+// For depth-N item with `2*(N-1)` source leading spaces
+// (mock font 10px wide, ListIndentWidth=20):
+//
+//	depth 1 (`- a`)         marker at column 20
+//	depth 2 (`  - b`)       marker at column 40 (20 indent + 20 source)
+//	depth 3 (`    - c`)     marker at column 60 (20 indent + 40 source)
+func TestLayoutNestedListViaSourceWhitespace(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	cases := []struct {
+		name    string
+		content Content
+		want    int
+	}{
+		{
+			"depth-1 (no source whitespace)",
+			Content{
+				{Text: "-", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+				{Text: " a", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+			},
+			20,
+		},
+		{
+			"depth-2 (2 source spaces)",
+			Content{
+				{Text: "  ", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+				{Text: "-", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+				{Text: " b", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+			},
+			40,
+		},
+		{
+			"depth-3 (4 source spaces)",
+			Content{
+				{Text: "    ", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+				{Text: "-", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+				{Text: " c", Style: Style{ListItem: true, ListIndent: 1, Scale: 1.0}},
+			},
+			60,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			boxes := contentToBoxes(tc.content)
+			lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+			if len(lines) != 1 {
+				t.Fatalf("expected 1 line, got %d", len(lines))
+			}
+			// Find the `-` marker box.
+			var dashX int = -1
+			for _, b := range lines[0].Boxes {
+				if string(b.Box.Text) == "-" {
+					dashX = b.X
+					break
+				}
+			}
+			if dashX != tc.want {
+				t.Errorf("`-` X = %d, want %d", dashX, tc.want)
+			}
+		})
+	}
+}
+
 // TestLayoutListInsideBlockquoteShiftsAtRegionEntry: when
 // a list item appears inside a blockquote, the layout
 // shifts xPos by ListIndent × ListIndentWidth at the
