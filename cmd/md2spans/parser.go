@@ -170,33 +170,43 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 				s.Offset, len(mapping), s.RegionBegin))
 		}
 		s.Offset = mapping[s.Offset]
-		// For nested blockquote `begin region` directives,
-		// snap the offset to the start of the original line
-		// that the inner blockquote opens on. Without this,
-		// the inner blockquote anchors AFTER the outer
-		// marker on its line (e.g., for `>>`, after the
-		// first `>`), leaving the line's first box inside
-		// the outer blockquote ONLY (BlockquoteDepth=1).
-		// The layout's first-box-determines-indent rule
-		// then produces the outer's indent for the line
-		// instead of the inner's. Snapping makes the inner
-		// blockquote claim the line from rune 0, so the
-		// first box has depth=2 and the line indents to
-		// match. Phase 3 round 6.
-		//
-		// Snap is specific to RegionBegin=="blockquote".
-		// Other inner kinds (e.g., a code region inside a
-		// blockquote) anchor at body-start positions
-		// (after the fence's \n), which are correct as-is —
-		// snapping those would put the body span at the
-		// wrong position.
-		if s.RegionBegin == "blockquote" {
+		// Some region kinds need their begin offset snapped
+		// to the source line's start so the line's first box
+		// belongs to the deepest region (and the layout's
+		// first-box-determines-indent rule produces the
+		// correct per-line indent). Membership is in
+		// kindsAnchorAtLineStart. Phase 3 round 6 added
+		// "blockquote"; round 7 will add "listitem".
+		// Other kinds (e.g., "code", whose body anchors
+		// after the opener's `\n`, ALREADY at a line start)
+		// must NOT be snapped — snapping would move the
+		// begin onto the fence opener line.
+		if kindsAnchorAtLineStart[s.RegionBegin] {
 			s.Offset = snapToLineStart(s.Offset, lineStarts)
 		}
 		out = append(out, s)
 	}
 	out = append(out, end)
 	return out
+}
+
+// kindsAnchorAtLineStart lists region kinds whose begin
+// directive must be snapped to the source line's start
+// when produced by recursive parsing. The line's first
+// box must belong to the deepest region of these kinds so
+// the layout's first-box-determines-indent rule indents
+// the line correctly.
+//
+// Member criteria: the kind covers contiguous source
+// LINES (column 0 to end of line), not just a sub-range
+// within a line. "blockquote" qualifies (round 6).
+// "listitem" will qualify (round 7). "code" does NOT —
+// its body anchors AFTER the opener fence's `\n`, which
+// is already a line start; snapping a code begin would
+// move it onto the fence-opener line, mis-anchoring the
+// region.
+var kindsAnchorAtLineStart = map[string]bool{
+	"blockquote": true,
 }
 
 // snapToLineStart returns the largest line-start offset in

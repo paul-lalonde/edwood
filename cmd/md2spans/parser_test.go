@@ -643,6 +643,53 @@ func TestParseBlockquoteNestedInnerBeginAtLineStart(t *testing.T) {
 	}
 }
 
+// TestParseCodeBlockBeginNotSnapped pins the negative
+// invariant for the round-6.5 line-anchor registry: a
+// `code` region's begin offset is NOT snapped to the
+// source line's start, because the body of a fenced code
+// block begins AFTER the opening fence's `\n`, not at
+// the fence line's column 0. Snapping would put the begin
+// directive on the fence line (visually anchored to the
+// “ ``` “ markup) and the body span would render with
+// the wrong starting position.
+//
+// Source:
+//
+//	> ```           // outer blockquote line 1; fence opener
+//	> body
+//	> ```           // closer
+//
+// After the outer-blockquote strip, the inner content has
+// a fence at line start. The recursive Parse emits a
+// `code` region begin at the body-start rune (after the
+// opener line's `\n`), which IS already a line-start in
+// the inner stripped source. The blockquote-snap logic
+// must NOT also snap the code begin (no-op there), but
+// more importantly must not snap a code begin that is mid-
+// line in the future. Phase 3 round 6.5.
+func TestParseCodeBlockBeginNotSnapped(t *testing.T) {
+	src := "> ```\n> body\n> ```"
+	got := Parse(src)
+	var codeBeginOffset int
+	var foundCodeBegin bool
+	for _, s := range got {
+		if s.RegionBegin == "code" {
+			foundCodeBegin = true
+			codeBeginOffset = s.Offset
+		}
+	}
+	if !foundCodeBegin {
+		t.Fatalf("no code region begin emitted; spans: %+v", got)
+	}
+	// The code body begins after the opener line's `\n` —
+	// in the original source that is rune 6 (after "> ```\n").
+	// The blockquote-snap path would snap it to rune 0 (line
+	// 1 start), which would be wrong.
+	if codeBeginOffset == 0 {
+		t.Errorf("code begin offset = 0; the line-start snap accidentally fired on the code kind")
+	}
+}
+
 // TestParseBlockquoteUnclosedFenceInside reproduces a
 // smoke-test crash. While typing, a user can produce a
 // state where a nested blockquote contains an UNCLOSED
