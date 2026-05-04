@@ -276,6 +276,83 @@ func TestRegionStore_Clear(t *testing.T) {
 }
 
 // =========================================================================
+// RegionStore — BoundariesIn (Phase 3 round 6)
+// =========================================================================
+
+func TestRegionStore_BoundariesIn_Empty(t *testing.T) {
+	s := NewRegionStore()
+	if got := s.BoundariesIn(0, 100); len(got) != 0 {
+		t.Errorf("empty store: BoundariesIn = %v, want empty", got)
+	}
+}
+
+func TestRegionStore_BoundariesIn_SingleRegion(t *testing.T) {
+	s := NewRegionStore()
+	s.Add(&Region{Start: 5, End: 15, Kind: "code"})
+
+	// Range that contains the whole region: both boundaries.
+	if got := s.BoundariesIn(0, 20); !intsEqual(got, []int{5, 15}) {
+		t.Errorf("contains region: got %v, want [5, 15]", got)
+	}
+	// Range that contains only the Start boundary.
+	if got := s.BoundariesIn(0, 10); !intsEqual(got, []int{5}) {
+		t.Errorf("Start only: got %v, want [5]", got)
+	}
+	// Range that contains only the End boundary.
+	if got := s.BoundariesIn(10, 20); !intsEqual(got, []int{15}) {
+		t.Errorf("End only: got %v, want [15]", got)
+	}
+	// Range that misses both: none.
+	if got := s.BoundariesIn(20, 30); len(got) != 0 {
+		t.Errorf("disjoint: got %v, want empty", got)
+	}
+}
+
+func TestRegionStore_BoundariesIn_Nested(t *testing.T) {
+	s := NewRegionStore()
+	s.Add(&Region{Start: 0, End: 100, Kind: "blockquote"})
+	s.Add(&Region{Start: 20, End: 50, Kind: "code"})
+
+	// Range that spans both: 4 boundaries (outer Start at 0
+	// excluded — exclusive; outer End at 100 excluded too).
+	got := s.BoundariesIn(0, 100)
+	want := []int{20, 50}
+	if !intsEqual(got, want) {
+		t.Errorf("nested: got %v, want %v", got, want)
+	}
+	// Wider range catches the outer's boundaries too.
+	got = s.BoundariesIn(-5, 105)
+	want = []int{0, 20, 50, 100}
+	if !intsEqual(got, want) {
+		t.Errorf("wider: got %v, want %v", got, want)
+	}
+}
+
+func TestRegionStore_BoundariesIn_DedupesSharedOffsets(t *testing.T) {
+	s := NewRegionStore()
+	// Two regions that share a boundary at 10 (one ends, other begins).
+	s.Add(&Region{Start: 0, End: 10, Kind: "code"})
+	s.Add(&Region{Start: 10, End: 20, Kind: "code"})
+	got := s.BoundariesIn(-1, 21)
+	want := []int{0, 10, 20}
+	if !intsEqual(got, want) {
+		t.Errorf("shared boundary: got %v, want %v", got, want)
+	}
+}
+
+func intsEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// =========================================================================
 // RegionStore — Insert (body edit shifts offsets)
 // =========================================================================
 
@@ -452,5 +529,61 @@ func TestRegionStore_DeleteDropsChildKeepsParent(t *testing.T) {
 	// EnclosingAt at the former-child range now returns parent.
 	if got := s.EnclosingAt(35); got != parent {
 		t.Errorf("EnclosingAt(35) = %v, want parent (child was dropped)", got)
+	}
+}
+
+// TestRegionStore_AddPanicsOnPartialOverlap pins the
+// producer-bug guardrail added in Phase 3 round 6. Partial
+// overlap (two regions that overlap without one containing
+// the other) is illegal; Add panics rather than silently
+// corrupting the forest.
+func TestRegionStore_AddPanicsOnPartialOverlap(t *testing.T) {
+	cases := []struct {
+		name     string
+		first    *Region
+		second   *Region
+	}{
+		{
+			"second-overlaps-end-of-first",
+			&Region{Start: 0, End: 20, Kind: "code"},
+			&Region{Start: 10, End: 30, Kind: "blockquote"},
+		},
+		{
+			"second-overlaps-start-of-first",
+			&Region{Start: 10, End: 30, Kind: "code"},
+			&Region{Start: 0, End: 20, Kind: "blockquote"},
+		},
+		{
+			"second-partially-overlaps-nested-child",
+			&Region{Start: 0, End: 100, Kind: "blockquote"},
+			// Add a child first, then a sibling that
+			// partially overlaps the child.
+			nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewRegionStore()
+			s.Add(c.first)
+			if c.second == nil {
+				// Special case: nested partial overlap.
+				child := &Region{Start: 10, End: 50, Kind: "code"}
+				s.Add(child)
+				bad := &Region{Start: 30, End: 70, Kind: "code"}
+				defer func() {
+					if r := recover(); r == nil {
+						t.Fatalf("Add did not panic on nested partial overlap")
+					}
+				}()
+				s.Add(bad)
+				return
+			}
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("Add did not panic on partial overlap")
+				}
+			}()
+			s.Add(c.second)
+		})
 	}
 }

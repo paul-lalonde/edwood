@@ -1061,6 +1061,145 @@ func TestBuildStyledContent_EmptyRegionDoesNotAffectRuns(t *testing.T) {
 	}
 }
 
+// --- Blockquote region expansion (Phase 3 round 6) -----------------
+
+// TestBuildStyledContent_RunInsideBlockquoteRegion: a
+// StyleRun inside a blockquote region produces a span
+// with Style.Blockquote=true and BlockquoteDepth=1.
+func TestBuildStyledContent_RunInsideBlockquoteRegion(t *testing.T) {
+	w := makeStyledWindow(t, "before quote after") // 18 runes
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 7, Style: StyleAttrs{}},
+		{Len: 5, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+	}, []*Region{{Start: 7, End: 12, Kind: "blockquote"}}, 18)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	if !mid.Style.Blockquote {
+		t.Error("middle span should have Style.Blockquote=true (inside blockquote region)")
+	}
+	if mid.Style.BlockquoteDepth != 1 {
+		t.Errorf("BlockquoteDepth = %d, want 1", mid.Style.BlockquoteDepth)
+	}
+}
+
+// TestBuildStyledContent_NestedBlockquoteRegions: two
+// nested blockquote regions produce BlockquoteDepth=2 on
+// the inner runes. This is the canonical test for round
+// 5's outermost-first walk-order fix combined with round
+// 6's depth counting.
+func TestBuildStyledContent_NestedBlockquoteRegions(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij") // 10 runes
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 3, Style: StyleAttrs{}},
+		{Len: 4, Style: StyleAttrs{}},
+		{Len: 3, Style: StyleAttrs{}},
+	}, []*Region{
+		{Start: 0, End: 10, Kind: "blockquote"}, // outer
+		{Start: 3, End: 7, Kind: "blockquote"},  // inner
+	}, 10)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	// Outer-only spans: depth=1.
+	if content[0].Style.BlockquoteDepth != 1 {
+		t.Errorf("first span: BlockquoteDepth = %d, want 1 (outer only)",
+			content[0].Style.BlockquoteDepth)
+	}
+	if content[2].Style.BlockquoteDepth != 1 {
+		t.Errorf("last span: BlockquoteDepth = %d, want 1 (outer only)",
+			content[2].Style.BlockquoteDepth)
+	}
+	// Inner span: depth=2 (both ancestors counted).
+	if content[1].Style.BlockquoteDepth != 2 {
+		t.Errorf("middle span: BlockquoteDepth = %d, want 2 (outer+inner)",
+			content[1].Style.BlockquoteDepth)
+	}
+	if !content[1].Style.Blockquote {
+		t.Error("middle span: Blockquote should be true")
+	}
+}
+
+// TestBuildStyledContent_TripleNestedBlockquote: depth
+// counting goes past 2 cleanly.
+func TestBuildStyledContent_TripleNestedBlockquote(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 10, Style: StyleAttrs{}},
+	}, []*Region{
+		{Start: 0, End: 10, Kind: "blockquote"},
+		{Start: 2, End: 8, Kind: "blockquote"},
+		{Start: 4, End: 6, Kind: "blockquote"},
+	}, 10)
+
+	// Force a span split exactly at offsets that happen to
+	// coincide with region boundaries; in practice md2spans
+	// produces such splits via family/Style differences.
+	// Here we model the post-fillGaps result by hand.
+	w.spanStore.Clear()
+	w.spanStore.Insert(0, 10)
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 2, Style: StyleAttrs{}}, // [0,2): outer only
+		{Len: 2, Style: StyleAttrs{}}, // [2,4): outer+mid
+		{Len: 2, Style: StyleAttrs{}}, // [4,6): all three
+		{Len: 2, Style: StyleAttrs{}}, // [6,8): outer+mid
+		{Len: 2, Style: StyleAttrs{}}, // [8,10): outer only
+	})
+
+	content := w.buildStyledContent()
+	if len(content) < 5 {
+		t.Fatalf("got %d spans, want >= 5", len(content))
+	}
+	wantDepths := []int{1, 2, 3, 2, 1}
+	for i, want := range wantDepths {
+		if content[i].Style.BlockquoteDepth != want {
+			t.Errorf("span[%d] BlockquoteDepth = %d, want %d",
+				i, content[i].Style.BlockquoteDepth, want)
+		}
+	}
+}
+
+// TestBuildStyledContent_CodeInsideBlockquote: cross-kind
+// nesting — a code region inside a blockquote region
+// produces a span with BOTH Block/Code/Bg AND
+// Blockquote/BlockquoteDepth=1.
+func TestBuildStyledContent_CodeInsideBlockquote(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.spanStore = NewSpanStore()
+	w.spanStore.Insert(0, 10)
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 3, Style: StyleAttrs{}},
+		{Len: 4, Style: StyleAttrs{Family: "code"}},
+		{Len: 3, Style: StyleAttrs{}},
+	})
+	w.regionStore = NewRegionStore()
+	w.regionStore.Add(&Region{Start: 0, End: 10, Kind: "blockquote"})
+	w.regionStore.Add(&Region{Start: 3, End: 7, Kind: "code"})
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	// Code flags (deepest):
+	if !mid.Style.Block || !mid.Style.Code || mid.Style.Bg == nil {
+		t.Errorf("middle span should have Block+Code+Bg from code region; got %+v", mid.Style)
+	}
+	// Blockquote flags (outer):
+	if !mid.Style.Blockquote {
+		t.Error("middle span should have Blockquote=true")
+	}
+	if mid.Style.BlockquoteDepth != 1 {
+		t.Errorf("BlockquoteDepth = %d, want 1", mid.Style.BlockquoteDepth)
+	}
+}
+
 // TestBuildStyledContentImageBelowBox covers the Phase 3
 // round 4 contract (post-pivot): an IsBox+placement=below
 // run covers the source markdown runes [offset,

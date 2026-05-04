@@ -76,6 +76,8 @@ func Parse(src string) []Span {
 	var spans []Span
 	for _, p := range scanParagraphs(src) {
 		switch {
+		case p.IsBlockquote:
+			spans = append(spans, parseBlockquoteRange(src, p)...)
 		case p.IsCodeBlock:
 			spans = append(spans, parseCodeBlockParagraph(src, p)...)
 		case p.IsHRule:
@@ -87,6 +89,174 @@ func Parse(src string) []Span {
 		}
 	}
 	return spans
+}
+
+// parseBlockquoteRange emits the spans for a Markdown
+// blockquote group (`>` lines) — a `begin region
+// blockquote` sentinel at the group's start, a recursive
+// Parse of the inner content (with `>` markers stripped)
+// re-anchored to the original body's rune offsets, and an
+// `end region` sentinel at the group's end.
+//
+// Nested blockquotes (`>>` or `> > `) work via recursion:
+// stripping the OUTER `>` leaves the inner content with
+// its own `>` markers intact; the recursive Parse call
+// detects another blockquote group there and emits another
+// nested begin/end pair.
+//
+// Headings, fenced code blocks, HRules etc. inside a
+// blockquote work the same way — the recursive Parse call
+// dispatches to the appropriate handler. Phase 3 round 6.
+func parseBlockquoteRange(src string, p paragraphRange) []Span {
+	stripped, mapping, lineStarts := stripBlockquoteSource(src, p)
+	begin := Span{
+		Offset:      p.RuneStart,
+		Length:      0,
+		RegionBegin: "blockquote",
+	}
+	groupRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
+	end := Span{
+		Offset:    groupRuneEnd,
+		Length:    0,
+		RegionEnd: true,
+	}
+	out := []Span{begin}
+	for _, s := range Parse(stripped) {
+		// Recursive Parse must return offsets within the
+		// stripped source's rune range. mapping has length
+		// stripped_rune_count + 1; an offset past the end
+		// indicates a sub-parser arithmetic bug (e.g., the
+		// EOF-fence opener that originally added 1 for a
+		// trailing \n that wasn't there). Assert here so
+		// the failure surfaces with context instead of as
+		// a generic mapping panic.
+		if s.Offset >= len(mapping) {
+			panic(fmt.Sprintf("parseBlockquoteRange: subspan offset %d past stripped end (mapping length %d, kind %q)",
+				s.Offset, len(mapping), s.RegionBegin))
+		}
+		s.Offset = mapping[s.Offset]
+		// For nested blockquote `begin region` directives,
+		// snap the offset to the start of the original line
+		// that the inner blockquote opens on. Without this,
+		// the inner blockquote anchors AFTER the outer
+		// marker on its line (e.g., for `>>`, after the
+		// first `>`), leaving the line's first box inside
+		// the outer blockquote ONLY (BlockquoteDepth=1).
+		// The layout's first-box-determines-indent rule
+		// then produces the outer's indent for the line
+		// instead of the inner's. Snapping makes the inner
+		// blockquote claim the line from rune 0, so the
+		// first box has depth=2 and the line indents to
+		// match. Phase 3 round 6.
+		//
+		// Snap is specific to RegionBegin=="blockquote".
+		// Other inner kinds (e.g., a code region inside a
+		// blockquote) anchor at body-start positions
+		// (after the fence's \n), which are correct as-is —
+		// snapping those would put the body span at the
+		// wrong position.
+		if s.RegionBegin == "blockquote" {
+			s.Offset = snapToLineStart(s.Offset, lineStarts)
+		}
+		out = append(out, s)
+	}
+	out = append(out, end)
+	return out
+}
+
+// snapToLineStart returns the largest line-start offset in
+// `lineStarts` that is <= offset. lineStarts is the sorted
+// slice of original-rune-positions where each line of the
+// blockquote group begins. Used by parseBlockquoteRange to
+// snap inner blockquote begin directives to the original
+// line's start.
+func snapToLineStart(offset int, lineStarts []int) int {
+	snapped := offset
+	for _, ls := range lineStarts {
+		if ls > offset {
+			break
+		}
+		snapped = ls
+	}
+	return snapped
+}
+
+// stripBlockquoteSource builds the inner source for a
+// blockquote group: each line in [ByteStart, ByteEnd) has
+// its leading `>` (with optional space after) removed.
+//
+// Returns: (stripped source, mapping, lineStarts).
+//
+// `mapping` is indexed by stripped rune position and gives
+// the corresponding original rune position; its length is
+// one past the stripped content's rune count (so
+// `mapping[rune_count]` gives the position just past the
+// last rune, useful for end-of-region offsets).
+//
+// `lineStarts` is the sorted list of original rune positions
+// where each line of the group begins (i.e., the rune just
+// after the previous line's \n, or p.RuneStart for line 1).
+// Used by parseBlockquoteRange to snap nested blockquote
+// `begin region` directives to the line start.
+//
+// Per CommonMark: a blockquote line starts with `>`
+// optionally followed by a single space; the leading
+// content (including any subsequent text) is the line's
+// inner content. v1 of round 6 strictly requires `>` at
+// column 0; CommonMark's lazy continuation and 1-3 leading
+// spaces are deferred.
+func stripBlockquoteSource(src string, p paragraphRange) (string, []int, []int) {
+	var b strings.Builder
+	mapping := make([]int, 0, p.ByteEnd-p.ByteStart) // upper bound
+	var lineStarts []int
+
+	// Walk the group line by line, stripping the leading
+	// `>` (and optional space). Track the original rune
+	// position per stripped rune so emitted span offsets
+	// can be re-anchored.
+	lineStart := p.ByteStart
+	origRune := p.RuneStart
+	for lineStart < p.ByteEnd {
+		lineStarts = append(lineStarts, origRune)
+		// Find the end of this line.
+		lineEnd := lineStart
+		for lineEnd < p.ByteEnd && src[lineEnd] != '\n' {
+			lineEnd++
+		}
+		hasNewline := lineEnd < p.ByteEnd
+		// Skip the leading `>` (always present for blockquote
+		// lines, by construction in scanParagraphs).
+		inner := lineStart
+		if inner < lineEnd && src[inner] == '>' {
+			origRune++ // skip the `>` rune
+			inner++
+		}
+		if inner < lineEnd && src[inner] == ' ' {
+			origRune++ // skip the optional space rune
+			inner++
+		}
+		// Emit the inner content, building the mapping.
+		for i := inner; i < lineEnd; {
+			r, size := utf8.DecodeRuneInString(src[i:])
+			b.WriteRune(r)
+			mapping = append(mapping, origRune)
+			origRune++
+			i += size
+		}
+		// Emit the trailing newline if present.
+		if hasNewline {
+			b.WriteByte('\n')
+			mapping = append(mapping, origRune)
+			origRune++
+			lineStart = lineEnd + 1
+		} else {
+			lineStart = lineEnd
+		}
+	}
+	// Append a final mapping entry for end-of-content (the
+	// position just past the last rune).
+	mapping = append(mapping, origRune)
+	return b.String(), mapping, lineStarts
 }
 
 // parseCodeBlockParagraph emits the spans for a fenced code
@@ -317,9 +487,17 @@ type paragraphRange struct {
 	// the optional language hint from the info string after
 	// the opening fence (e.g., "go", "python"); empty if
 	// absent. Phase 3 round 5.
-	IsCodeBlock      bool
+	IsCodeBlock                        bool
 	CodeBodyRuneStart, CodeBodyRuneEnd int
-	CodeLang         string
+	CodeLang                           string
+	// IsBlockquote is true for `>`-prefixed line groups
+	// (Phase 3 round 6). The group's bounds [ByteStart,
+	// ByteEnd) cover all consecutive blockquote lines;
+	// parseBlockquoteRange strips the `> ` markers and
+	// recursively calls Parse on the inner content, so
+	// nested blockquotes (`>>` or `> > `), headings inside,
+	// fenced code inside, etc. all work via recursion.
+	IsBlockquote bool
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -445,12 +623,37 @@ func scanParagraphs(src string) []paragraphRange {
 	fenceLang := ""
 	fenceOpenLen := 0
 
+	// inQuote: true while we're inside a blockquote group
+	// (consecutive `>` lines). bqStartByte / bqStartRune /
+	// bqEndByte: the bounds of the current group.
+	// Phase 3 round 6.
+	inQuote := false
+	bqStartByte := 0
+	bqStartRune := 0
+	bqEndByte := 0
+
 	commit := func(byteEnd int) {
 		if inParagraph {
 			cur.ByteEnd = byteEnd
 			out = append(out, cur)
 			inParagraph = false
 		}
+	}
+
+	// emitBlockquote closes the current blockquote group
+	// (if any) and emits a paragraphRange for it. Phase 3
+	// round 6.
+	emitBlockquote := func() {
+		if !inQuote {
+			return
+		}
+		out = append(out, paragraphRange{
+			ByteStart:    bqStartByte,
+			ByteEnd:      bqEndByte,
+			RuneStart:    bqStartRune,
+			IsBlockquote: true,
+		})
+		inQuote = false
 	}
 
 	// emitFencedBlock builds a paragraphRange for the
@@ -484,17 +687,42 @@ func scanParagraphs(src string) []paragraphRange {
 			}
 			return
 		}
+		// Blockquote line check (Phase 3 round 6): a line
+		// starting with `>` (at column 0) joins or starts a
+		// blockquote group. Inside a group, all line types
+		// are deferred to the recursive Parse call in
+		// parseBlockquoteRange — scanParagraphs at this
+		// level just bounds the group. A blank line or a
+		// non-`>` line ends the group.
+		if isBlockquoteLine(src, lineStart, lineEnd) {
+			if !inQuote {
+				commit(lineStart)
+				inQuote = true
+				bqStartByte = lineStart
+				bqStartRune = lineRuneStart
+			}
+			bqEndByte = lineEnd
+			return
+		}
+		if inQuote {
+			emitBlockquote()
+			// Fall through to handle the current line as a
+			// regular paragraph / heading / etc.
+		}
 		// Open a new fenced block when this line is a fence.
 		if lang, openLen, ok := parseOpenFence(src, lineStart, lineEnd); ok {
 			commit(lineStart)
 			inFence = true
-			fenceStartByte = lineEnd + 1 // skip the \n
-			// Body's rune-start = next line's rune-start. We
-			// don't know yet exactly which rune that is until
-			// the outer loop crosses the \n. Compute as
-			// (current line's rune-start) + (rune count from
-			// lineStart to lineEnd) + 1 (the \n).
-			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd]) + 1
+			// Body starts just after the opener's terminating
+			// `\n`. If the opener is the last line of input
+			// with no trailing `\n` (unclosed fence at EOF),
+			// the body is empty and starts at lineEnd itself.
+			fenceStartByte = lineEnd
+			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd])
+			if lineEnd < len(src) && src[lineEnd] == '\n' {
+				fenceStartByte++
+				fenceStartRune++
+			}
 			fenceLang = lang
 			fenceOpenLen = openLen
 			return
@@ -572,7 +800,22 @@ func scanParagraphs(src string) []paragraphRange {
 	if inFence {
 		emitFencedBlock(len(src), runePos)
 	}
+	// Open blockquote at EOF: close it.
+	if inQuote {
+		emitBlockquote()
+	}
 	return out
+}
+
+// isBlockquoteLine reports whether [start, end) is a
+// blockquote-marker line — `>` at column 0 (no leading
+// whitespace; v1 of round 6 doesn't accept the
+// CommonMark-allowed 1-3 leading spaces). Phase 3 round 6.
+func isBlockquoteLine(src string, start, end int) bool {
+	if start >= end {
+		return false
+	}
+	return src[start] == '>'
 }
 
 // fenceLineLen reports the number of leading backticks on

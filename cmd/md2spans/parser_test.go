@@ -486,6 +486,219 @@ func TestParseFencedCodeUnclosed(t *testing.T) {
 	}
 }
 
+// --- Blockquote tests (Phase 3 round 6) --------------------------------
+
+// TestParseBlockquoteSingleLine: a single `> a` line emits
+// the begin/end region pair around the body content.
+func TestParseBlockquoteSingleLine(t *testing.T) {
+	src := "> a quote"
+	// Runes: > ' ' a ' ' q u o t e
+	//        0  1  2  3  4 5 6 7 8  (9 total)
+	got := Parse(src)
+	if len(got) != 2 {
+		t.Fatalf("got %d spans, want 2 (begin + end); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "blockquote" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "blockquote")
+	}
+	if got[0].Offset != 0 {
+		t.Errorf("got[0].Offset = %d, want 0 (group start)", got[0].Offset)
+	}
+	if !got[1].RegionEnd {
+		t.Error("got[1].RegionEnd should be true")
+	}
+	if got[1].Offset != 9 {
+		t.Errorf("got[1].Offset = %d, want 9 (group end)", got[1].Offset)
+	}
+}
+
+// TestParseBlockquoteMultiLine: multiple consecutive `>`
+// lines form one blockquote group.
+func TestParseBlockquoteMultiLine(t *testing.T) {
+	src := "> line one\n> line two"
+	got := Parse(src)
+	if len(got) != 2 {
+		t.Fatalf("got %d spans, want 2 (begin + end); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "blockquote" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "blockquote")
+	}
+}
+
+// TestParseBlockquoteNested: `>> ` produces a nested
+// blockquote (recursive — strip outer `>`, recursive Parse
+// sees inner `>` as another blockquote).
+func TestParseBlockquoteNested(t *testing.T) {
+	src := "> outer\n>> inner\n> outer again"
+	got := Parse(src)
+	// Expect: outer begin, inner begin (around inner line),
+	// inner end, outer end. 4 sentinels minimum.
+	beginCount := 0
+	endCount := 0
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			beginCount++
+		}
+		if s.RegionEnd {
+			endCount++
+		}
+	}
+	if beginCount != 2 || endCount != 2 {
+		t.Errorf("nested: got %d begins / %d ends, want 2/2; spans: %+v", beginCount, endCount, got)
+	}
+}
+
+// TestParseBlockquoteContainingHeading: `> # heading` —
+// the inside of the blockquote contains a heading. The
+// recursive parser should emit the heading's scaled spans
+// inside the blockquote region.
+func TestParseBlockquoteContainingHeading(t *testing.T) {
+	src := "> # title"
+	got := Parse(src)
+	// Expect: begin blockquote, heading span(s), end.
+	beginFound := false
+	endFound := false
+	headingFound := false
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			beginFound = true
+		}
+		if s.RegionEnd {
+			endFound = true
+		}
+		if s.Scale > 1.0 {
+			headingFound = true
+		}
+	}
+	if !beginFound || !endFound {
+		t.Errorf("missing begin/end region; spans: %+v", got)
+	}
+	if !headingFound {
+		t.Errorf("expected a heading-scaled span inside the blockquote; spans: %+v", got)
+	}
+}
+
+// TestParseBlockquoteContainingFencedCode: `> ```\n> body\n> ``` `
+// — blockquote contains a fenced code block. Two nested
+// regions, both kinds.
+func TestParseBlockquoteContainingFencedCode(t *testing.T) {
+	src := "> ```\n> body\n> ```"
+	got := Parse(src)
+	bqBegin := 0
+	codeBegin := 0
+	for _, s := range got {
+		switch s.RegionBegin {
+		case "blockquote":
+			bqBegin++
+		case "code":
+			codeBegin++
+		}
+	}
+	if bqBegin != 1 {
+		t.Errorf("got %d blockquote begins, want 1; spans: %+v", bqBegin, got)
+	}
+	if codeBegin != 1 {
+		t.Errorf("got %d code begins, want 1; spans: %+v", codeBegin, got)
+	}
+}
+
+// TestParseBlockquoteNestedInnerBeginAtLineStart: bug fix
+// regression. For source `>Quoted\n>>Double Quoted`, the
+// inner blockquote begin must anchor at the START OF
+// LINE 2 (rune 8 = the first `>`), not at the position of
+// the second `>` (rune 9). Otherwise line 2's first box
+// (the first `>` rune) would be inside the outer
+// blockquote ONLY, with BlockquoteDepth=1, and the
+// layout's first-box-determines-indent rule would produce
+// a 20px indent for line 2 instead of the expected 40px.
+//
+// Per-line indent depends on the first box's depth
+// (rich/layout.go:614 — `if box.Style.Blockquote
+// indentPixels += BlockquoteDepth * ListIndentWidth`); the
+// inner blockquote must claim the line from rune 0 of the
+// line so the line's first box is at depth=2.
+func TestParseBlockquoteNestedInnerBeginAtLineStart(t *testing.T) {
+	src := ">Quoted\n>>Double Quoted"
+	got := Parse(src)
+	begins := []int{}
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			begins = append(begins, s.Offset)
+		}
+	}
+	if len(begins) != 2 {
+		t.Fatalf("expected 2 blockquote begins, got %d at %v; spans: %+v", len(begins), begins, got)
+	}
+	// begins[0] = outer at offset 0.
+	// begins[1] = inner — must be 8 (line 2 start, before
+	// the outer marker on line 2). If it's 9, the inner
+	// begins AFTER the outer's marker, leaving line 2's
+	// first box at depth=1 and producing the wrong per-line
+	// indent.
+	if begins[0] != 0 {
+		t.Errorf("outer begin offset = %d, want 0", begins[0])
+	}
+	if begins[1] != 8 {
+		t.Errorf("inner begin offset = %d, want 8 (line 2 start)", begins[1])
+	}
+}
+
+// TestParseBlockquoteUnclosedFenceInside reproduces a
+// smoke-test crash. While typing, a user can produce a
+// state where a nested blockquote contains an UNCLOSED
+// fenced code block:
+//
+//	>Quoted
+//	>>Double Quoted
+//	>> 'inline code'
+//	>> Some text
+//	>> ```
+//
+// The recursive Parse should not panic — it should treat
+// the unclosed fence as code-to-EOF inside the inner
+// blockquote.
+func TestParseBlockquoteUnclosedFenceInside(t *testing.T) {
+	src := ">Quoted\n>>Double Quoted\n>> 'inline code'\n>> Some text\n>> ```"
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Parse panicked: %v", r)
+		}
+	}()
+	_ = Parse(src)
+}
+
+// TestParseBlockquoteEndsAtBlankLine: a blank line ends
+// the blockquote group; subsequent content is outside.
+func TestParseBlockquoteEndsAtBlankLine(t *testing.T) {
+	src := "> a\n\nplain text"
+	got := Parse(src)
+	beginCount := 0
+	endCount := 0
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			beginCount++
+		}
+		if s.RegionEnd {
+			endCount++
+		}
+	}
+	if beginCount != 1 || endCount != 1 {
+		t.Errorf("got %d/%d begins/ends, want 1/1; spans: %+v", beginCount, endCount, got)
+	}
+}
+
+// TestParseBlockquoteMidLineGreaterIgnored: `>` mid-line is
+// not a blockquote marker (markers must be at column 0).
+func TestParseBlockquoteMidLineGreaterIgnored(t *testing.T) {
+	src := "x > y"
+	got := Parse(src)
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			t.Errorf("mid-line `>` should not produce a blockquote region; spans: %+v", got)
+		}
+	}
+}
+
 // --- Inline code tests (Phase 3 round 2) -------------------------------
 
 // TestParseInlineCode covers basic backtick-delimited inline

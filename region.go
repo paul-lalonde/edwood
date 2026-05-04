@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // Region represents a scoped layout region in the body — a
 // contiguous rune range with a kind (code, blockquote,
 // listitem, table) and optional parameters. Regions form a
@@ -139,11 +141,15 @@ func (s *RegionStore) Clear() {
 // Preconditions: regions added to the store must not
 // partially overlap any existing region. Either nested
 // (one strictly contains the other) or disjoint
-// (non-overlapping). Partial-overlap inputs are not
-// validated and produce undefined tree shape — the
-// producer (parser of begin/end directives) is responsible
-// for emitting well-formed regions.
+// (non-overlapping). Partial overlap is a producer bug
+// (misordered begin/end directives) and panics here so
+// the bug surfaces loudly at the place it was introduced
+// rather than corrupting the forest silently.
 func (s *RegionStore) Add(r *Region) {
+	if q := findPartialOverlap(s.roots, r); q != nil {
+		panic(fmt.Sprintf("RegionStore.Add: partial overlap: new [%d,%d) %s vs existing [%d,%d) %s",
+			r.Start, r.End, r.Kind, q.Start, q.End, q.Kind))
+	}
 	parent := s.findContainer(r.Start, r.End, s.roots)
 	var siblingPool *[]*Region
 	if parent == nil {
@@ -166,6 +172,29 @@ func (s *RegionStore) Add(r *Region) {
 
 	r.Parent = parent
 	*siblingPool = append(*siblingPool, r)
+}
+
+// findPartialOverlap returns the first existing region in
+// the forest rooted at `rs` (recursing through children)
+// that overlaps r without one containing the other. Returns
+// nil when r is well-formed against the existing tree.
+func findPartialOverlap(rs []*Region, r *Region) *Region {
+	for _, q := range rs {
+		if r.End <= q.Start || q.End <= r.Start {
+			continue // disjoint
+		}
+		if q.contains(r.Start, r.End) {
+			if got := findPartialOverlap(q.Children, r); got != nil {
+				return got
+			}
+			continue
+		}
+		if r.contains(q.Start, q.End) {
+			continue
+		}
+		return q
+	}
+	return nil
 }
 
 // findContainer returns the deepest existing region in
@@ -194,6 +223,52 @@ func (s *RegionStore) EnclosingAt(pos int) *Region {
 		}
 	}
 	return nil
+}
+
+// BoundariesIn returns the sorted, deduplicated list of
+// region boundary offsets STRICTLY between start and end
+// (exclusive on both sides). Used by the bridge to split a
+// styled run at region boundaries when the producer's runs
+// don't natively align with them — the producer-
+// responsibility note from round 5 said producers should
+// emit separate s/b runs at boundaries (and md2spans for
+// `code` does this naturally because the inside style
+// differs), but for blockquote regions covering
+// default-styled runs the spanStore coalesces and loses
+// the boundaries. Phase 3 round 6.
+func (s *RegionStore) BoundariesIn(start, end int) []int {
+	if start >= end {
+		return nil
+	}
+	seen := map[int]bool{}
+	var collect func([]*Region)
+	collect = func(rs []*Region) {
+		for _, r := range rs {
+			// Skip regions that don't overlap [start, end).
+			if r.End <= start || r.Start >= end {
+				continue
+			}
+			if r.Start > start && r.Start < end {
+				seen[r.Start] = true
+			}
+			if r.End > start && r.End < end {
+				seen[r.End] = true
+			}
+			collect(r.Children)
+		}
+	}
+	collect(s.roots)
+	out := make([]int, 0, len(seen))
+	for b := range seen {
+		out = append(out, b)
+	}
+	// Insertion sort (small N).
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
 }
 
 // Insert shifts region offsets to account for `length` runes
