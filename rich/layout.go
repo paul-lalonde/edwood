@@ -516,6 +516,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	currentListIndent := 0    // Track current list indentation level for wrapped lines
 	actualLineHeight := 0     // Track actual max height of content boxes on current line
 	imagesBelowHeight := 0    // Sum of ImageBelow box heights on the current line (Phase 3 round 4)
+	listitemShifted := false  // Did we already advance xPos at the listitem region entry on this line? (Phase 3 round 7)
 
 	for i := range boxes {
 		box := &boxes[i]
@@ -588,6 +589,7 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			currentListIndent = 0 // Reset list indent on explicit newline
 			actualLineHeight = 0  // Reset for next line
 			imagesBelowHeight = 0 // Reset for next line
+			listitemShifted = false
 
 			// Mark that we have a pending paragraph break if this newline is a para break
 			if box.Style.ParaBreak {
@@ -633,18 +635,21 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		if xPos == 0 && indentPixels > 0 {
 			xPos = indentPixels
 		}
-		// List-inside-blockquote: advance mid-line so the
-		// list content aligns at (depth + ListIndent) × Width,
-		// matching the column where top-level list items
-		// render. Without this, the `>` markers and `-`
-		// content sit contiguously and the line looks like
-		// flat blockquote text — the user can't tell at a
-		// glance that there's a list inside. Restricted to
-		// ListItem && Blockquote so it doesn't fire on
-		// inline-image / table / fenced-code boxes whose
-		// indentPixels is set as if they started a line.
-		if box.Style.ListItem && box.Style.Blockquote && indentPixels > xPos {
-			xPos = indentPixels
+		// List-inside-blockquote: at the transition INTO the
+		// listitem region (i.e., the first list-styled box on
+		// this line), advance xPos by ListIndent × Width.
+		// This produces a visible gap of ListIndent × Width
+		// between the blockquote markers (the `>`s) and the
+		// list content (the `-` or `1.`), matching the leading
+		// indent of a top-level list item from line start.
+		// Without this, `>- item` would render with the `-`
+		// abutting the `>` and the line would look like flat
+		// blockquote text. Fired only on the FIRST listitem
+		// box per line so the rest of the item flows
+		// naturally; reset on each \n. Phase 3 round 7.
+		if box.Style.ListItem && box.Style.Blockquote && !listitemShifted && xPos > 0 {
+			xPos += box.Style.ListIndent * ListIndentWidth
+			listitemShifted = true
 		}
 
 		// Calculate width for this box using the style-specific font.
