@@ -71,12 +71,12 @@ type Window struct {
 	editoutlk chan bool
 
 	// Preview mode fields for rich text rendering
-	previewMode        bool                // true when showing rendered markdown preview
-	richBody           *RichText           // rich text renderer for preview mode
-	previewSourceMap   *markdown.SourceMap // maps rendered positions to source positions
-	previewLinkMap     *markdown.LinkMap   // maps rendered positions to link URLs
-	imageCache *rich.ImageCache // cache for loaded images in preview mode
-	selectionContext   *SelectionContext   // context metadata for the current preview selection
+	previewMode      bool                // true when showing rendered markdown preview
+	richBody         *RichText           // rich text renderer for preview mode
+	previewSourceMap *markdown.SourceMap // maps rendered positions to source positions
+	previewLinkMap   *markdown.LinkMap   // maps rendered positions to link URLs
+	imageCache       *rich.ImageCache    // cache for loaded images in preview mode
+	selectionContext *SelectionContext   // context metadata for the current preview selection
 
 	// Preview double-click state (mirrors clicktext/clickmsec in text.go)
 	previewClickPos  int       // rune position of last B1 null-click
@@ -2794,32 +2794,59 @@ func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 	if deepest == nil {
 		return
 	}
-	// Collect the ancestor chain innermost-first.
-	var chain []*Region
-	for r := deepest; r != nil; r = r.Parent {
-		chain = append(chain, r)
-	}
-	// Apply outermost-first so deeper kinds layer over outer
-	// ones (last-write-wins on shared fields).
-	for i := len(chain) - 1; i >= 0; i-- {
-		switch chain[i].Kind {
+	// Walk outermost-first so deeper kinds layer over outer
+	// ones (last-write-wins on shared fields). Per-kind
+	// composition rules live in the apply* functions; the
+	// dispatch here is shape-only.
+	for _, r := range ancestorsOuterFirst(deepest) {
+		switch r.Kind {
 		case "code":
-			s.Block = true
-			s.Code = true
-			s.Bg = rich.InlineCodeBg
+			applyCodeRegion(s, r)
 		case "blockquote":
-			// Phase 3 round 6: depth COUNTS, not just OR-s.
-			// Each blockquote ancestor in the chain bumps the
-			// depth by one, producing 1 for a single
-			// blockquote, 2 for nested, etc. The
-			// outermost-first iteration order makes this
-			// composes naturally — outer ancestor visited
-			// first contributes to depth, inner ancestor
-			// visited last bumps further.
-			s.Blockquote = true
-			s.BlockquoteDepth++
+			applyBlockquoteRegion(s, r)
 		}
 	}
+}
+
+// ancestorsOuterFirst returns the chain from outermost to
+// the supplied deepest region, inclusive on both ends.
+// Extracted from applyEnclosingRegions in round 6.5 so
+// future per-kind apply functions can walk the chain
+// directly (e.g., round 7's listitem will need the
+// nearest-of-kind ancestor, not every ancestor).
+func ancestorsOuterFirst(deepest *Region) []*Region {
+	var inner []*Region
+	for r := deepest; r != nil; r = r.Parent {
+		inner = append(inner, r)
+	}
+	out := make([]*Region, len(inner))
+	for i, r := range inner {
+		out[len(inner)-1-i] = r
+	}
+	return out
+}
+
+// applyCodeRegion sets the per-rune flags for a `code`
+// region ancestor. Composition rule: idempotent — multiple
+// code ancestors produce the same result as one. v1
+// disallows code-inside-code via the protocol's begin/end
+// nesting rules, but the apply remains idempotent for
+// safety. Phase 3 round 5.
+func applyCodeRegion(s *rich.Style, _ *Region) {
+	s.Block = true
+	s.Code = true
+	s.Bg = rich.InlineCodeBg
+}
+
+// applyBlockquoteRegion sets the per-rune flags for a
+// `blockquote` region ancestor. Composition rule: additive
+// — each blockquote ancestor in the chain bumps the depth
+// counter by one, so nested `>>` produces depth=2, etc.
+// The outermost-first walk order in applyEnclosingRegions
+// makes this compose naturally. Phase 3 round 6.
+func applyBlockquoteRegion(s *rich.Style, _ *Region) {
+	s.Blockquote = true
+	s.BlockquoteDepth++
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).

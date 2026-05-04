@@ -6,10 +6,43 @@ import (
 	"unicode/utf8"
 )
 
+// SpanKind discriminates the four shapes a Span can take.
+// Each Span is exactly one kind; downstream consumers
+// (FormatSpans, fillGaps, isDefaultFill) switch on Kind
+// instead of inspecting which legacy fields are set.
+//
+// Wire format is unchanged — Kind is in-memory only.
+// Phase 3 round 6.5.
+type SpanKind int
+
+const (
+	// SpanStyled: the default kind. A rune-covering span
+	// with foreground / weight / italic / scale / family /
+	// hrule attributes. Zero value, so no migration needed
+	// for existing styled-span construction sites.
+	SpanStyled SpanKind = iota
+	// SpanBox: an inline-image box (Phase 3 round 4).
+	// IsBox / BoxWidth / BoxHeight / BoxPayload /
+	// BoxPlacement carry the box's payload.
+	SpanBox
+	// SpanRegionBegin: a `begin region <kind>` directive
+	// (Phase 3 round 5/6). Length is 0; RegionBegin holds
+	// the kind name; RegionParams holds optional key=value.
+	SpanRegionBegin
+	// SpanRegionEnd: an `end region` directive. Length is
+	// 0; the consumer pops the most recent open begin.
+	SpanRegionEnd
+)
+
 // Span is a styled rune range in the body. Offset and Length are
 // in runes (matching the spans-protocol convention used by
 // cmd/edcolor and consumed by spanparse.go in the main package).
 type Span struct {
+	// Kind discriminates the span's shape (Phase 3 round
+	// 6.5). Zero value SpanStyled matches existing
+	// styled-span construction; box / region producers must
+	// set Kind explicitly.
+	Kind SpanKind
 	// Offset is the rune index at which this span begins (0-based).
 	Offset int
 	// Length is the number of runes covered.
@@ -110,12 +143,14 @@ func Parse(src string) []Span {
 func parseBlockquoteRange(src string, p paragraphRange) []Span {
 	stripped, mapping, lineStarts := stripBlockquoteSource(src, p)
 	begin := Span{
+		Kind:        SpanRegionBegin,
 		Offset:      p.RuneStart,
 		Length:      0,
 		RegionBegin: "blockquote",
 	}
 	groupRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
 	end := Span{
+		Kind:      SpanRegionEnd,
 		Offset:    groupRuneEnd,
 		Length:    0,
 		RegionEnd: true,
@@ -134,34 +169,65 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 			panic(fmt.Sprintf("parseBlockquoteRange: subspan offset %d past stripped end (mapping length %d, kind %q)",
 				s.Offset, len(mapping), s.RegionBegin))
 		}
-		s.Offset = mapping[s.Offset]
-		// For nested blockquote `begin region` directives,
-		// snap the offset to the start of the original line
-		// that the inner blockquote opens on. Without this,
-		// the inner blockquote anchors AFTER the outer
-		// marker on its line (e.g., for `>>`, after the
-		// first `>`), leaving the line's first box inside
-		// the outer blockquote ONLY (BlockquoteDepth=1).
-		// The layout's first-box-determines-indent rule
-		// then produces the outer's indent for the line
-		// instead of the inner's. Snapping makes the inner
-		// blockquote claim the line from rune 0, so the
-		// first box has depth=2 and the line indents to
-		// match. Phase 3 round 6.
-		//
-		// Snap is specific to RegionBegin=="blockquote".
-		// Other inner kinds (e.g., a code region inside a
-		// blockquote) anchor at body-start positions
-		// (after the fence's \n), which are correct as-is —
-		// snapping those would put the body span at the
-		// wrong position.
-		if s.RegionBegin == "blockquote" {
+		// Span offsets have two semantics:
+		//   - Inclusive (begin, body content): the rune AT
+		//     position N is INSIDE the span. Map by rune-at:
+		//     mapping[N] gives the position in the parent
+		//     source AT which this rune now sits.
+		//   - Exclusive (region end): position N is "the
+		//     boundary just BEFORE rune N" — the region
+		//     EXCLUDES rune N. Map by boundary-before:
+		//     mapping[N-1]+1 gives the position in the parent
+		//     source just after the region's last included
+		//     rune. The two coincide when no parent runes
+		//     were stripped at the boundary; they diverge
+		//     when the boundary lands at a stripped-marker
+		//     line (e.g., a fenced code block's closer line
+		//     inside a blockquote — its `>>` markers were
+		//     stripped, so rune-at lookup lands AFTER them
+		//     instead of at the line start).
+		if s.Kind == SpanRegionEnd && s.Offset > 0 {
+			s.Offset = mapping[s.Offset-1] + 1
+		} else {
+			s.Offset = mapping[s.Offset]
+		}
+		// Some region kinds need their begin offset snapped
+		// to the source line's start so the line's first box
+		// belongs to the deepest region (and the layout's
+		// first-box-determines-indent rule produces the
+		// correct per-line indent). Membership is in
+		// kindsAnchorAtLineStart. Phase 3 round 6 added
+		// "blockquote"; round 7 will add "listitem".
+		// Other kinds (e.g., "code", whose body anchors
+		// after the opener's `\n`, ALREADY at a line start)
+		// must NOT be snapped — snapping would move the
+		// begin onto the fence opener line.
+		if kindsAnchorAtLineStart[s.RegionBegin] {
 			s.Offset = snapToLineStart(s.Offset, lineStarts)
 		}
 		out = append(out, s)
 	}
 	out = append(out, end)
 	return out
+}
+
+// kindsAnchorAtLineStart lists region kinds whose begin
+// directive must be snapped to the source line's start
+// when produced by recursive parsing. The line's first
+// box must belong to the deepest region of these kinds so
+// the layout's first-box-determines-indent rule indents
+// the line correctly.
+//
+// Member criteria: the kind covers contiguous source
+// LINES (column 0 to end of line), not just a sub-range
+// within a line. "blockquote" qualifies (round 6).
+// "listitem" will qualify (round 7). "code" does NOT —
+// its body anchors AFTER the opener fence's `\n`, which
+// is already a line start; snapping a code begin would
+// move it onto the fence-opener line, mis-anchoring the
+// region.
+var kindsAnchorAtLineStart = map[string]bool{
+	"blockquote": true,
 }
 
 // snapToLineStart returns the largest line-start offset in
@@ -260,39 +326,101 @@ func stripBlockquoteSource(src string, p paragraphRange) (string, []int, []int) 
 }
 
 // parseCodeBlockParagraph emits the spans for a fenced code
-// block: a RegionBegin sentinel at the body's start, a
-// styled span over the body runes (family=code so the
-// renderer uses the monospace font even before the region
-// machinery is consulted), and a RegionEnd sentinel at the
-// body's end. The opening / closing fence runes are not
-// covered by any span — they render as default-styled text
-// via emit-time gap-fill, consistent with markup-stays-
-// visible. Phase 3 round 5.
+// block. v1 (round 5) emitted ONE region covering the
+// whole body; v2 (round 6.5) emits ONE REGION PER BODY LINE
+// (begin / body span / end per line), so when this code
+// block is recursively remapped through a blockquote, the
+// blockquote markers BETWEEN body lines fall OUTSIDE any
+// code region. Without per-line emission, those markers
+// land inside a contiguous region [begin, end) — which the
+// renderer styles as code-block content (visible as a
+// double indent on body line 2+).
+//
+// At the top level (no recursive remap), per-line emission
+// produces multiple abutting regions that render identically
+// to one big region — the layout per-rune lookup composes
+// the same flags for adjacent identical kinds.
+//
+// Per-line spans:
+//   - `begin region code` at line's content start. The
+//     `lang=NAME` param appears only on the FIRST line's
+//     begin (the language belongs to the code BLOCK, not
+//     each line; emitting it once is consistent with the
+//     v1 protocol).
+//   - body span (family=code) covering the line's content
+//     plus its trailing `\n` (if any).
+//   - `end region` at the line's end (one past the `\n`).
+//
+// Empty body emits a single begin/end pair at the body
+// position so consumers still see the `code` region exist
+// (matches round-5 behavior).
 func parseCodeBlockParagraph(src string, p paragraphRange) []Span {
-	begin := Span{
-		Offset:      p.CodeBodyRuneStart,
-		Length:      0,
-		RegionBegin: "code",
-	}
-	if p.CodeLang != "" {
-		begin.RegionParams = map[string]string{"lang": p.CodeLang}
-	}
-	end := Span{
-		Offset:    p.CodeBodyRuneEnd,
-		Length:    0,
-		RegionEnd: true,
-	}
-	bodyLen := p.CodeBodyRuneEnd - p.CodeBodyRuneStart
-	if bodyLen == 0 {
-		// Empty body: emit just the begin/end pair.
+	bodyByteStart := p.ByteStart
+	bodyByteEnd := p.ByteEnd
+	bodyRuneStart := p.CodeBodyRuneStart
+	bodyRuneEnd := p.CodeBodyRuneEnd
+
+	// Empty body: emit just the begin/end pair.
+	if bodyRuneStart >= bodyRuneEnd {
+		begin := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      bodyRuneStart,
+			RegionBegin: "code",
+		}
+		if p.CodeLang != "" {
+			begin.RegionParams = map[string]string{"lang": p.CodeLang}
+		}
+		end := Span{
+			Kind:      SpanRegionEnd,
+			Offset:    bodyRuneEnd,
+			RegionEnd: true,
+		}
 		return []Span{begin, end}
 	}
-	body := Span{
-		Offset: p.CodeBodyRuneStart,
-		Length: bodyLen,
-		Family: "code",
+
+	var spans []Span
+	lineRuneStart := bodyRuneStart
+	runePos := bodyRuneStart
+	firstLine := true
+
+	emitLine := func(lineRuneEnd int) {
+		begin := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      lineRuneStart,
+			RegionBegin: "code",
+		}
+		if firstLine && p.CodeLang != "" {
+			begin.RegionParams = map[string]string{"lang": p.CodeLang}
+		}
+		body := Span{
+			Offset: lineRuneStart,
+			Length: lineRuneEnd - lineRuneStart,
+			Family: "code",
+		}
+		end := Span{
+			Kind:      SpanRegionEnd,
+			Offset:    lineRuneEnd,
+			RegionEnd: true,
+		}
+		spans = append(spans, begin, body, end)
+		firstLine = false
 	}
-	return []Span{begin, body, end}
+
+	for i := bodyByteStart; i < bodyByteEnd; {
+		r, size := utf8.DecodeRuneInString(src[i:])
+		i += size
+		runePos++
+		if r == '\n' {
+			emitLine(runePos)
+			lineRuneStart = runePos
+		}
+	}
+	// Final line without trailing \n (e.g., unclosed fence
+	// at EOF).
+	if lineRuneStart < bodyRuneEnd {
+		emitLine(bodyRuneEnd)
+	}
+	return spans
 }
 
 // parseHRuleParagraph emits a single Span over the HRule
@@ -435,9 +563,9 @@ func parseInlineSpans(runes []rune, runeStart int) []Span {
 }
 
 // tryCode attempts to parse an inline-code run starting at
-// runes[i] (which must be `` ` ``). On match, returns a span
+// runes[i] (which must be “ ` “). On match, returns a span
 // over the inner text with Family="code", and the number of
-// runes consumed (`` `…` `` end-to-end). On no-match (no
+// runes consumed (“ `…` “ end-to-end). On no-match (no
 // closing backtick or zero-length content), returns ok=false
 // and 1 (skip past the opening backtick as literal).
 //
@@ -505,13 +633,13 @@ type paragraphRange struct {
 // StyleH1/H2/H3; H4-H6 extrapolate gently rather than reverting
 // to body size at H4.
 var headingScale = [7]float64{
-	0:   0,    // plain paragraph (sentinel; not used)
-	1:   2.0,  // H1
-	2:   1.5,  // H2
-	3:   1.25, // H3
-	4:   1.1,  // H4
-	5:   1.05, // H5
-	6:   1.0,  // H6 (visually distinct via bold; same scale as body)
+	0: 0,    // plain paragraph (sentinel; not used)
+	1: 2.0,  // H1
+	2: 1.5,  // H2
+	3: 1.25, // H3
+	4: 1.1,  // H4
+	5: 1.05, // H5
+	6: 1.0,  // H6 (visually distinct via bold; same scale as body)
 }
 
 // detectHRule returns the rune-length of an HRule line, or 0
@@ -965,6 +1093,7 @@ func tryImage(runes []rune, i, runeStart int) (Span, int, bool) {
 	}
 	advance := parts.closeParen + 1 - i
 	return Span{
+		Kind:   SpanBox,
 		Offset: runeStart + i,
 		// Length covers the source `![alt](url ...)` runes.
 		// The renderer renders these source markers as text

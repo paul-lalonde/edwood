@@ -309,6 +309,7 @@ func TestFormatSpansBoxAtStart(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
 			Offset: 0, Length: 5,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png",
 			BoxPlacement: "below",
@@ -329,6 +330,7 @@ func TestFormatSpansBoxMidBuffer(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
 			Offset: 4, Length: 5,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png",
 			BoxPlacement: "below",
@@ -349,6 +351,7 @@ func TestFormatSpansBoxWithWidthParam(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
 			Offset: 4, Length: 5,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:./pic.png width=200",
 			BoxPlacement: "below",
@@ -370,8 +373,9 @@ func TestFormatSpansBoxPlacementReplaceExplicit(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
 			Offset: 0, Length: 1,
-			IsBox:        true,
-			BoxWidth:     100, BoxHeight: 50,
+			Kind:     SpanBox,
+			IsBox:    true,
+			BoxWidth: 100, BoxHeight: 50,
 			BoxPayload:   "image:./pic.png",
 			BoxPlacement: "replace",
 		},
@@ -391,9 +395,9 @@ func TestFormatSpansBoxPlacementReplaceExplicit(t *testing.T) {
 // default fill after.
 func TestFormatSpansRegionBasic(t *testing.T) {
 	got := FormatSpans([]Span{
-		{Offset: 4, Length: 0, RegionBegin: "code"},
+		{Offset: 4, Length: 0, Kind: SpanRegionBegin, RegionBegin: "code"},
 		{Offset: 4, Length: 4, Family: "code"},
-		{Offset: 8, Length: 0, RegionEnd: true},
+		{Offset: 8, Length: 0, Kind: SpanRegionEnd, RegionEnd: true},
 	}, 11)
 	want := "s 0 4 -\n" +
 		"begin region code\n" +
@@ -410,12 +414,13 @@ func TestFormatSpansRegionBasic(t *testing.T) {
 func TestFormatSpansRegionWithLang(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
+			Kind:   SpanRegionBegin,
 			Offset: 0, Length: 0,
 			RegionBegin:  "code",
 			RegionParams: map[string]string{"lang": "go"},
 		},
 		{Offset: 0, Length: 5, Family: "code"},
-		{Offset: 5, Length: 0, RegionEnd: true},
+		{Offset: 5, Length: 0, Kind: SpanRegionEnd, RegionEnd: true},
 	}, 5)
 	want := "begin region code lang=go\n" +
 		"s 0 5 - family=code\n" +
@@ -430,9 +435,9 @@ func TestFormatSpansRegionWithLang(t *testing.T) {
 // begin directive first (no leading default fill).
 func TestFormatSpansRegionAtStart(t *testing.T) {
 	got := FormatSpans([]Span{
-		{Offset: 0, Length: 0, RegionBegin: "code"},
+		{Offset: 0, Length: 0, Kind: SpanRegionBegin, RegionBegin: "code"},
 		{Offset: 0, Length: 5, Family: "code"},
-		{Offset: 5, Length: 0, RegionEnd: true},
+		{Offset: 5, Length: 0, Kind: SpanRegionEnd, RegionEnd: true},
 	}, 10)
 	want := "begin region code\n" +
 		"s 0 5 - family=code\n" +
@@ -448,9 +453,9 @@ func TestFormatSpansRegionAtStart(t *testing.T) {
 // styled span; no trailing default fill.
 func TestFormatSpansRegionAtEnd(t *testing.T) {
 	got := FormatSpans([]Span{
-		{Offset: 0, Length: 0, RegionBegin: "code"},
+		{Offset: 0, Length: 0, Kind: SpanRegionBegin, RegionBegin: "code"},
 		{Offset: 0, Length: 10, Family: "code"},
-		{Offset: 10, Length: 0, RegionEnd: true},
+		{Offset: 10, Length: 0, Kind: SpanRegionEnd, RegionEnd: true},
 	}, 10)
 	want := "begin region code\n" +
 		"s 0 10 - family=code\n" +
@@ -465,8 +470,8 @@ func TestFormatSpansRegionAtEnd(t *testing.T) {
 // just the directive pair, no body span.
 func TestFormatSpansRegionEmpty(t *testing.T) {
 	got := FormatSpans([]Span{
-		{Offset: 5, Length: 0, RegionBegin: "code"},
-		{Offset: 5, Length: 0, RegionEnd: true},
+		{Offset: 5, Length: 0, Kind: SpanRegionBegin, RegionBegin: "code"},
+		{Offset: 5, Length: 0, Kind: SpanRegionEnd, RegionEnd: true},
 	}, 10)
 	want := "s 0 5 -\n" +
 		"begin region code\n" +
@@ -484,8 +489,9 @@ func TestFormatSpansBoxPlacementOmittedWhenEmpty(t *testing.T) {
 	got := FormatSpans([]Span{
 		{
 			Offset: 0, Length: 1,
-			IsBox:      true,
-			BoxWidth:   100, BoxHeight: 50,
+			Kind:     SpanBox,
+			IsBox:    true,
+			BoxWidth: 100, BoxHeight: 50,
 			BoxPayload: "image:./pic.png",
 		},
 	}, 10)

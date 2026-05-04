@@ -384,26 +384,39 @@ func TestParseFencedCodeWithLang(t *testing.T) {
 }
 
 // TestParseFencedCodeMultilineBody: body spans multiple
-// lines; the body span covers from after the opening
-// fence's newline to before the closing fence.
+// lines. Round 6.5 emits ONE region triple per body line
+// (begin / body span / end), so a 3-line body produces 9
+// spans. Per-line emission ensures that when the same
+// shape appears recursively inside a blockquote, the
+// blockquote markers BETWEEN body lines fall outside any
+// code region.
 func TestParseFencedCodeMultilineBody(t *testing.T) {
 	src := "```\nline1\nline2\nline3\n```"
-	// Opening fence: 0..3, \n at 3. Body: 4..21 ("line1\nline2\nline3\n"
-	// is 18 runes — but we want body up to BUT NOT INCLUDING the
-	// closing fence's start. Closing fence starts at... let me count:
-	// `(0) `(1) `(2) \n(3) l(4) i(5) n(6) e(7) 1(8) \n(9)
-	// l(10) i(11) n(12) e(13) 2(14) \n(15) l(16) i(17) n(18) e(19) 3(20) \n(21)
-	// `(22) `(23) `(24)
-	// So body is 4..22 (18 runes including trailing \n before closing).
+	// Runes:
+	//   0..2    ```
+	//   3       \n
+	//   4..8    line1
+	//   9       \n      end of body line 1 → end region 1 here (offset 10, exclusive)
+	//   10..14  line2
+	//   15      \n      end of body line 2 → end region 2 here (offset 16)
+	//   16..20  line3
+	//   21      \n      end of body line 3 → end region 3 here (offset 22)
+	//   22..24  ```     (closing fence)
 	got := Parse(src)
-	if len(got) != 3 {
-		t.Fatalf("got %d spans, want 3; spans: %+v", len(got), got)
+	if len(got) != 9 {
+		t.Fatalf("got %d spans, want 9 (3 lines × {begin,body,end}); spans: %+v", len(got), got)
 	}
-	if got[1].Offset != 4 || got[1].Length != 18 {
-		t.Errorf("body span offset/length = (%d, %d), want (4, 18)", got[1].Offset, got[1].Length)
-	}
-	if got[2].Offset != 22 {
-		t.Errorf("end region offset = %d, want 22", got[2].Offset)
+	// Spot-check shape: lang param on first begin only;
+	// body spans abut; ends at line boundaries.
+	wantOffsets := []int{4, 4, 10, 10, 10, 16, 16, 16, 22}
+	wantLengths := []int{0, 6, 0, 0, 6, 0, 0, 6, 0}
+	for i, s := range got {
+		if s.Offset != wantOffsets[i] {
+			t.Errorf("got[%d].Offset = %d, want %d", i, s.Offset, wantOffsets[i])
+		}
+		if s.Length != wantLengths[i] {
+			t.Errorf("got[%d].Length = %d, want %d", i, s.Length, wantLengths[i])
+		}
 	}
 }
 
@@ -449,19 +462,23 @@ func TestParseFencedCodeBetweenParagraphs(t *testing.T) {
 func TestParseFencedCodeCloserMustMatchOpenerCount(t *testing.T) {
 	src := "````\nthree backticks below should not close:\n```\nstill body\n````"
 	got := Parse(src)
-	if len(got) != 3 {
-		t.Fatalf("got %d spans, want 3 (begin + body + end); spans: %+v", len(got), got)
+	// Round 6.5: per-line emission. Three body lines
+	// ("three backticks...:\n", "```\n", "still body\n")
+	// produce 9 spans. The middle line is the 3-backtick
+	// run that must NOT close (opener has 4 backticks).
+	if len(got) != 9 {
+		t.Fatalf("got %d spans, want 9 (3 lines × {begin,body,end}); spans: %+v", len(got), got)
 	}
 	if got[0].RegionBegin != "code" {
 		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
 	}
-	// Body should INCLUDE the 3-backtick line in the middle.
-	// Source: ````\nthree backticks below should not close:\n```\nstill body\n````
-	// Runes: ````=0..3 \n=4 ...
-	// The body must span past the inner ``` line.
-	body := got[1]
-	if body.Length < 50 {
-		t.Errorf("body length = %d, want >= 50 (body should include the inner ``` line)", body.Length)
+	// The middle body line is the 3-backtick line. With
+	// per-line emission, the second triple (indices 3..5)
+	// covers exactly "```\n" (4 runes); pin that the inner
+	// ``` line did NOT close the outer fence.
+	innerLine := got[4]
+	if innerLine.Length != 4 {
+		t.Errorf("middle body span length = %d, want 4 (the inner ``` line, including \\n)", innerLine.Length)
 	}
 }
 
@@ -643,6 +660,53 @@ func TestParseBlockquoteNestedInnerBeginAtLineStart(t *testing.T) {
 	}
 }
 
+// TestParseCodeBlockBeginNotSnapped pins the negative
+// invariant for the round-6.5 line-anchor registry: a
+// `code` region's begin offset is NOT snapped to the
+// source line's start, because the body of a fenced code
+// block begins AFTER the opening fence's `\n`, not at
+// the fence line's column 0. Snapping would put the begin
+// directive on the fence line (visually anchored to the
+// “ ``` “ markup) and the body span would render with
+// the wrong starting position.
+//
+// Source:
+//
+//	> ```           // outer blockquote line 1; fence opener
+//	> body
+//	> ```           // closer
+//
+// After the outer-blockquote strip, the inner content has
+// a fence at line start. The recursive Parse emits a
+// `code` region begin at the body-start rune (after the
+// opener line's `\n`), which IS already a line-start in
+// the inner stripped source. The blockquote-snap logic
+// must NOT also snap the code begin (no-op there), but
+// more importantly must not snap a code begin that is mid-
+// line in the future. Phase 3 round 6.5.
+func TestParseCodeBlockBeginNotSnapped(t *testing.T) {
+	src := "> ```\n> body\n> ```"
+	got := Parse(src)
+	var codeBeginOffset int
+	var foundCodeBegin bool
+	for _, s := range got {
+		if s.RegionBegin == "code" {
+			foundCodeBegin = true
+			codeBeginOffset = s.Offset
+		}
+	}
+	if !foundCodeBegin {
+		t.Fatalf("no code region begin emitted; spans: %+v", got)
+	}
+	// The code body begins after the opener line's `\n` —
+	// in the original source that is rune 6 (after "> ```\n").
+	// The blockquote-snap path would snap it to rune 0 (line
+	// 1 start), which would be wrong.
+	if codeBeginOffset == 0 {
+		t.Errorf("code begin offset = 0; the line-start snap accidentally fired on the code kind")
+	}
+}
+
 // TestParseBlockquoteUnclosedFenceInside reproduces a
 // smoke-test crash. While typing, a user can produce a
 // state where a nested blockquote contains an UNCLOSED
@@ -665,6 +729,107 @@ func TestParseBlockquoteUnclosedFenceInside(t *testing.T) {
 		}
 	}()
 	_ = Parse(src)
+}
+
+// TestParseBlockquoteCodeBlockEndsBeforeCloserMarkers
+// pins the rune-at-vs-boundary-before bug: a fenced code
+// block inside a nested blockquote had its END region
+// directive mapped via per-rune lookup, which after the
+// `>>` strip on the closer line landed AT the first
+// backtick of the closer instead of AT the closer's line
+// start. The closer's `>>` markers then appeared INSIDE
+// the code region, which the renderer treated as
+// extra-indented code-block content (visible as a wide
+// gap between `>>` and `` ``` `` on the closer line).
+//
+// The fix maps RegionEnd offsets via boundary-before
+// semantics (mapping[N-1]+1 for an exclusive end), which
+// gives the closer line's start in the original source.
+//
+// Pinning: the `code` end region must land at the start
+// of the closer line in the original source — i.e., at
+// the offset of the `>` that opens the closer line, not
+// the first backtick.
+func TestParseBlockquoteCodeBlockEndsBeforeCloserMarkers(t *testing.T) {
+	src := ">>```go\n>>testing\n>> ```"
+	got := Parse(src)
+	// In the original source, the closer line begins at
+	// rune 18 (`>` of ">> ```"). Counts:
+	//   0..7   ">>```go\n"
+	//   8..17  ">>testing\n"
+	//   18..23 ">> ```"
+	var codeEnd int = -1
+	for _, s := range got {
+		if s.RegionEnd && codeEnd == -1 {
+			// The first RegionEnd we see is the inner code
+			// region's end (followed by the inner blockquote
+			// end, then the outer's). All inner ends emit
+			// before outer's appended end — order is begin
+			// outer, begin inner, [code begin/body/end],
+			// end inner, end outer.
+			codeEnd = s.Offset
+		}
+	}
+	if codeEnd != 18 {
+		t.Errorf("code region end offset = %d, want 18 (closer line start in original)", codeEnd)
+	}
+}
+
+// TestParseBlockquoteCodeBlockMultilineExcludesBlockquoteMarkers
+// pins the per-line code-region emission: when a fenced
+// code block inside a nested blockquote has multiple body
+// lines, the blockquote markers BETWEEN body lines must
+// fall OUTSIDE any code region (otherwise the renderer
+// applies code-block layout to the marker runes and shifts
+// the body line right).
+//
+// Source layout (rune offsets in original):
+//
+//	>>```go        L1: 0..7   (opener line; not body)
+//	>>func main()  L2: 8..21  (body line 1)
+//	>>Testing      L3: 22..31 (body line 2)
+//	>> ```         L4: 32..37 (closer line)
+//
+// Body line 1 content "func main()\n" lives at original
+// runes [10, 22). Body line 2 content "Testing\n" lives at
+// [24, 32). The markers at [22, 24) (`>>` of body line 2)
+// must NOT be in any code region.
+//
+// Per-line code regions: [10, 22) covers body line 1's
+// content+\n; [24, 32) covers body line 2's content+\n.
+// The two `>>` markers between them are unclaimed by
+// any code region.
+func TestParseBlockquoteCodeBlockMultilineExcludesBlockquoteMarkers(t *testing.T) {
+	src := ">>```go\n>>func main()\n>>Testing\n>> ```"
+	got := Parse(src)
+	var codeBegins, codeEnds []int
+	for _, s := range got {
+		if s.RegionBegin == "code" {
+			codeBegins = append(codeBegins, s.Offset)
+		}
+		if s.Kind == SpanRegionEnd && len(codeBegins) > len(codeEnds) {
+			// Match each `end region` to the most recent
+			// unmatched code begin. Inner blockquote ends
+			// come AFTER all the code regions on the same
+			// blockquote level.
+			codeEnds = append(codeEnds, s.Offset)
+		}
+	}
+	if len(codeBegins) != 2 {
+		t.Fatalf("got %d code begins, want 2 (one per body line); spans: %+v", len(codeBegins), got)
+	}
+	if codeBegins[0] != 10 {
+		t.Errorf("code begin 1 = %d, want 10 (body line 1 content start)", codeBegins[0])
+	}
+	if codeEnds[0] != 22 {
+		t.Errorf("code end 1 = %d, want 22 (body line 2 line-start in original)", codeEnds[0])
+	}
+	if codeBegins[1] != 24 {
+		t.Errorf("code begin 2 = %d, want 24 (body line 2 content start)", codeBegins[1])
+	}
+	if codeEnds[1] != 32 {
+		t.Errorf("code end 2 = %d, want 32 (closer line-start in original)", codeEnds[1])
+	}
 }
 
 // TestParseBlockquoteEndsAtBlankLine: a blank line ends
@@ -754,14 +919,14 @@ func TestParseInlineCodeInsideHeading(t *testing.T) {
 	// Heading content: offset 3..18 (length 15). Scale=1.5.
 	// Code span: offset 8, length 4 ("make"), Family="code", Scale=1.5.
 	want := []Span{
-		{Offset: 3, Length: 5, Scale: 1.5},                                  // "Use `"
-		{Offset: 8, Length: 4, Family: "code", Scale: 1.5},                  // "make"
-		{Offset: 12, Length: 6, Scale: 1.5},                                 // "` here"
+		{Offset: 3, Length: 5, Scale: 1.5},                 // "Use `"
+		{Offset: 8, Length: 4, Family: "code", Scale: 1.5}, // "make"
+		{Offset: 12, Length: 6, Scale: 1.5},                // "` here"
 	}
 	assertSpansEqual(t, Parse(src), want)
 }
 
-// TestParseEmptyInlineCode: ` ` / `` is empty; produces no
+// TestParseEmptyInlineCode: ` ` / “ is empty; produces no
 // span (zero-length code is protocol noise, same rule as
 // link with empty text).
 func TestParseEmptyInlineCode(t *testing.T) {
@@ -858,9 +1023,9 @@ func TestParseEmphasisInsideHeading(t *testing.T) {
 	// outside the emphasis emit ONE span with Scale only;
 	// the emphasis emits with both Scale AND italic.
 	want := []Span{
-		{Offset: 3, Length: 1, Scale: 1.5},  // "*"
+		{Offset: 3, Length: 1, Scale: 1.5},               // "*"
 		{Offset: 4, Length: 9, Scale: 1.5, Italic: true}, // "important"
-		{Offset: 13, Length: 7, Scale: 1.5}, // "* title"
+		{Offset: 13, Length: 7, Scale: 1.5},              // "* title"
 	}
 	assertSpansEqual(t, Parse(src), want)
 }
@@ -986,6 +1151,9 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 // `==` doesn't work because Span contains a RegionParams
 // map (Phase 3 round 5).
 func spansFieldEqual(a, b Span) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
 	if a.Offset != b.Offset || a.Length != b.Length {
 		return false
 	}
@@ -1031,6 +1199,7 @@ func TestParseImageBasic(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       15,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -1048,6 +1217,7 @@ func TestParseImageWithTitleNoWidth(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       29,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:p.png",
 			BoxPlacement: "below",
@@ -1065,6 +1235,7 @@ func TestParseImageWithWidth(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       27,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:p.png width=200",
 			BoxPlacement: "below",
@@ -1082,6 +1253,7 @@ func TestParseImageEmptyAlt(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       12,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -1099,6 +1271,7 @@ func TestParseImageMidParagraph(t *testing.T) {
 		{
 			Offset:       4,
 			Length:       13,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:c.png",
 			BoxPlacement: "below",
@@ -1119,6 +1292,7 @@ func TestParseImageMultiplePerParagraph(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
@@ -1126,6 +1300,7 @@ func TestParseImageMultiplePerParagraph(t *testing.T) {
 		{
 			Offset:       16,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:y.png",
 			BoxPlacement: "below",
@@ -1146,6 +1321,7 @@ func TestParseImageAdjacentToLink(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
@@ -1188,6 +1364,7 @@ func TestParseImageURLWithTitleSeparator(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       38,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:path/to/file.png width=100",
 			BoxPlacement: "below",
@@ -1212,10 +1389,107 @@ func TestParseImageURLWithEmbeddedSpace(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       17,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pa th.png",
 			BoxPlacement: "below",
 		},
 	}
 	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestSpanKindStyledFromInline pins that an emphasis span
+// (the typical styled producer) carries Kind == SpanStyled.
+// Phase 3 round 6.5.
+func TestSpanKindStyledFromInline(t *testing.T) {
+	got := Parse("a *b* c")
+	if len(got) == 0 {
+		t.Fatalf("Parse produced no spans for emphasis input")
+	}
+	for _, s := range got {
+		if s.Italic && s.Kind != SpanStyled {
+			t.Errorf("italic span has Kind %v, want SpanStyled", s.Kind)
+		}
+	}
+}
+
+// TestSpanKindBoxFromImage pins that an image-syntax span
+// carries Kind == SpanBox alongside the legacy IsBox flag.
+// Phase 3 round 6.5.
+func TestSpanKindBoxFromImage(t *testing.T) {
+	got := Parse("![alt](pic.png)")
+	var found bool
+	for _, s := range got {
+		if s.IsBox {
+			found = true
+			if s.Kind != SpanBox {
+				t.Errorf("box span has Kind %v, want SpanBox", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no IsBox span for image input")
+	}
+}
+
+// TestSpanKindRegionBeginFromCode pins that a fenced-code
+// region begin span carries Kind == SpanRegionBegin.
+// Phase 3 round 6.5.
+func TestSpanKindRegionBeginFromCode(t *testing.T) {
+	got := Parse("```\nx\n```")
+	var found bool
+	for _, s := range got {
+		if s.RegionBegin != "" {
+			found = true
+			if s.Kind != SpanRegionBegin {
+				t.Errorf("region-begin span has Kind %v, want SpanRegionBegin", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no RegionBegin span for fenced code input")
+	}
+}
+
+// TestSpanKindRegionEndFromCode pins that a fenced-code
+// region end span carries Kind == SpanRegionEnd.
+// Phase 3 round 6.5.
+func TestSpanKindRegionEndFromCode(t *testing.T) {
+	got := Parse("```\nx\n```")
+	var found bool
+	for _, s := range got {
+		if s.RegionEnd {
+			found = true
+			if s.Kind != SpanRegionEnd {
+				t.Errorf("region-end span has Kind %v, want SpanRegionEnd", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no RegionEnd span for fenced code input")
+	}
+}
+
+// TestSpanKindBlockquoteRegions pins Kind on blockquote
+// region directives. Phase 3 round 6.5.
+func TestSpanKindBlockquoteRegions(t *testing.T) {
+	got := Parse("> a\n")
+	var begin, end bool
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			begin = true
+			if s.Kind != SpanRegionBegin {
+				t.Errorf("blockquote begin Kind %v, want SpanRegionBegin", s.Kind)
+			}
+		}
+		if s.RegionEnd {
+			end = true
+			if s.Kind != SpanRegionEnd {
+				t.Errorf("region-end Kind %v, want SpanRegionEnd", s.Kind)
+			}
+		}
+	}
+	if !begin || !end {
+		t.Fatalf("missing begin/end (begin=%v end=%v)", begin, end)
+	}
 }
