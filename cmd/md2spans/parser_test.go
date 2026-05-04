@@ -714,6 +714,50 @@ func TestParseBlockquoteUnclosedFenceInside(t *testing.T) {
 	_ = Parse(src)
 }
 
+// TestParseBlockquoteCodeBlockEndsBeforeCloserMarkers
+// pins the rune-at-vs-boundary-before bug: a fenced code
+// block inside a nested blockquote had its END region
+// directive mapped via per-rune lookup, which after the
+// `>>` strip on the closer line landed AT the first
+// backtick of the closer instead of AT the closer's line
+// start. The closer's `>>` markers then appeared INSIDE
+// the code region, which the renderer treated as
+// extra-indented code-block content (visible as a wide
+// gap between `>>` and `` ``` `` on the closer line).
+//
+// The fix maps RegionEnd offsets via boundary-before
+// semantics (mapping[N-1]+1 for an exclusive end), which
+// gives the closer line's start in the original source.
+//
+// Pinning: the `code` end region must land at the start
+// of the closer line in the original source — i.e., at
+// the offset of the `>` that opens the closer line, not
+// the first backtick.
+func TestParseBlockquoteCodeBlockEndsBeforeCloserMarkers(t *testing.T) {
+	src := ">>```go\n>>testing\n>> ```"
+	got := Parse(src)
+	// In the original source, the closer line begins at
+	// rune 18 (`>` of ">> ```"). Counts:
+	//   0..7   ">>```go\n"
+	//   8..17  ">>testing\n"
+	//   18..23 ">> ```"
+	var codeEnd int = -1
+	for _, s := range got {
+		if s.RegionEnd && codeEnd == -1 {
+			// The first RegionEnd we see is the inner code
+			// region's end (followed by the inner blockquote
+			// end, then the outer's). All inner ends emit
+			// before outer's appended end — order is begin
+			// outer, begin inner, [code begin/body/end],
+			// end inner, end outer.
+			codeEnd = s.Offset
+		}
+	}
+	if codeEnd != 18 {
+		t.Errorf("code region end offset = %d, want 18 (closer line start in original)", codeEnd)
+	}
+}
+
 // TestParseBlockquoteEndsAtBlankLine: a blank line ends
 // the blockquote group; subsequent content is outside.
 func TestParseBlockquoteEndsAtBlankLine(t *testing.T) {

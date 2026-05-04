@@ -169,7 +169,28 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 			panic(fmt.Sprintf("parseBlockquoteRange: subspan offset %d past stripped end (mapping length %d, kind %q)",
 				s.Offset, len(mapping), s.RegionBegin))
 		}
-		s.Offset = mapping[s.Offset]
+		// Span offsets have two semantics:
+		//   - Inclusive (begin, body content): the rune AT
+		//     position N is INSIDE the span. Map by rune-at:
+		//     mapping[N] gives the position in the parent
+		//     source AT which this rune now sits.
+		//   - Exclusive (region end): position N is "the
+		//     boundary just BEFORE rune N" — the region
+		//     EXCLUDES rune N. Map by boundary-before:
+		//     mapping[N-1]+1 gives the position in the parent
+		//     source just after the region's last included
+		//     rune. The two coincide when no parent runes
+		//     were stripped at the boundary; they diverge
+		//     when the boundary lands at a stripped-marker
+		//     line (e.g., a fenced code block's closer line
+		//     inside a blockquote — its `>>` markers were
+		//     stripped, so rune-at lookup lands AFTER them
+		//     instead of at the line start).
+		if s.Kind == SpanRegionEnd && s.Offset > 0 {
+			s.Offset = mapping[s.Offset-1] + 1
+		} else {
+			s.Offset = mapping[s.Offset]
+		}
 		// Some region kinds need their begin offset snapped
 		// to the source line's start so the line's first box
 		// belongs to the deepest region (and the layout's
