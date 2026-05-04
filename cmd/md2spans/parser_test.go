@@ -1664,6 +1664,37 @@ func TestParseListItemInsideBlockquote(t *testing.T) {
 	}
 }
 
+// TestParseListItemInsideBlockquoteSnapsToLineStart pins
+// the round-7 v1 snap fix: when a list item appears inside
+// a blockquote, the listitem region's `begin` offset must
+// be at the source LINE START (column 0 of the original),
+// NOT at the position of the list marker (after the
+// stripped `>` markers). Without the snap, the line's
+// first box (the `>` rune) has Blockquote flags but no
+// ListItem flag, and the layout's first-box-determines-
+// indent rule misses the list's indent contribution.
+//
+// For source `> 1. foo` (one-byte line markers):
+//   - rune 0 = '>'
+//   - rune 1 = ' '
+//   - rune 2 = '1'
+//   - The listitem region's begin must be at rune 0
+//     (line start), NOT rune 2 (where '1' sits in the
+//     stripped form).
+func TestParseListItemInsideBlockquoteSnapsToLineStart(t *testing.T) {
+	got := Parse("> 1. foo")
+	var liBegin int = -1
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			liBegin = s.Offset
+			break
+		}
+	}
+	if liBegin != 0 {
+		t.Errorf("listitem begin offset = %d, want 0 (line start of `> 1. foo` in original)", liBegin)
+	}
+}
+
 // TestParseListItemEmphasisInContent: emphasis inside the
 // item content is still tokenized.
 func TestParseListItemEmphasisInContent(t *testing.T) {

@@ -224,13 +224,18 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 // Member criteria: the kind covers contiguous source
 // LINES (column 0 to end of line), not just a sub-range
 // within a line. "blockquote" qualifies (round 6).
-// "listitem" will qualify (round 7). "code" does NOT —
-// its body anchors AFTER the opener fence's `\n`, which
-// is already a line start; snapping a code begin would
-// move it onto the fence-opener line, mis-anchoring the
-// region.
+// "listitem" qualifies (round 7) — without snapping, a
+// list inside a blockquote leaves its begin AFTER the
+// stripped `>` markers, so the line's first box has
+// Blockquote but not ListItem flags and the layout misses
+// the list's indent contribution. "code" does NOT
+// qualify — its body anchors AFTER the opener fence's
+// `\n`, which is already a line start; snapping a code
+// begin would move it onto the fence-opener line, mis-
+// anchoring the region.
 var kindsAnchorAtLineStart = map[string]bool{
 	"blockquote": true,
+	"listitem":   true,
 }
 
 // snapToLineStart returns the largest line-start offset in
