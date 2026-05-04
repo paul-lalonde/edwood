@@ -6,10 +6,43 @@ import (
 	"unicode/utf8"
 )
 
+// SpanKind discriminates the four shapes a Span can take.
+// Each Span is exactly one kind; downstream consumers
+// (FormatSpans, fillGaps, isDefaultFill) switch on Kind
+// instead of inspecting which legacy fields are set.
+//
+// Wire format is unchanged — Kind is in-memory only.
+// Phase 3 round 6.5.
+type SpanKind int
+
+const (
+	// SpanStyled: the default kind. A rune-covering span
+	// with foreground / weight / italic / scale / family /
+	// hrule attributes. Zero value, so no migration needed
+	// for existing styled-span construction sites.
+	SpanStyled SpanKind = iota
+	// SpanBox: an inline-image box (Phase 3 round 4).
+	// IsBox / BoxWidth / BoxHeight / BoxPayload /
+	// BoxPlacement carry the box's payload.
+	SpanBox
+	// SpanRegionBegin: a `begin region <kind>` directive
+	// (Phase 3 round 5/6). Length is 0; RegionBegin holds
+	// the kind name; RegionParams holds optional key=value.
+	SpanRegionBegin
+	// SpanRegionEnd: an `end region` directive. Length is
+	// 0; the consumer pops the most recent open begin.
+	SpanRegionEnd
+)
+
 // Span is a styled rune range in the body. Offset and Length are
 // in runes (matching the spans-protocol convention used by
 // cmd/edcolor and consumed by spanparse.go in the main package).
 type Span struct {
+	// Kind discriminates the span's shape (Phase 3 round
+	// 6.5). Zero value SpanStyled matches existing
+	// styled-span construction; box / region producers must
+	// set Kind explicitly.
+	Kind SpanKind
 	// Offset is the rune index at which this span begins (0-based).
 	Offset int
 	// Length is the number of runes covered.
@@ -110,12 +143,14 @@ func Parse(src string) []Span {
 func parseBlockquoteRange(src string, p paragraphRange) []Span {
 	stripped, mapping, lineStarts := stripBlockquoteSource(src, p)
 	begin := Span{
+		Kind:        SpanRegionBegin,
 		Offset:      p.RuneStart,
 		Length:      0,
 		RegionBegin: "blockquote",
 	}
 	groupRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
 	end := Span{
+		Kind:      SpanRegionEnd,
 		Offset:    groupRuneEnd,
 		Length:    0,
 		RegionEnd: true,
@@ -270,6 +305,7 @@ func stripBlockquoteSource(src string, p paragraphRange) (string, []int, []int) 
 // visible. Phase 3 round 5.
 func parseCodeBlockParagraph(src string, p paragraphRange) []Span {
 	begin := Span{
+		Kind:        SpanRegionBegin,
 		Offset:      p.CodeBodyRuneStart,
 		Length:      0,
 		RegionBegin: "code",
@@ -278,6 +314,7 @@ func parseCodeBlockParagraph(src string, p paragraphRange) []Span {
 		begin.RegionParams = map[string]string{"lang": p.CodeLang}
 	}
 	end := Span{
+		Kind:      SpanRegionEnd,
 		Offset:    p.CodeBodyRuneEnd,
 		Length:    0,
 		RegionEnd: true,
@@ -435,9 +472,9 @@ func parseInlineSpans(runes []rune, runeStart int) []Span {
 }
 
 // tryCode attempts to parse an inline-code run starting at
-// runes[i] (which must be `` ` ``). On match, returns a span
+// runes[i] (which must be “ ` “). On match, returns a span
 // over the inner text with Family="code", and the number of
-// runes consumed (`` `…` `` end-to-end). On no-match (no
+// runes consumed (“ `…` “ end-to-end). On no-match (no
 // closing backtick or zero-length content), returns ok=false
 // and 1 (skip past the opening backtick as literal).
 //
@@ -505,13 +542,13 @@ type paragraphRange struct {
 // StyleH1/H2/H3; H4-H6 extrapolate gently rather than reverting
 // to body size at H4.
 var headingScale = [7]float64{
-	0:   0,    // plain paragraph (sentinel; not used)
-	1:   2.0,  // H1
-	2:   1.5,  // H2
-	3:   1.25, // H3
-	4:   1.1,  // H4
-	5:   1.05, // H5
-	6:   1.0,  // H6 (visually distinct via bold; same scale as body)
+	0: 0,    // plain paragraph (sentinel; not used)
+	1: 2.0,  // H1
+	2: 1.5,  // H2
+	3: 1.25, // H3
+	4: 1.1,  // H4
+	5: 1.05, // H5
+	6: 1.0,  // H6 (visually distinct via bold; same scale as body)
 }
 
 // detectHRule returns the rune-length of an HRule line, or 0
@@ -965,6 +1002,7 @@ func tryImage(runes []rune, i, runeStart int) (Span, int, bool) {
 	}
 	advance := parts.closeParen + 1 - i
 	return Span{
+		Kind:   SpanBox,
 		Offset: runeStart + i,
 		// Length covers the source `![alt](url ...)` runes.
 		// The renderer renders these source markers as text

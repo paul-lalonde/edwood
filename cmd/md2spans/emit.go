@@ -36,13 +36,15 @@ func FormatSpans(input []Span, totalRunes int) string {
 	// Separate region directives (sentinels) from
 	// styled/box spans. Region directives have Length=0 and
 	// don't represent rune coverage; they slot between
-	// styled spans at their offsets. Phase 3 round 5.
+	// styled spans at their offsets. Phase 3 round 5;
+	// switched to Kind discrimination in round 6.5.
 	var styled []Span
 	var directives []Span
 	for _, s := range input {
-		if s.RegionBegin != "" || s.RegionEnd {
+		switch s.Kind {
+		case SpanRegionBegin, SpanRegionEnd:
 			directives = append(directives, s)
-		} else {
+		default:
 			styled = append(styled, s)
 		}
 	}
@@ -73,14 +75,14 @@ func FormatSpans(input []Span, totalRunes int) string {
 	// span and the next opening — which is the correct
 	// position regardless of which "side" you frame it as.)
 	emitSpan := func(s Span) {
-		if s.IsBox {
+		if s.Kind == SpanBox {
 			writeBoxLine(&b, s)
 		} else {
 			writeSpanLine(&b, s)
 		}
 	}
 	emitDirective := func(d Span) {
-		if d.RegionBegin != "" {
+		if d.Kind == SpanRegionBegin {
 			writeBeginRegionLine(&b, d)
 		} else {
 			writeEndRegionLine(&b)
@@ -255,8 +257,10 @@ func fillGapsWithAnchors(styled []Span, totalRunes int, anchors []int) []Span {
 // (one that fillGaps inserts between styled spans). These
 // are the only spans that fillGapsWithAnchors splits.
 func isDefaultFill(s Span) bool {
-	return !s.IsBox && s.RegionBegin == "" && !s.RegionEnd &&
-		s.Fg == "" && !s.Bold && !s.Italic && s.Scale == 0 &&
+	if s.Kind != SpanStyled {
+		return false
+	}
+	return s.Fg == "" && !s.Bold && !s.Italic && s.Scale == 0 &&
 		s.Family == "" && !s.HRule
 }
 
@@ -293,6 +297,7 @@ func fillGaps(styled []Span, totalRunes int) []Span {
 			out = append(out, Span{Offset: cursor, Length: start - cursor})
 		}
 		out = append(out, Span{
+			Kind:         s.Kind,
 			Offset:       start,
 			Length:       end - start,
 			Fg:           s.Fg,

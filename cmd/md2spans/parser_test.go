@@ -754,14 +754,14 @@ func TestParseInlineCodeInsideHeading(t *testing.T) {
 	// Heading content: offset 3..18 (length 15). Scale=1.5.
 	// Code span: offset 8, length 4 ("make"), Family="code", Scale=1.5.
 	want := []Span{
-		{Offset: 3, Length: 5, Scale: 1.5},                                  // "Use `"
-		{Offset: 8, Length: 4, Family: "code", Scale: 1.5},                  // "make"
-		{Offset: 12, Length: 6, Scale: 1.5},                                 // "` here"
+		{Offset: 3, Length: 5, Scale: 1.5},                 // "Use `"
+		{Offset: 8, Length: 4, Family: "code", Scale: 1.5}, // "make"
+		{Offset: 12, Length: 6, Scale: 1.5},                // "` here"
 	}
 	assertSpansEqual(t, Parse(src), want)
 }
 
-// TestParseEmptyInlineCode: ` ` / `` is empty; produces no
+// TestParseEmptyInlineCode: ` ` / “ is empty; produces no
 // span (zero-length code is protocol noise, same rule as
 // link with empty text).
 func TestParseEmptyInlineCode(t *testing.T) {
@@ -858,9 +858,9 @@ func TestParseEmphasisInsideHeading(t *testing.T) {
 	// outside the emphasis emit ONE span with Scale only;
 	// the emphasis emits with both Scale AND italic.
 	want := []Span{
-		{Offset: 3, Length: 1, Scale: 1.5},  // "*"
+		{Offset: 3, Length: 1, Scale: 1.5},               // "*"
 		{Offset: 4, Length: 9, Scale: 1.5, Italic: true}, // "important"
-		{Offset: 13, Length: 7, Scale: 1.5}, // "* title"
+		{Offset: 13, Length: 7, Scale: 1.5},              // "* title"
 	}
 	assertSpansEqual(t, Parse(src), want)
 }
@@ -986,6 +986,9 @@ func assertSpansEqual(t *testing.T, got, want []Span) {
 // `==` doesn't work because Span contains a RegionParams
 // map (Phase 3 round 5).
 func spansFieldEqual(a, b Span) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
 	if a.Offset != b.Offset || a.Length != b.Length {
 		return false
 	}
@@ -1031,6 +1034,7 @@ func TestParseImageBasic(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       15,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -1048,6 +1052,7 @@ func TestParseImageWithTitleNoWidth(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       29,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:p.png",
 			BoxPlacement: "below",
@@ -1065,6 +1070,7 @@ func TestParseImageWithWidth(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       27,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:p.png width=200",
 			BoxPlacement: "below",
@@ -1082,6 +1088,7 @@ func TestParseImageEmptyAlt(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       12,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pic.png",
 			BoxPlacement: "below",
@@ -1099,6 +1106,7 @@ func TestParseImageMidParagraph(t *testing.T) {
 		{
 			Offset:       4,
 			Length:       13,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:c.png",
 			BoxPlacement: "below",
@@ -1119,6 +1127,7 @@ func TestParseImageMultiplePerParagraph(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
@@ -1126,6 +1135,7 @@ func TestParseImageMultiplePerParagraph(t *testing.T) {
 		{
 			Offset:       16,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:y.png",
 			BoxPlacement: "below",
@@ -1146,6 +1156,7 @@ func TestParseImageAdjacentToLink(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       11,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:x.png",
 			BoxPlacement: "below",
@@ -1188,6 +1199,7 @@ func TestParseImageURLWithTitleSeparator(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       38,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:path/to/file.png width=100",
 			BoxPlacement: "below",
@@ -1212,10 +1224,107 @@ func TestParseImageURLWithEmbeddedSpace(t *testing.T) {
 		{
 			Offset:       0,
 			Length:       17,
+			Kind:         SpanBox,
 			IsBox:        true,
 			BoxPayload:   "image:pa th.png",
 			BoxPlacement: "below",
 		},
 	}
 	assertSpansEqual(t, Parse(src), want)
+}
+
+// TestSpanKindStyledFromInline pins that an emphasis span
+// (the typical styled producer) carries Kind == SpanStyled.
+// Phase 3 round 6.5.
+func TestSpanKindStyledFromInline(t *testing.T) {
+	got := Parse("a *b* c")
+	if len(got) == 0 {
+		t.Fatalf("Parse produced no spans for emphasis input")
+	}
+	for _, s := range got {
+		if s.Italic && s.Kind != SpanStyled {
+			t.Errorf("italic span has Kind %v, want SpanStyled", s.Kind)
+		}
+	}
+}
+
+// TestSpanKindBoxFromImage pins that an image-syntax span
+// carries Kind == SpanBox alongside the legacy IsBox flag.
+// Phase 3 round 6.5.
+func TestSpanKindBoxFromImage(t *testing.T) {
+	got := Parse("![alt](pic.png)")
+	var found bool
+	for _, s := range got {
+		if s.IsBox {
+			found = true
+			if s.Kind != SpanBox {
+				t.Errorf("box span has Kind %v, want SpanBox", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no IsBox span for image input")
+	}
+}
+
+// TestSpanKindRegionBeginFromCode pins that a fenced-code
+// region begin span carries Kind == SpanRegionBegin.
+// Phase 3 round 6.5.
+func TestSpanKindRegionBeginFromCode(t *testing.T) {
+	got := Parse("```\nx\n```")
+	var found bool
+	for _, s := range got {
+		if s.RegionBegin != "" {
+			found = true
+			if s.Kind != SpanRegionBegin {
+				t.Errorf("region-begin span has Kind %v, want SpanRegionBegin", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no RegionBegin span for fenced code input")
+	}
+}
+
+// TestSpanKindRegionEndFromCode pins that a fenced-code
+// region end span carries Kind == SpanRegionEnd.
+// Phase 3 round 6.5.
+func TestSpanKindRegionEndFromCode(t *testing.T) {
+	got := Parse("```\nx\n```")
+	var found bool
+	for _, s := range got {
+		if s.RegionEnd {
+			found = true
+			if s.Kind != SpanRegionEnd {
+				t.Errorf("region-end span has Kind %v, want SpanRegionEnd", s.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Parse produced no RegionEnd span for fenced code input")
+	}
+}
+
+// TestSpanKindBlockquoteRegions pins Kind on blockquote
+// region directives. Phase 3 round 6.5.
+func TestSpanKindBlockquoteRegions(t *testing.T) {
+	got := Parse("> a\n")
+	var begin, end bool
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			begin = true
+			if s.Kind != SpanRegionBegin {
+				t.Errorf("blockquote begin Kind %v, want SpanRegionBegin", s.Kind)
+			}
+		}
+		if s.RegionEnd {
+			end = true
+			if s.Kind != SpanRegionEnd {
+				t.Errorf("region-end Kind %v, want SpanRegionEnd", s.Kind)
+			}
+		}
+	}
+	if !begin || !end {
+		t.Fatalf("missing begin/end (begin=%v end=%v)", begin, end)
+	}
 }
