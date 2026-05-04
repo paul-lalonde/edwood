@@ -96,8 +96,8 @@ blockquote), patch the rule.
 |-------|-------------|------|-------|
 | [x] Design | n/a (validation) | — | — |
 | [x] Tests | All packages green | `go test ./...` | Green. |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with: 2-level nested list (top-level); 3-level nested list; mixed markers; nested list inside blockquote; mixed `- ` and `1. ` across siblings. | — | Binaries rebuilt; awaiting user smoke. |
-| [ ] Commit | — | — | n/a unless smoke surfaces a fix. |
+| [x] Iterate | Smoke confirmed: top-level / nested / mixed-marker / inside-blockquote all render correctly. No fixes needed. | — | — |
+| [x] Commit | — | — | n/a (no smoke fixes). |
 
 ---
 
@@ -117,5 +117,5 @@ cases.
 
 ## Status
 
-All rows complete. Awaiting smoke confirmation before
-merging to master.
+All rows complete. Smoke confirmed. Ready to merge to
+master.
