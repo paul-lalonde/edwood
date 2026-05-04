@@ -1771,3 +1771,175 @@ func TestIsListLineContentByteSkipsLeadingWhitespace(t *testing.T) {
 		t.Errorf("contentByte = %d, want 4 (after `  - `)", contentByte)
 	}
 }
+
+// --- Nested-list emission tests (Phase 3 round 7.x) --------------------
+
+// listitemEvents extracts an ordered slice of {kind:
+// "begin" | "end", offset: int, marker: string, number:
+// string} representing every listitem region directive
+// in the parse output. Helper for the nested-list tests.
+type listitemEvent struct {
+	kind   string // "begin" or "end"
+	offset int
+	marker string
+	number string
+}
+
+func listitemEvents(spans []Span) []listitemEvent {
+	var out []listitemEvent
+	for _, s := range spans {
+		switch {
+		case s.RegionBegin == "listitem":
+			out = append(out, listitemEvent{
+				kind:   "begin",
+				offset: s.Offset,
+				marker: s.RegionParams["marker"],
+				number: s.RegionParams["number"],
+			})
+		case s.Kind == SpanRegionEnd:
+			// Treat all RegionEnds as listitem ends in
+			// these tests — the inputs only produce list
+			// regions, no other kinds.
+			out = append(out, listitemEvent{
+				kind:   "end",
+				offset: s.Offset,
+			})
+		}
+	}
+	return out
+}
+
+// TestParseNestedListTwoLevels: `- a\n  - b\n- c`
+// produces an outer item containing the inner sibling,
+// followed by another outer sibling. Wire order:
+// begin-outer1 / content / begin-inner / content /
+// end-inner / end-outer1 / begin-outer2 / content /
+// end-outer2.
+func TestParseNestedListTwoLevels(t *testing.T) {
+	src := "- a\n  - b\n- c"
+	got := Parse(src)
+	events := listitemEvents(got)
+
+	want := []listitemEvent{
+		{kind: "begin", offset: 0, marker: "-"},  // - a starts
+		{kind: "begin", offset: 4, marker: "-"},  // (2-space)- b starts
+		{kind: "end", offset: 10},                // close inner at - c line start
+		{kind: "end", offset: 10},                // close outer1 at - c line start
+		{kind: "begin", offset: 10, marker: "-"}, // - c starts
+		{kind: "end", offset: 13},                // close outer2 at run end (EOF)
+	}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d; events: %+v", len(events), len(want), events)
+	}
+	for i, w := range want {
+		if events[i] != w {
+			t.Errorf("event[%d] = %+v, want %+v", i, events[i], w)
+		}
+	}
+}
+
+// TestParseNestedListThreeLevels: `- a\n  - b\n    - c`
+// produces three nested items.
+func TestParseNestedListThreeLevels(t *testing.T) {
+	src := "- a\n  - b\n    - c"
+	got := Parse(src)
+	events := listitemEvents(got)
+
+	// 3 begins + 3 ends = 6 events.
+	if len(events) != 6 {
+		t.Fatalf("got %d events, want 6; events: %+v", len(events), events)
+	}
+	beginCount := 0
+	endCount := 0
+	for _, e := range events {
+		if e.kind == "begin" {
+			beginCount++
+		} else {
+			endCount++
+		}
+	}
+	if beginCount != 3 || endCount != 3 {
+		t.Errorf("got %d begins / %d ends, want 3/3", beginCount, endCount)
+	}
+	// All ends should land at the run's end (EOF, rune
+	// count of source = 17).
+	wantEndOffset := 17
+	for i, e := range events {
+		if e.kind == "end" && e.offset != wantEndOffset {
+			t.Errorf("end[%d] offset = %d, want %d", i, e.offset, wantEndOffset)
+		}
+	}
+}
+
+// TestParseNestedListMixedMarkers: outer `-`, inner
+// `1.` — each item carries its own marker/number param.
+func TestParseNestedListMixedMarkers(t *testing.T) {
+	src := "- a\n  1. b"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4; events: %+v", len(events), events)
+	}
+	if events[0].marker != "-" || events[0].number != "" {
+		t.Errorf("outer event = %+v, want marker=-", events[0])
+	}
+	if events[1].marker != "" || events[1].number != "1" {
+		t.Errorf("inner event = %+v, want number=1", events[1])
+	}
+}
+
+// TestParseNestedListPopsToShallower: an item at a
+// shallower depth than the previous level closes the
+// deeper levels.
+func TestParseNestedListPopsToShallower(t *testing.T) {
+	// Run: depth-1, depth-2, depth-3, depth-1.
+	// Expected: 4 begins + 4 ends, with three closes at
+	// the shallow item's start (closing the depth-3, -2,
+	// and -1 above), then the new depth-1's begin.
+	src := "- a\n  - b\n    - c\n- d"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 8 {
+		t.Fatalf("got %d events, want 8; events: %+v", len(events), events)
+	}
+	// First three should be begins at increasing depths.
+	for i := 0; i < 3; i++ {
+		if events[i].kind != "begin" {
+			t.Errorf("event[%d] = %+v, want begin", i, events[i])
+		}
+	}
+	// Next three should be ends at offset 18 (start of `- d`).
+	wantPopOffset := 18
+	for i := 3; i < 6; i++ {
+		if events[i].kind != "end" {
+			t.Errorf("event[%d] = %+v, want end", i, events[i])
+		}
+		if events[i].offset != wantPopOffset {
+			t.Errorf("end[%d] offset = %d, want %d", i, events[i].offset, wantPopOffset)
+		}
+	}
+	// Then begin for `- d`, end at EOF.
+	if events[6].kind != "begin" || events[6].offset != wantPopOffset {
+		t.Errorf("event[6] = %+v, want begin@%d", events[6], wantPopOffset)
+	}
+	if events[7].kind != "end" || events[7].offset != 21 {
+		t.Errorf("event[7] = %+v, want end@21", events[7])
+	}
+}
+
+// TestParseNestedListBlankLineClearsStack: a blank line
+// terminates the list run, closing all open items.
+func TestParseNestedListBlankLineClearsStack(t *testing.T) {
+	src := "- a\n  - b\n\nplain"
+	got := Parse(src)
+	events := listitemEvents(got)
+	// 2 begins + 2 ends — stack cleared at the blank line.
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4; events: %+v", len(events), events)
+	}
+	for i := 2; i < 4; i++ {
+		if events[i].kind != "end" {
+			t.Errorf("event[%d] kind = %q, want end", i, events[i].kind)
+		}
+	}
+}

@@ -108,7 +108,9 @@ type Span struct {
 // Offsets and lengths are in runes (R7 of md2spans.design.md).
 func Parse(src string) []Span {
 	var spans []Span
-	for _, p := range scanParagraphs(src) {
+	paras := scanParagraphs(src)
+	for i := 0; i < len(paras); i++ {
+		p := paras[i]
 		switch {
 		case p.IsBlockquote:
 			spans = append(spans, parseBlockquoteRange(src, p)...)
@@ -117,7 +119,25 @@ func Parse(src string) []Span {
 		case p.IsHRule:
 			spans = append(spans, parseHRuleParagraph(src, p)...)
 		case p.IsListItem:
-			spans = append(spans, parseListItemParagraph(src, p)...)
+			// Collect the consecutive run of list items
+			// and emit them as a single nested
+			// begin/end tree. Round 7 v1 emitted each
+			// item as a flat begin/content/end triple;
+			// round 7.x interprets ListDepth and
+			// produces nested regions.
+			j := i
+			for j < len(paras) && paras[j].IsListItem {
+				j++
+			}
+			runEndByte := len(src)
+			runEndRune := utf8.RuneCountInString(src)
+			if j < len(paras) {
+				runEndByte = paras[j].ByteStart
+				runEndRune = paras[j].RuneStart
+			}
+			_ = runEndByte
+			spans = append(spans, parseListRun(src, paras[i:j], runEndRune)...)
+			i = j - 1 // outer for-loop's i++ moves us to paras[j].
 		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
 		default:
@@ -461,56 +481,91 @@ func parseHRuleParagraph(src string, p paragraphRange) []Span {
 	}}
 }
 
-// parseListItemParagraph emits the spans for one list-
-// item line (Phase 3 round 7 v1):
+// parseListRun emits nested begin/end region directives
+// for a CONSECUTIVE RUN of list-item paragraphs.
 //
-//   - `begin region listitem marker=X` (unordered) or
-//     `begin region listitem number=N` (ordered) at the
-//     line's start.
-//   - Inline spans for the item's CONTENT (after the
-//     marker + space) — emphasis, links, inline code, etc.
-//   - `end region` at the line's end (one past `\n` if
-//     present, or at EOF).
+// Round 7 v1 emitted each item as a flat begin/content/end
+// triple (one region per line). Round 7.x interprets each
+// item's `ListDepth` and produces a nested tree:
+//
+//   - An outer item's region SPANS its sub-list — the
+//     bridge's ancestor walk then sees N listitem
+//     ancestors at depth N and bumps `ListIndent` to N.
+//   - When a deeper item appears, its begin slots inside
+//     the current item's range; its end closes BEFORE the
+//     outer's end.
+//   - When a shallower item appears, all deeper items
+//     close at the new item's start (sibling boundary).
+//   - At the end of the run (blank line, non-list line,
+//     or EOF), all open items close at the run's last
+//     rune position.
+//
+// `runEndRune` is the position one past the last rune of
+// the run — typically the next non-list paragraph's
+// RuneStart, or the source's total rune count at EOF.
 //
 // The marker character itself is not covered by an
-// emphasis-style span — it renders as default-styled
-// body text via emit-time gap-fill, matching the
-// markup-stays-visible stance of all other v1 features.
+// inline span — it renders as default-styled body text
+// via emit-time gap-fill, matching the markup-stays-
+// visible stance.
 //
-// v1 limits: each list line is ONE item — no continuation
-// lines, no nested lists. Round 7.x will extend.
-func parseListItemParagraph(src string, p paragraphRange) []Span {
-	begin := Span{
-		Kind:        SpanRegionBegin,
-		Offset:      p.RuneStart,
-		RegionBegin: "listitem",
+// Phase 3 round 7.x.
+func parseListRun(src string, run []paragraphRange, runEndRune int) []Span {
+	var spans []Span
+	// stack tracks the depth of each currently-open
+	// listitem. The end of an entry is determined when it
+	// pops (sibling at deeper-or-equal depth, run end).
+	var stack []int
+
+	emitClose := func(offset int) {
+		spans = append(spans, Span{
+			Kind:      SpanRegionEnd,
+			Offset:    offset,
+			RegionEnd: true,
+		})
 	}
-	if p.ListMarker != 0 {
-		begin.RegionParams = map[string]string{
-			"marker": string(p.ListMarker),
+
+	for _, item := range run {
+		// Pop entries with depth >= current item's depth.
+		// Their close offset is THIS item's RuneStart.
+		for len(stack) > 0 && stack[len(stack)-1] >= item.ListDepth {
+			emitClose(item.RuneStart)
+			stack = stack[:len(stack)-1]
 		}
-	} else {
-		begin.RegionParams = map[string]string{
-			"number": strconv.Itoa(p.ListNumber),
+
+		begin := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      item.RuneStart,
+			RegionBegin: "listitem",
 		}
+		if item.ListMarker != 0 {
+			begin.RegionParams = map[string]string{
+				"marker": string(item.ListMarker),
+			}
+		} else {
+			begin.RegionParams = map[string]string{
+				"number": strconv.Itoa(item.ListNumber),
+			}
+		}
+		spans = append(spans, begin)
+
+		// Inline content spans for the item's content
+		// (after leading whitespace + marker + space).
+		contentBytes := contentBytePos(src, item)
+		if contentBytes < item.ByteEnd {
+			runes := []rune(src[contentBytes:item.ByteEnd])
+			spans = append(spans, parseInlineSpans(runes, item.ListContentRuneStart)...)
+		}
+
+		stack = append(stack, item.ListDepth)
 	}
-	itemRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
-	end := Span{
-		Kind:      SpanRegionEnd,
-		Offset:    itemRuneEnd,
-		RegionEnd: true,
+
+	// Close any still-open items at the run's end.
+	for len(stack) > 0 {
+		emitClose(runEndRune)
+		stack = stack[:len(stack)-1]
 	}
-	out := []Span{begin}
-	// Tokenize the item's content (after the marker +
-	// space) for inline emphasis / links / code. The
-	// marker bytes themselves are skipped.
-	contentBytes := contentBytePos(src, p)
-	if contentBytes < p.ByteEnd {
-		runes := []rune(src[contentBytes:p.ByteEnd])
-		out = append(out, parseInlineSpans(runes, p.ListContentRuneStart)...)
-	}
-	out = append(out, end)
-	return out
+	return spans
 }
 
 // contentBytePos returns the byte position in src where
