@@ -2804,6 +2804,8 @@ func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 			applyCodeRegion(s, r)
 		case "blockquote":
 			applyBlockquoteRegion(s, r)
+		case "listitem":
+			applyListitemRegion(s, r)
 		}
 	}
 }
@@ -2847,6 +2849,44 @@ func applyCodeRegion(s *rich.Style, _ *Region) {
 func applyBlockquoteRegion(s *rich.Style, _ *Region) {
 	s.Blockquote = true
 	s.BlockquoteDepth++
+}
+
+// applyListitemRegion sets the per-rune flags for a
+// `listitem` region ancestor. Composition rule: additive
+// for ListIndent (one bump per ancestor; v1 emits a single
+// listitem ancestor per rune, so depth is always 1, but
+// the mechanism is ready for round 7.x's nesting). For
+// per-instance payload (marker/number), per-call overwrite
+// in the outermost-first walk gives nearest-of-kind
+// semantics — the innermost listitem's marker/number wins
+// when ancestors disagree. Phase 3 round 7.
+func applyListitemRegion(s *rich.Style, r *Region) {
+	s.ListItem = true
+	s.ListIndent++
+	if number, ok := r.Params["number"]; ok && number != "" {
+		s.ListOrdered = true
+		s.ListNumber = parseListNumber(number)
+		return
+	}
+	// Unordered (marker= present, or neither — defensive).
+	s.ListOrdered = false
+	s.ListNumber = 0
+}
+
+// parseListNumber converts a `number=N` param value to an
+// int. Returns 0 on parse error (the protocol parser
+// rejects malformed numbers upstream, but be defensive at
+// the bridge boundary).
+func parseListNumber(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
