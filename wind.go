@@ -2485,6 +2485,29 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 	return rtOpts
 }
 
+// renderStyledFromBody rebuilds the styled content from the
+// span/region stores and pushes it to richBody, syncing the
+// scroll origin and dot/selection from the body so a
+// freshly-initialized richBody picks up the user's cursor
+// position. Called from both the protocol-driven path
+// (xfidspanswrite) and the user-toggle path (exec.go's
+// markdownPreviewCmd) so they stay in parity. No-op if
+// richBody is nil. Phase 3 round 7 — extracted from
+// xfidspanswrite to fix the cursor-resets-to-#0 bug.
+func (w *Window) renderStyledFromBody() {
+	if !w.styledMode || w.richBody == nil {
+		return
+	}
+	content := w.buildStyledContent()
+	w.richBody.SetContent(content)
+	w.richBody.SetOrigin(w.body.org)
+	w.richBody.SetSelection(w.body.q0, w.body.q1)
+	w.richBody.Render(w.body.all)
+	if w.display != nil {
+		w.display.Flush()
+	}
+}
+
 // applyParsedSpans applies a successfully-parsed span/region
 // write to the window's spanStore and regionStore. Called
 // from xfidspanswrite after parseSpanMessage returns.

@@ -551,6 +551,47 @@ func TestAutoSwitchToStyledMode(t *testing.T) {
 	}
 }
 
+// TestRenderStyledFromBodyPreservesSelection: regression for
+// the md2spans cursor-resets-to-#0 bug. md2spans's normal
+// render pattern is `c\n` followed by spans; the `c`
+// directive triggers exitStyledMode (richBody destroyed),
+// and the subsequent spans write triggers initStyledMode
+// with a fresh richBody. The render path must sync the
+// body's dot/selection to the new richBody — without it,
+// the user's cursor visibly snaps to the start of the
+// document on every render. Phase 3 round 7.
+func TestRenderStyledFromBodyPreservesSelection(t *testing.T) {
+	w := makeStyledWindow(t, "hello world test")
+	w.body.what = Body
+	w.body.all = image.Rect(0, 0, 800, 600)
+
+	// User has positioned cursor mid-buffer in plain mode.
+	w.body.q0 = 6
+	w.body.q1 = 11
+
+	// Simulate the protocol-driven flow: a span write
+	// arrives, applyParsedSpans populates the stores,
+	// initStyledMode creates a fresh richBody (no prior
+	// rich-frame state), then renderStyledFromBody pushes
+	// content + origin + selection.
+	w.spanStore = NewSpanStore()
+	w.spanStore.Insert(0, 16)
+	w.initStyledMode()
+	if !w.styledMode || w.richBody == nil {
+		t.Fatalf("init failed: styledMode=%v richBody=%v",
+			w.styledMode, w.richBody == nil)
+	}
+
+	w.renderStyledFromBody()
+
+	// The freshly-initialized richBody must reflect the
+	// body's selection (NOT default to 0, 0).
+	p0, p1 := w.richBody.Selection()
+	if p0 != 6 || p1 != 11 {
+		t.Errorf("richBody selection = (%d, %d), want (6, 11) — render did not sync from body", p0, p1)
+	}
+}
+
 func TestStyledAndPreviewMutuallyExclusive(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 

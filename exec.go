@@ -1468,16 +1468,7 @@ func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	}
 
 	w.initStyledMode()
-	if w.styledMode && w.richBody != nil {
-		content := w.buildStyledContent()
-		w.richBody.SetContent(content)
-		w.richBody.SetOrigin(w.body.org)
-		w.richBody.SetSelection(w.body.q0, w.body.q1)
-		w.richBody.Render(w.body.all)
-		if w.display != nil {
-			w.display.Flush()
-		}
-	}
+	w.renderStyledFromBody()
 }
 
 // fileHooks maps lowercase file extensions to external tool names
