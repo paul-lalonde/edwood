@@ -1713,3 +1713,61 @@ func TestParseListItemEmphasisInContent(t *testing.T) {
 		t.Errorf("emphasis not tokenized inside list item; spans: %+v", got)
 	}
 }
+
+// --- isListLine indent-depth tests (Phase 3 round 7.x) -----------------
+
+// TestIsListLineDepth pins the depth-detection contract:
+// 2 spaces or 1 tab per indent level (matching the in-tree
+// markdown package's `tabCount + spaceCount/2` formula).
+// Odd trailing spaces round DOWN.
+func TestIsListLineDepth(t *testing.T) {
+	cases := []struct {
+		name      string
+		src       string
+		wantOK    bool
+		wantDepth int
+	}{
+		{"top-level dash", "- a", true, 1},
+		{"top-level asterisk", "* a", true, 1},
+		{"top-level plus", "+ a", true, 1},
+		{"top-level ordered", "1. a", true, 1},
+		{"two-space depth-2", "  - a", true, 2},
+		{"four-space depth-3", "    - a", true, 3},
+		{"tab depth-2", "\t- a", true, 2},
+		{"tab+two-space depth-3", "\t  - a", true, 3},
+		{"three-space rounds down to depth-2", "   - a", true, 2},
+		{"one-space rounds down to depth-1", " - a", true, 1},
+		{"plain text", "hello", false, 0},
+		{"hyphen no space", "-foo", false, 0},
+		{"asterisk emphasis", "*foo*", false, 0},
+		{"two spaces only", "  ", false, 0},
+		{"two-space ordered", "  1. b", true, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, _, _, _, depth := isListLine(tc.src, 0, len(tc.src))
+			if ok != tc.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && depth != tc.wantDepth {
+				t.Errorf("depth = %d, want %d", depth, tc.wantDepth)
+			}
+		})
+	}
+}
+
+// TestIsListLineContentByteSkipsLeadingWhitespace pins
+// that contentByte points to the rune AFTER the marker
+// + space, having ALSO accounted for any leading
+// whitespace before the marker.
+func TestIsListLineContentByteSkipsLeadingWhitespace(t *testing.T) {
+	// `  - foo`: leading 2 spaces (bytes 0..1), `- ` at
+	// bytes 2..3, content `foo` starts at byte 4.
+	ok, _, _, contentByte, _ := isListLine("  - foo", 0, len("  - foo"))
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if contentByte != 4 {
+		t.Errorf("contentByte = %d, want 4 (after `  - `)", contentByte)
+	}
+}
