@@ -2705,13 +2705,23 @@ func (w *Window) UpdateStyledView() {
 }
 
 // buildStyledContent builds rich.Content from the body text and span store.
-// If a regionStore is present (Phase 3 round 5), each rich.Span gains
+// If a regionStore is present (Phase 3 round 5+), each rich.Span gains
 // per-rune Style flags derived from its enclosing region: a `code`
-// region adds Block + Code + Bg(InlineCodeBg), driving the existing
-// rich.Frame block-element layout (gutter indent, full-line bg,
-// monospace font). The bridge walks regions ancestor-first so future
-// nested kinds (round 6+ blockquote outside, code inside) layer their
-// flags correctly.
+// region adds Block + Code + Bg(InlineCodeBg); a `blockquote` region
+// adds Blockquote + BlockquoteDepth (counted from ancestors). These
+// drive the existing rich.Frame block-element layout (gutter indent,
+// full-line bg, monospace font, blockquote bar via the wrapper).
+//
+// Round 6 addition: the bridge SPLITS each spanStore run at any
+// region-boundary offset within its range. Without splitting, a
+// default-styled run that crosses a blockquote boundary would have
+// blockquote flags applied based only on the run's start offset
+// (either all or nothing); with splitting, the inside-region
+// portion carries the flags and the outside portion doesn't.
+// md2spans's `code` regions don't trigger this because the
+// inside-region runs differ in style (family=code) and the
+// spanStore preserves the boundary; default-styled blockquote
+// regions DO need the split.
 func (w *Window) buildStyledContent() rich.Content {
 	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
 		return rich.Plain(w.body.file.String())
@@ -2723,32 +2733,41 @@ func (w *Window) buildStyledContent() rich.Content {
 		if run.Len == 0 {
 			return
 		}
-		buf := make([]rune, run.Len)
-		w.body.file.Read(offset, buf)
-		text := string(buf)
-
-		var style rich.Style
-		if run.Style.IsBox {
-			style = boxStyleToRichStyle(run.Style, text)
-		} else {
-			style = styleAttrsToRichStyle(run.Style)
-		}
-
-		// Region expansion: layer the enclosing region's
-		// flags onto the per-rune style. v1 (round 5)
-		// recognizes only `code`; rounds 6-8 add more.
+		runEnd := offset + run.Len
+		// Compute split points within this run from region
+		// boundaries. If no regionStore, no splits.
+		splits := []int{offset}
 		if w.regionStore != nil {
-			applyEnclosingRegions(&style, w.regionStore.EnclosingAt(offset))
+			splits = append(splits, w.regionStore.BoundariesIn(offset, runEnd)...)
 		}
-
-		span := rich.Span{
-			Text:  text,
-			Style: style,
+		splits = append(splits, runEnd)
+		for i := 0; i < len(splits)-1; i++ {
+			subStart, subEnd := splits[i], splits[i+1]
+			content = append(content, w.styleSubRun(run, subStart, subEnd))
 		}
-		content = append(content, span)
-		offset += run.Len
+		offset = runEnd
 	})
 	return rich.Content(content)
+}
+
+// styleSubRun produces one rich.Span for the [subStart, subEnd)
+// portion of a parent StyleRun. The base style comes from the
+// run; region flags come from the regionStore's deepest enclosing
+// region at subStart. Phase 3 round 6 (split-at-boundaries).
+func (w *Window) styleSubRun(run StyleRun, subStart, subEnd int) rich.Span {
+	buf := make([]rune, subEnd-subStart)
+	w.body.file.Read(subStart, buf)
+	text := string(buf)
+	var style rich.Style
+	if run.Style.IsBox {
+		style = boxStyleToRichStyle(run.Style, text)
+	} else {
+		style = styleAttrsToRichStyle(run.Style)
+	}
+	if w.regionStore != nil {
+		applyEnclosingRegions(&style, w.regionStore.EnclosingAt(subStart))
+	}
+	return rich.Span{Text: text, Style: style}
 }
 
 // applyEnclosingRegions walks from the outermost ancestor
@@ -2789,6 +2808,17 @@ func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 			s.Block = true
 			s.Code = true
 			s.Bg = rich.InlineCodeBg
+		case "blockquote":
+			// Phase 3 round 6: depth COUNTS, not just OR-s.
+			// Each blockquote ancestor in the chain bumps the
+			// depth by one, producing 1 for a single
+			// blockquote, 2 for nested, etc. The
+			// outermost-first iteration order makes this
+			// composes naturally — outer ancestor visited
+			// first contributes to depth, inner ancestor
+			// visited last bumps further.
+			s.Blockquote = true
+			s.BlockquoteDepth++
 		}
 	}
 }

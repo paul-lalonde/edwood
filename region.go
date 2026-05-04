@@ -196,6 +196,52 @@ func (s *RegionStore) EnclosingAt(pos int) *Region {
 	return nil
 }
 
+// BoundariesIn returns the sorted, deduplicated list of
+// region boundary offsets STRICTLY between start and end
+// (exclusive on both sides). Used by the bridge to split a
+// styled run at region boundaries when the producer's runs
+// don't natively align with them — the producer-
+// responsibility note from round 5 said producers should
+// emit separate s/b runs at boundaries (and md2spans for
+// `code` does this naturally because the inside style
+// differs), but for blockquote regions covering
+// default-styled runs the spanStore coalesces and loses
+// the boundaries. Phase 3 round 6.
+func (s *RegionStore) BoundariesIn(start, end int) []int {
+	if start >= end {
+		return nil
+	}
+	seen := map[int]bool{}
+	var collect func([]*Region)
+	collect = func(rs []*Region) {
+		for _, r := range rs {
+			// Skip regions that don't overlap [start, end).
+			if r.End <= start || r.Start >= end {
+				continue
+			}
+			if r.Start > start && r.Start < end {
+				seen[r.Start] = true
+			}
+			if r.End > start && r.End < end {
+				seen[r.End] = true
+			}
+			collect(r.Children)
+		}
+	}
+	collect(s.roots)
+	out := make([]int, 0, len(seen))
+	for b := range seen {
+		out = append(out, b)
+	}
+	// Insertion sort (small N).
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1] > out[j]; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
 // Insert shifts region offsets to account for `length` runes
 // inserted at body position `pos`. The contract:
 //
