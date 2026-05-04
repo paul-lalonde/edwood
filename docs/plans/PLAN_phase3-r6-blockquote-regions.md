@@ -106,10 +106,10 @@ group consecutive ones; track nesting depth.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | — | — |
-| [ ] Tests | All packages green | `go test ./...` | — |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with a markdown containing single-level blockquotes, nested `>>` blockquotes, and a blockquote containing a fenced code block; verify visual parity with in-tree path. | — | User-driven. |
-| [ ] Commit | — | — | n/a (no code change unless smoke surfaces something) |
+| [x] Design | n/a (validation) | — | — |
+| [x] Tests | All packages green | `go test ./...` | Green. |
+| [x] Iterate | Build binaries; smoke-test in real edwood with a markdown containing single-level blockquotes, nested `>>` blockquotes, and a blockquote containing a fenced code block; verify visual parity with in-tree path. | — | Surfaced two bugs: nested-blockquote first-line indent (fixed in 96c42a1) and panic on unclosed fence at EOF inside a nested blockquote (fixed in ca2060d, with regression test). |
+| [x] Commit | — | — | `md2spans: snap nested blockquote begin to original line start` and `md2spans: don't skip past EOF for unclosed fence opener` |
 
 ---
 
@@ -137,4 +137,5 @@ one (validates round 5's walk-order fix).
 
 ## Status
 
-Plan + design drafted. Awaiting review before any code.
+All rows complete. Branch is ready for code + arch review and
+merge.
