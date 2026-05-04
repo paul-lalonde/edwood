@@ -246,10 +246,9 @@ region` records `End`.
 Fields:
 
 - **`<kind>`** (required on `begin region`): namespaced
-  layout-mode discriminator. v1 valid values: `code`.
-  Future rounds add `blockquote` (round 6), `listitem`
-  (round 7), `table` (round 8). Unknown kinds are an
-  error.
+  layout-mode discriminator. v1 valid values: `code`,
+  `blockquote`. Future rounds add `listitem` (round 7),
+  `table` (round 8). Unknown kinds are an error.
 - **`<param>=<value>`** (optional on `begin region`):
   zero or more space-separated key=value parameters
   carrying region attributes. v1 recognized params:
@@ -260,6 +259,17 @@ Fields:
   - Malformed params (no `=` or empty value) are silently
     ignored (forward-compat).
 - **`end region`** takes no kind / params.
+
+**Blockquote depth (round 6)**: blockquote nesting depth
+is COMPUTED, not declared. The protocol does NOT carry a
+`depth=N` parameter on `begin region blockquote`. Producers
+that emit nested blockquotes do so by emitting nested
+`begin region blockquote` / `end region` pairs at the
+appropriate offsets; the consumer's bridge counts
+blockquote ancestors during the `applyEnclosingRegions`
+walk. A producer that wants to emit `depth=N` as a hint is
+free to (it's a recognized but unenforced parameter); the
+bridge ignores it (the count is authoritative).
 
 **Constraints**:
 - Every `begin region` in a Twrite must have a matching
@@ -316,6 +326,35 @@ s 0 5 -
 begin region code
 end region                                            ; empty region
 s 5 5 -
+```
+
+Blockquote (round 6) — single:
+```
+begin region blockquote
+s 0 9 -                                               ; "> a quote"
+end region
+```
+
+Nested blockquote — depth computed from ancestors:
+```
+begin region blockquote
+s 0 8 -                                               ; "> outer\n"
+begin region blockquote
+s 8 9 -                                               ; ">> inner\n"
+end region
+s 17 13 -                                             ; "> outer again"
+end region
+```
+
+Cross-kind — fenced code inside blockquote:
+```
+begin region blockquote
+s 0 7 -                                               ; "> ```go\n"
+begin region code lang=go
+s 7 17 - family=code                                  ; "> fmt.Println()\n"
+end region
+s 24 5 -                                              ; "> ```\n"
+end region
 ```
 
 ## Per-write ordering rules
@@ -462,9 +501,15 @@ update this spec in lockstep:
   New `begin region <kind> [params]` / `end region`
   directives; first region primitive. v1 kind: `code`
   with optional `lang=NAME` param. See above.
-- **Rounds 6-7 — blockquote, lists**: extend region kind
-  vocabulary (`blockquote`, `listitem`) and params (depth,
-  bullet/number markers). Nested regions land here.
+- **Round 6 — blockquote (nested regions)**: ✓ landed (May 2026).
+  Adds `blockquote` to v1 region kinds. First non-idempotent
+  kind — depth is computed from ancestor count in the bridge.
+  First nested region kind in production use; validates
+  round-5 region machinery's claims about kind-vocabulary
+  extension and ancestor-walk composition. See above.
+- **Round 7 — lists**: extend region kind vocabulary with
+  `listitem`; per-item region pattern with bullet/number
+  markers and indent.
 - **Round 8 — tables**: region with cells; frame-dimension
   introspection 9P file.
 
