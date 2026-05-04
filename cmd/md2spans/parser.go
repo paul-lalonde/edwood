@@ -224,18 +224,25 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 // Member criteria: the kind covers contiguous source
 // LINES (column 0 to end of line), not just a sub-range
 // within a line. "blockquote" qualifies (round 6).
-// "listitem" qualifies (round 7) — without snapping, a
-// list inside a blockquote leaves its begin AFTER the
-// stripped `>` markers, so the line's first box has
-// Blockquote but not ListItem flags and the layout misses
-// the list's indent contribution. "code" does NOT
-// qualify — its body anchors AFTER the opener fence's
-// `\n`, which is already a line start; snapping a code
-// begin would move it onto the fence-opener line, mis-
-// anchoring the region.
+//
+// "listitem" does NOT qualify — when a list line lives
+// inside a blockquote (`> - item`), the listitem region
+// begins AFTER the `>` markers, leaving the line's first
+// box (the `>`) with Blockquote flags only. That's the
+// VISUAL we want: the `>` aligns with non-list
+// blockquote lines (same column), and the list content
+// appears just after the `>` at blockquote indent. If we
+// snapped listitem begins to line-start, the layout's
+// first-box-determines-indent rule would add ListIndent
+// to the line, pushing `>` past where it belongs (a
+// regression flagged in round 7 smoke testing).
+//
+// "code" does NOT qualify — its body anchors AFTER the
+// opener fence's `\n`, which is already a line start;
+// snapping a code begin would move it onto the fence-
+// opener line, mis-anchoring the region.
 var kindsAnchorAtLineStart = map[string]bool{
 	"blockquote": true,
-	"listitem":   true,
 }
 
 // snapToLineStart returns the largest line-start offset in

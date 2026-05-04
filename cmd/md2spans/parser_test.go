@@ -1664,24 +1664,28 @@ func TestParseListItemInsideBlockquote(t *testing.T) {
 	}
 }
 
-// TestParseListItemInsideBlockquoteSnapsToLineStart pins
-// the round-7 v1 snap fix: when a list item appears inside
-// a blockquote, the listitem region's `begin` offset must
-// be at the source LINE START (column 0 of the original),
-// NOT at the position of the list marker (after the
-// stripped `>` markers). Without the snap, the line's
-// first box (the `>` rune) has Blockquote flags but no
-// ListItem flag, and the layout's first-box-determines-
-// indent rule misses the list's indent contribution.
+// TestParseListItemInsideBlockquoteBeginsAfterMarkers
+// pins the desired visual alignment: when a list item
+// appears inside a blockquote (`> - item`), the listitem
+// region must begin AFTER the `>` markers + space, NOT
+// at the line start. This way the line's first box (the
+// `>` rune) has Blockquote flags only — the layout's
+// first-box-determines-indent rule produces just the
+// blockquote indent, aligning the `>` with non-list
+// blockquote lines.
 //
-// For source `> 1. foo` (one-byte line markers):
+// An earlier round-7 fix (now reverted) snapped the
+// begin to line-start, which made `>` itself shift right
+// by ListIndent — visually misaligning list and non-list
+// blockquote lines. This test pins the correction.
+//
+// For source `> 1. foo`:
 //   - rune 0 = '>'
 //   - rune 1 = ' '
 //   - rune 2 = '1'
-//   - The listitem region's begin must be at rune 0
-//     (line start), NOT rune 2 (where '1' sits in the
-//     stripped form).
-func TestParseListItemInsideBlockquoteSnapsToLineStart(t *testing.T) {
+//   - The listitem begin must be at rune 2 (where the
+//     marker actually starts), NOT at rune 0.
+func TestParseListItemInsideBlockquoteBeginsAfterMarkers(t *testing.T) {
 	got := Parse("> 1. foo")
 	var liBegin int = -1
 	for _, s := range got {
@@ -1690,8 +1694,8 @@ func TestParseListItemInsideBlockquoteSnapsToLineStart(t *testing.T) {
 			break
 		}
 	}
-	if liBegin != 0 {
-		t.Errorf("listitem begin offset = %d, want 0 (line start of `> 1. foo` in original)", liBegin)
+	if liBegin != 2 {
+		t.Errorf("listitem begin offset = %d, want 2 (after `> ` markers)", liBegin)
 	}
 }
 
