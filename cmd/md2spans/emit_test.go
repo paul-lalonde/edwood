@@ -383,6 +383,100 @@ func TestFormatSpansBoxPlacementReplaceExplicit(t *testing.T) {
 	}
 }
 
+// --- Region directive emit tests (Phase 3 round 5) -------------------
+
+// TestFormatSpansRegionBasic: a fenced code block produces
+// the expected wire output: default fill before the fence,
+// `begin region code`, the body span, `end region`,
+// default fill after.
+func TestFormatSpansRegionBasic(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 4, Length: 0, RegionBegin: "code"},
+		{Offset: 4, Length: 4, Family: "code"},
+		{Offset: 8, Length: 0, RegionEnd: true},
+	}, 11)
+	want := "s 0 4 -\n" +
+		"begin region code\n" +
+		"s 4 4 - family=code\n" +
+		"end region\n" +
+		"s 8 3 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansRegionWithLang: a region with a `lang`
+// param emits the param after the kind.
+func TestFormatSpansRegionWithLang(t *testing.T) {
+	got := FormatSpans([]Span{
+		{
+			Offset: 0, Length: 0,
+			RegionBegin:  "code",
+			RegionParams: map[string]string{"lang": "go"},
+		},
+		{Offset: 0, Length: 5, Family: "code"},
+		{Offset: 5, Length: 0, RegionEnd: true},
+	}, 5)
+	want := "begin region code lang=go\n" +
+		"s 0 5 - family=code\n" +
+		"end region\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansRegionAtStart: a region beginning at
+// offset 0 with no preceding styled spans produces the
+// begin directive first (no leading default fill).
+func TestFormatSpansRegionAtStart(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 0, RegionBegin: "code"},
+		{Offset: 0, Length: 5, Family: "code"},
+		{Offset: 5, Length: 0, RegionEnd: true},
+	}, 10)
+	want := "begin region code\n" +
+		"s 0 5 - family=code\n" +
+		"end region\n" +
+		"s 5 5 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansRegionAtEnd: a region ending at exactly
+// totalRunes produces the end directive after the last
+// styled span; no trailing default fill.
+func TestFormatSpansRegionAtEnd(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 0, Length: 0, RegionBegin: "code"},
+		{Offset: 0, Length: 10, Family: "code"},
+		{Offset: 10, Length: 0, RegionEnd: true},
+	}, 10)
+	want := "begin region code\n" +
+		"s 0 10 - family=code\n" +
+		"end region\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFormatSpansRegionEmpty: a region with no body (begin
+// immediately followed by end at the same offset) emits
+// just the directive pair, no body span.
+func TestFormatSpansRegionEmpty(t *testing.T) {
+	got := FormatSpans([]Span{
+		{Offset: 5, Length: 0, RegionBegin: "code"},
+		{Offset: 5, Length: 0, RegionEnd: true},
+	}, 10)
+	want := "s 0 5 -\n" +
+		"begin region code\n" +
+		"end region\n" +
+		"s 5 5 -\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // TestFormatSpansBoxPlacementOmittedWhenEmpty: a box with
 // BoxPlacement="" omits the placement= flag (default
 // replacing semantic).

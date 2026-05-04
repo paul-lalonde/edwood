@@ -36,12 +36,20 @@ func parseColor(s string) (color.Color, error) {
 }
 
 // parseSpanMessage parses a spans file write using the prefixed message format.
-// Each line begins with a single-letter prefix: "c" (clear), "s" (span), "b" (box).
-// Returns the parsed runs, region start offset, whether this is a clear command, and any error.
-func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int, isClear bool, err error) {
+// Each line begins with a single-character prefix: "c" (clear), "s" (span),
+// "b" (box), or a multi-word region directive ("begin region <kind> [params]" /
+// "end region", added Phase 3 round 5).
+// Returns the parsed runs, region start offset, parsed regions (flat list;
+// the consumer-side RegionStore arranges them into a tree), whether this is
+// a clear command, and any error.
+func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int, regions []*Region, isClear bool, err error) {
 	lines := strings.Split(data, "\n")
 	regionStart = -1
 	expectedOffset := -1
+	// regionStack tracks open regions for matching begin/end
+	// pairs. Each element is a *Region with Start set; End is
+	// filled when the matching `end region` arrives.
+	var regionStack []*Region
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -55,14 +63,14 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 		switch prefix {
 		case "c":
 			if len(runs) > 0 {
-				return nil, 0, false, fmt.Errorf("clear must be the only command in a write")
+				return nil, 0, nil, false, fmt.Errorf("clear must be the only command in a write")
 			}
-			return nil, 0, true, nil
+			return nil, 0, nil, true, nil
 
 		case "s":
 			offset, length, run, parseErr := parseSpanLine(fields[1:])
 			if parseErr != nil {
-				return nil, 0, false, parseErr
+				return nil, 0, nil, false, parseErr
 			}
 
 			// Silently discard spans that start past the buffer end.
@@ -75,7 +83,7 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 				expectedOffset = offset
 			}
 			if offset != expectedOffset {
-				return nil, 0, false, fmt.Errorf("spans must be contiguous: expected offset %d, got %d", expectedOffset, offset)
+				return nil, 0, nil, false, fmt.Errorf("spans must be contiguous: expected offset %d, got %d", expectedOffset, offset)
 			}
 			expectedOffset = offset + length
 			runs = append(runs, run)
@@ -83,7 +91,7 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 		case "b":
 			offset, length, run, parseErr := parseBoxLine(fields[1:])
 			if parseErr != nil {
-				return nil, 0, false, parseErr
+				return nil, 0, nil, false, parseErr
 			}
 
 			// Silently discard spans that start past the buffer end.
@@ -96,14 +104,33 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 				expectedOffset = offset
 			}
 			if offset != expectedOffset {
-				return nil, 0, false, fmt.Errorf("spans must be contiguous: expected offset %d, got %d", expectedOffset, offset)
+				return nil, 0, nil, false, fmt.Errorf("spans must be contiguous: expected offset %d, got %d", expectedOffset, offset)
 			}
 			expectedOffset = offset + length
 			runs = append(runs, run)
 
+		case "begin":
+			r, parseErr := parseBeginRegion(fields[1:], expectedOffset)
+			if parseErr != nil {
+				return nil, 0, nil, false, parseErr
+			}
+			regionStack = append(regionStack, r)
+
+		case "end":
+			r, parseErr := parseEndRegion(fields[1:], expectedOffset, regionStack)
+			if parseErr != nil {
+				return nil, 0, nil, false, parseErr
+			}
+			regions = append(regions, r)
+			regionStack = regionStack[:len(regionStack)-1]
+
 		default:
-			return nil, 0, false, fmt.Errorf("unknown span command: %q", prefix)
+			return nil, 0, nil, false, fmt.Errorf("unknown span command: %q", prefix)
 		}
+	}
+
+	if len(regionStack) > 0 {
+		return nil, 0, nil, false, fmt.Errorf("unmatched begin region (%d open at end of write)", len(regionStack))
 	}
 
 	if regionStart == -1 {
@@ -113,7 +140,85 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 	// Clamp region to buffer length.
 	runs = clampRunsToBuffer(runs, regionStart, bufLen)
 
-	return runs, regionStart, false, nil
+	return runs, regionStart, regions, false, nil
+}
+
+// validRegionKinds lists the region kinds v1 accepts on
+// `begin region <kind>`. Adding a new kind is a Phase 3
+// round of its own (each requires renderer support); the
+// parser deliberately rejects unknown kinds so producer
+// mistakes surface loudly. Round 5 adds "code"; rounds 6-8
+// will extend.
+var validRegionKinds = map[string]bool{
+	"code": true,
+}
+
+// parseBeginRegion parses the fields after the "begin" prefix.
+// Format: region <kind> [param=value...]
+//
+// Sets the Region's Start to the current contiguity cursor
+// (the offset where the next s/b directive would land).
+// End is filled in when the matching `end region` is parsed.
+// Phase 3 round 5.
+func parseBeginRegion(fields []string, cursor int) (*Region, error) {
+	if len(fields) < 2 || fields[0] != "region" {
+		return nil, fmt.Errorf("bad begin directive: expected 'begin region <kind>'")
+	}
+	kind := fields[1]
+	if !validRegionKinds[kind] {
+		return nil, fmt.Errorf("unknown region kind: %q", kind)
+	}
+	start := cursor
+	if start < 0 {
+		// Begin appearing before any s/b: anchor at 0 (the
+		// region starts at the body's beginning).
+		start = 0
+	}
+	r := &Region{
+		Start: start,
+		End:   start, // overwritten by end
+		Kind:  kind,
+	}
+	for _, tok := range fields[2:] {
+		eq := strings.IndexByte(tok, '=')
+		if eq <= 0 {
+			// Malformed (no '=' or empty key): silently
+			// ignored per the round-4-established
+			// payload-param convention. Forward-compat for
+			// future param shapes.
+			continue
+		}
+		key, val := tok[:eq], tok[eq+1:]
+		if val == "" {
+			continue
+		}
+		if r.Params == nil {
+			r.Params = make(map[string]string)
+		}
+		r.Params[key] = val
+	}
+	return r, nil
+}
+
+// parseEndRegion parses the fields after the "end" prefix.
+// Format: region (no params).
+//
+// Pops the most recent open region off the stack and fills
+// its End with the current contiguity cursor. Phase 3 round 5.
+func parseEndRegion(fields []string, cursor int, stack []*Region) (*Region, error) {
+	if len(fields) < 1 || fields[0] != "region" {
+		return nil, fmt.Errorf("bad end directive: expected 'end region'")
+	}
+	if len(stack) == 0 {
+		return nil, fmt.Errorf("end region without matching begin")
+	}
+	r := stack[len(stack)-1]
+	if cursor < 0 {
+		r.End = r.Start
+	} else {
+		r.End = cursor
+	}
+	return r, nil
 }
 
 // parseSpanLine parses the fields after the "s" prefix.

@@ -92,9 +92,10 @@ type Window struct {
 	previewRenderPending bool        // a render was skipped due to throttle
 	previewDebounceTimer *time.Timer // trailing-edge timer for deferred render
 
-	spanStore        *SpanStore // styled text runs (nil when no spans)
-	styledMode       bool       // true when showing span-styled text via rich.Frame
-	styledSuppressed bool       // true when user explicitly chose Plain; suppresses auto-enable
+	spanStore        *SpanStore   // styled text runs (nil when no spans)
+	regionStore      *RegionStore // sidecar region tree (nil when no regions); Phase 3 round 5
+	styledMode       bool         // true when showing span-styled text via rich.Frame
+	styledSuppressed bool         // true when user explicitly chose Plain; suppresses auto-enable
 
 	fontTables map[string]*richFontTable // cached font tables, keyed by font path
 }
@@ -2484,6 +2485,50 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 	return rtOpts
 }
 
+// applyParsedSpans applies a successfully-parsed span/region
+// write to the window's spanStore and regionStore. Called
+// from xfidspanswrite after parseSpanMessage returns.
+//
+// The spanStore is created lazily and seeded with a default
+// run covering the buffer; subsequent writes apply via
+// RegionUpdate. The regionStore is created lazily on the
+// first write that contains regions; existing regions are
+// preserved across writes (the protocol's `c` directive is
+// the explicit reset). Phase 3 round 5.
+func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*Region, bufLen int) {
+	if w.spanStore == nil {
+		w.spanStore = NewSpanStore()
+		w.spanStore.Insert(0, bufLen)
+	} else if w.spanStore.TotalLen() != bufLen {
+		w.spanStore.Clear()
+		w.spanStore.Insert(0, bufLen)
+	}
+	w.spanStore.RegionUpdate(regionStart, runs)
+
+	if len(regions) > 0 {
+		if w.regionStore == nil {
+			w.regionStore = NewRegionStore()
+		}
+		for _, r := range regions {
+			w.regionStore.Add(r)
+		}
+	}
+}
+
+// clearSpansAndRegions empties both the spanStore and the
+// regionStore. Called from xfidspanswrite on the protocol's
+// `c` (clear) directive — `c` is a full reset of the
+// window's styling state including any begin/end region
+// directives previously written. Phase 3 round 5.
+func (w *Window) clearSpansAndRegions() {
+	if w.spanStore != nil {
+		w.spanStore.Clear()
+	}
+	if w.regionStore != nil {
+		w.regionStore.Clear()
+	}
+}
+
 // exitStyledMode switches the window from styled rendering back to plain mode.
 // No-op if not in styled mode.
 func (w *Window) exitStyledMode() {
@@ -2660,6 +2705,13 @@ func (w *Window) UpdateStyledView() {
 }
 
 // buildStyledContent builds rich.Content from the body text and span store.
+// If a regionStore is present (Phase 3 round 5), each rich.Span gains
+// per-rune Style flags derived from its enclosing region: a `code`
+// region adds Block + Code + Bg(InlineCodeBg), driving the existing
+// rich.Frame block-element layout (gutter indent, full-line bg,
+// monospace font). The bridge walks regions ancestor-first so future
+// nested kinds (round 6+ blockquote outside, code inside) layer their
+// flags correctly.
 func (w *Window) buildStyledContent() rich.Content {
 	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
 		return rich.Plain(w.body.file.String())
@@ -2682,6 +2734,13 @@ func (w *Window) buildStyledContent() rich.Content {
 			style = styleAttrsToRichStyle(run.Style)
 		}
 
+		// Region expansion: layer the enclosing region's
+		// flags onto the per-rune style. v1 (round 5)
+		// recognizes only `code`; rounds 6-8 add more.
+		if w.regionStore != nil {
+			applyEnclosingRegions(&style, w.regionStore.EnclosingAt(offset))
+		}
+
 		span := rich.Span{
 			Text:  text,
 			Style: style,
@@ -2690,6 +2749,48 @@ func (w *Window) buildStyledContent() rich.Content {
 		offset += run.Len
 	})
 	return rich.Content(content)
+}
+
+// applyEnclosingRegions walks from the outermost ancestor
+// down to the deepest region, OR-ing each region's
+// kind-specific flags into s. Order matters: the deepest
+// region applies LAST so that for fields where two kinds
+// could conflict (e.g., shared Bg), the innermost kind
+// wins. v1 of round 5 only has the idempotent "code" kind,
+// so the order is currently unobservable; round 6+ will add
+// `blockquote` (with a depth counter and a different Bg)
+// where the deepest-wins rule matters.
+//
+// Producer-responsibility note: the bridge applies region
+// flags per spanStore run based on the run's START offset.
+// A producer that emits a single run spanning both inside
+// and outside a region will have its style flags applied
+// only based on the run's start position — i.e., either all
+// inside or all outside the region. For correct rendering,
+// producers MUST emit separate s/b directives at region
+// boundaries. md2spans v1 satisfies this naturally (the
+// `family=code` run inside the region differs in style from
+// the default-styled run outside, and the spanStore won't
+// coalesce them).
+func applyEnclosingRegions(s *rich.Style, deepest *Region) {
+	if deepest == nil {
+		return
+	}
+	// Collect the ancestor chain innermost-first.
+	var chain []*Region
+	for r := deepest; r != nil; r = r.Parent {
+		chain = append(chain, r)
+	}
+	// Apply outermost-first so deeper kinds layer over outer
+	// ones (last-write-wins on shared fields).
+	for i := len(chain) - 1; i >= 0; i-- {
+		switch chain[i].Kind {
+		case "code":
+			s.Block = true
+			s.Code = true
+			s.Bg = rich.InlineCodeBg
+		}
+	}
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).

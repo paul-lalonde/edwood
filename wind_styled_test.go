@@ -913,8 +913,153 @@ func TestBoxStyleToRichStylePayloadMalformedFirstToken(t *testing.T) {
 }
 
 // =========================================================================
+// regionStore wiring tests (Phase 3 round 5 row 4)
+// =========================================================================
+
+// TestWindow_RegionStoreInitiallyNil: a newly-constructed
+// window has no regionStore (nil). The store is created
+// lazily on first write that produces regions.
+func TestWindow_RegionStoreInitiallyNil(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	if w.regionStore != nil {
+		t.Errorf("new window regionStore = %v, want nil", w.regionStore)
+	}
+}
+
+// TestWindow_ApplyParsedSpansPopulatesRegionStore: when
+// applyParsedSpans is called with parsed regions, the
+// window's regionStore is created (if nil) and the regions
+// are added.
+func TestWindow_ApplyParsedSpansPopulatesRegionStore(t *testing.T) {
+	w := makeStyledWindow(t, "hello world test!")
+	r := &Region{Start: 6, End: 11, Kind: "code"}
+	w.applyParsedSpans(0, []StyleRun{{Len: 17, Style: StyleAttrs{}}}, []*Region{r}, 17)
+
+	if w.regionStore == nil {
+		t.Fatal("regionStore nil after applyParsedSpans with regions")
+	}
+	if got := w.regionStore.EnclosingAt(8); got != r {
+		t.Errorf("EnclosingAt(8) = %v, want region %v", got, r)
+	}
+}
+
+// TestWindow_ApplyParsedSpansNoRegions: applyParsedSpans
+// with no regions doesn't disturb regionStore.
+func TestWindow_ApplyParsedSpansNoRegions(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.applyParsedSpans(0, []StyleRun{{Len: 5, Style: StyleAttrs{}}}, nil, 5)
+
+	if w.regionStore != nil {
+		if got := w.regionStore.EnclosingAt(2); got != nil {
+			t.Errorf("EnclosingAt(2) = %v, want nil (no regions added)", got)
+		}
+	}
+}
+
+// TestWindow_ClearSpansAndRegions: the helper clears both
+// stores. Used by xfidspanswrite on the protocol's `c`
+// directive.
+func TestWindow_ClearSpansAndRegions(t *testing.T) {
+	w := makeStyledWindow(t, "hello world")
+	r := &Region{Start: 0, End: 5, Kind: "code"}
+	w.applyParsedSpans(0, []StyleRun{{Len: 11, Style: StyleAttrs{}}}, []*Region{r}, 11)
+
+	w.clearSpansAndRegions()
+
+	if w.spanStore != nil && w.spanStore.TotalLen() != 0 {
+		t.Errorf("after clear, spanStore.TotalLen = %d, want 0", w.spanStore.TotalLen())
+	}
+	if w.regionStore != nil {
+		if got := w.regionStore.EnclosingAt(2); got != nil {
+			t.Errorf("after clear, EnclosingAt(2) = %v, want nil", got)
+		}
+	}
+}
+
+// =========================================================================
 // buildStyledContent with boxes tests
 // =========================================================================
+
+// --- Region expansion in buildStyledContent (Phase 3 round 5) ---------
+
+// TestBuildStyledContent_RunInsideCodeRegion: a StyleRun
+// fully inside a code region produces a span with Block,
+// Code, and Bg set. Pin the bridge's per-run logic.
+func TestBuildStyledContent_RunInsideCodeRegion(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij") // 10 runes
+
+	// Three styled runs covering [0, 10): [0,3)=default,
+	// [3,7)=family-code, [7,10)=default. Region [3, 7) wraps
+	// the middle run.
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 3, Style: StyleAttrs{}},
+		{Len: 4, Style: StyleAttrs{Family: "code"}},
+		{Len: 3, Style: StyleAttrs{}},
+	}, []*Region{{Start: 3, End: 7, Kind: "code"}}, 10)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	// Middle span [3, 7) should have Block + Code + Bg.
+	mid := content[1]
+	if !mid.Style.Block {
+		t.Error("middle span should have Style.Block=true (inside code region)")
+	}
+	if !mid.Style.Code {
+		t.Error("middle span should have Style.Code=true (inside code region)")
+	}
+	if mid.Style.Bg == nil {
+		t.Error("middle span should have Style.Bg set (inside code region)")
+	}
+	// Outer spans should NOT have these flags.
+	if content[0].Style.Block || content[0].Style.Bg != nil {
+		t.Errorf("first span should not have Block/Bg; got %+v", content[0].Style)
+	}
+	if content[2].Style.Block || content[2].Style.Bg != nil {
+		t.Errorf("last span should not have Block/Bg; got %+v", content[2].Style)
+	}
+}
+
+// TestBuildStyledContent_NoRegionStore: when the window has
+// no regionStore, buildStyledContent behaves as before
+// (no-op for region expansion).
+func TestBuildStyledContent_NoRegionStore(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.spanStore = NewSpanStore()
+	w.spanStore.RegionUpdate(0, []StyleRun{
+		{Len: 5, Style: StyleAttrs{Bold: true}},
+	})
+	// regionStore stays nil.
+
+	content := w.buildStyledContent()
+	if len(content) != 1 {
+		t.Fatalf("got %d spans, want 1", len(content))
+	}
+	if !content[0].Style.Bold {
+		t.Error("Bold flag from spanStore should still apply")
+	}
+	if content[0].Style.Block {
+		t.Error("Block should be false (no region expansion when regionStore is nil)")
+	}
+}
+
+// TestBuildStyledContent_EmptyRegionDoesNotAffectRuns: a
+// region with Start==End (empty body) does not alter any
+// run's style.
+func TestBuildStyledContent_EmptyRegionDoesNotAffectRuns(t *testing.T) {
+	w := makeStyledWindow(t, "hello")
+	w.applyParsedSpans(0,
+		[]StyleRun{{Len: 5, Style: StyleAttrs{}}},
+		[]*Region{{Start: 3, End: 3, Kind: "code"}}, 5)
+
+	content := w.buildStyledContent()
+	for _, sp := range content {
+		if sp.Style.Block || sp.Style.Code || sp.Style.Bg != nil {
+			t.Errorf("empty region should not affect any span; got Block/Code/Bg on %+v", sp.Style)
+		}
+	}
+}
 
 // TestBuildStyledContentImageBelowBox covers the Phase 3
 // round 4 contract (post-pivot): an IsBox+placement=below

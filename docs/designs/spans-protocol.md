@@ -227,6 +227,97 @@ b 12 11 0 0 - - placement=below image:./pic.png width=200
 b 0 1 100 50 - - placement=replace image:./pic.png ; explicit form of the default
 ```
 
+### `begin region` / `end region` — Region (added Phase 3 round 5)
+
+```
+begin region <kind> [param=value...]
+end region
+```
+
+Defines a layout region — a scoped range of body runes
+that share a kind-specific layout policy (full-line
+background for code blocks, indent + bar for blockquotes
+in round 6, etc.). Region directives slot between `s` /
+`b` directives WITHOUT advancing the per-write contiguity
+cursor: a `begin region` records the cursor's current
+position as the region's `Start`; the matching `end
+region` records `End`.
+
+Fields:
+
+- **`<kind>`** (required on `begin region`): namespaced
+  layout-mode discriminator. v1 valid values: `code`.
+  Future rounds add `blockquote` (round 6), `listitem`
+  (round 7), `table` (round 8). Unknown kinds are an
+  error.
+- **`<param>=<value>`** (optional on `begin region`):
+  zero or more space-separated key=value parameters
+  carrying region attributes. v1 recognized params:
+  - `lang=NAME` for `code` regions: optional language
+    hint (e.g., `lang=go`, `lang=python`). Captured by
+    the consumer for future use; v1 doesn't drive
+    rendering off it.
+  - Malformed params (no `=` or empty value) are silently
+    ignored (forward-compat).
+- **`end region`** takes no kind / params.
+
+**Constraints**:
+- Every `begin region` in a Twrite must have a matching
+  `end region` in the SAME Twrite (regions cannot span
+  Twrites — producers chunk between regions, not within).
+- `end region` without a matching `begin region` is an
+  error.
+- Regions nest. The parser maintains a stack; `end region`
+  closes the most recent open region. v1 (round 5) does
+  not produce nesting — `code` regions don't nest in
+  CommonMark — but the parser accepts nested input for
+  forward-compat with rounds 6+.
+- Region directives don't break contiguity: the next
+  `s` / `b` directive's offset must equal the cursor at
+  the time of the directive.
+- Empty regions (`begin region X` immediately followed by
+  `end region` at the same cursor) are legal; the
+  consumer records them with `Start == End`.
+
+**Storage** (consumer-side): regions live in a sidecar
+`RegionStore` (a forest of `Region{Start, End, Kind,
+Params, Parent, Children}` trees). `Add` places a new
+region by offset containment; nested regions form a tree.
+The store is cleared by the protocol's `c` directive
+alongside the `spanStore`.
+
+**Rendering** (round 5 of the bridge): for each per-rune
+StyleAttrs, the consumer's `buildStyledContent` consults
+`regionStore.EnclosingAt(offset)` and ORs the enclosing
+region's kind-specific flags into the per-rune
+`rich.Style`. v1 case for `code`: `Style.Block=true,
+Style.Code=true, Style.Bg=InlineCodeBg` — driving the
+existing rich.Frame layout (gutter indent, full-line bg,
+monospace font). Future kinds add cases without
+rich.Frame changes.
+
+**Examples**:
+```
+s 0 5 -
+begin region code
+s 5 12 - family=code
+end region
+s 17 5 -
+```
+
+```
+begin region code lang=go
+s 0 30 - family=code
+end region
+```
+
+```
+s 0 5 -
+begin region code
+end region                                            ; empty region
+s 5 5 -
+```
+
 ## Per-write ordering rules
 
 Within a single Twrite:
@@ -259,6 +350,28 @@ Within a single Twrite:
    `offset + length` exceeds the body bound is clamped via
    `clampRunsToBuffer`. Producers SHOULD NOT rely on these
    behaviors; they exist as defensive clamps.
+
+5. **Regions are atomic.** `begin region` / `end region`
+   pairs must be balanced within a single Twrite (Phase 3
+   round 5). Producers must chunk on the BOUNDARY between
+   regions, not within one. The chunker in
+   `cmd/md2spans/main.go:writeChunked` enforces this on
+   the producer side (extending past the nominal chunk
+   size to enclose a region rather than breaking it). The
+   consumer's parser rejects writes with unbalanced
+   region directives.
+
+6. **Directives at the same cursor apply in input order.**
+   Multiple region directives may share a cursor offset
+   (e.g., a parser-emitted `[begin@N, end@N]` empty region,
+   or a closing `end region` immediately followed by an
+   opening `begin region` between two adjacent fenced
+   blocks). Producers MUST emit such directives in the
+   order they should be applied; consumers MUST process
+   them in input order. The two-pointer merge in
+   `cmd/md2spans/emit.go:FormatSpans` and the stack-based
+   parser in `spanparse.go:parseSpanMessage` both honor
+   this contract.
 
 ## Side effects of `s` / `b` writes
 
@@ -345,9 +458,13 @@ update this spec in lockstep:
   `replace`, `below`); canonical `0 0` W/H sentinel for
   "renderer probes"; payload-parameter convention (`width=N`
   recognized in v1). See above.
-- **Round 5 — block code (region)**: `begin region` /
-  `end region` directives; first region primitive.
-- **Rounds 6-7 — blockquote, lists**: region kinds + parameters.
+- **Round 5 — block code (regions)**: ✓ landed (May 2026).
+  New `begin region <kind> [params]` / `end region`
+  directives; first region primitive. v1 kind: `code`
+  with optional `lang=NAME` param. See above.
+- **Rounds 6-7 — blockquote, lists**: extend region kind
+  vocabulary (`blockquote`, `listitem`) and params (depth,
+  bullet/number markers). Nested regions land here.
 - **Round 8 — tables**: region with cells; frame-dimension
   introspection 9P file.
 

@@ -587,8 +587,9 @@ func xfidspanswrite(x *Xfid, w *Window) {
 	var isClear bool
 	var err error
 
+	var regions []*Region
 	if isPrefixedFormat(data) {
-		runs, regionStart, isClear, err = parseSpanMessage(data, bufLen)
+		runs, regionStart, regions, isClear, err = parseSpanMessage(data, bufLen)
 	} else {
 		// Legacy format: handle "clear" command and unprefixed span defs.
 		if data == "clear" {
@@ -604,9 +605,7 @@ func xfidspanswrite(x *Xfid, w *Window) {
 	}
 
 	if isClear {
-		if w.spanStore != nil {
-			w.spanStore.Clear()
-		}
+		w.clearSpansAndRegions()
 		w.exitStyledMode()
 		w.styledSuppressed = false // spans are gone; reset suppression
 		fc.Count = x.fcall.Count
@@ -621,21 +620,8 @@ func xfidspanswrite(x *Xfid, w *Window) {
 		return
 	}
 
-	// Ensure the span store exists.
-	if w.spanStore == nil {
-		w.spanStore = NewSpanStore()
-		// Initialize with a default run covering the full buffer.
-		w.spanStore.Insert(0, bufLen)
-	} else if w.spanStore.TotalLen() != bufLen {
-		// Re-sync: the store length should match the buffer.
-		// This can happen if the store was created but the buffer
-		// changed without edit tracking (Phase 4 will fix this).
-		w.spanStore.Clear()
-		w.spanStore.Insert(0, bufLen)
-	}
-
-	// Apply region update.
-	w.spanStore.RegionUpdate(regionStart, runs)
+	// Apply spans + regions to the window's stores.
+	w.applyParsedSpans(regionStart, runs, regions, bufLen)
 
 	// Auto-switch to styled mode on first span write, unless the user
 	// has explicitly chosen plain mode via the Plain button.
