@@ -1371,8 +1371,9 @@ func TestParseSpanMessageRegionUnmatchedEnd(t *testing.T) {
 func TestParseSpanMessageRegionUnknownKind(t *testing.T) {
 	cases := []string{
 		"begin region UNKNOWN_KIND\nend region",
-		"begin region\nend region",             // missing kind
-		"begin region blockquote\nend region",  // future, not v1
+		"begin region\nend region",         // missing kind
+		"begin region listitem\nend region", // future round 7, not v1
+		"begin region table\nend region",    // future round 8, not v1
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
@@ -1381,6 +1382,50 @@ func TestParseSpanMessageRegionUnknownKind(t *testing.T) {
 				t.Errorf("expected error for %q; got nil", data)
 			}
 		})
+	}
+}
+
+// TestParseSpanMessageRegionBlockquote: `blockquote` joins
+// `code` in v1's recognized kind set as of round 6.
+func TestParseSpanMessageRegionBlockquote(t *testing.T) {
+	data := "begin region blockquote\n" +
+		"s 0 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Kind != "blockquote" {
+		t.Errorf("Kind = %q, want %q", regions[0].Kind, "blockquote")
+	}
+}
+
+// TestParseSpanMessageRegionBlockquoteNested: two nested
+// `begin region blockquote` pairs produce two regions in
+// the flat parser output (outer first, inner second per
+// emission order). The store turns them into a tree.
+func TestParseSpanMessageRegionBlockquoteNested(t *testing.T) {
+	data := "begin region blockquote\n" +
+		"s 0 5 -\n" +
+		"begin region blockquote\n" +
+		"s 5 5 -\n" +
+		"end region\n" +
+		"s 10 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 2 {
+		t.Fatalf("got %d regions, want 2 (outer + inner)", len(regions))
+	}
+	for _, r := range regions {
+		if r.Kind != "blockquote" {
+			t.Errorf("Kind = %q, want %q", r.Kind, "blockquote")
+		}
 	}
 }
 

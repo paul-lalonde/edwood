@@ -150,7 +150,8 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 // mistakes surface loudly. Round 5 adds "code"; rounds 6-8
 // will extend.
 var validRegionKinds = map[string]bool{
-	"code": true,
+	"code":       true,
+	"blockquote": true, // Phase 3 round 6
 }
 
 // parseBeginRegion parses the fields after the "begin" prefix.
