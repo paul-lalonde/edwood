@@ -384,26 +384,39 @@ func TestParseFencedCodeWithLang(t *testing.T) {
 }
 
 // TestParseFencedCodeMultilineBody: body spans multiple
-// lines; the body span covers from after the opening
-// fence's newline to before the closing fence.
+// lines. Round 6.5 emits ONE region triple per body line
+// (begin / body span / end), so a 3-line body produces 9
+// spans. Per-line emission ensures that when the same
+// shape appears recursively inside a blockquote, the
+// blockquote markers BETWEEN body lines fall outside any
+// code region.
 func TestParseFencedCodeMultilineBody(t *testing.T) {
 	src := "```\nline1\nline2\nline3\n```"
-	// Opening fence: 0..3, \n at 3. Body: 4..21 ("line1\nline2\nline3\n"
-	// is 18 runes — but we want body up to BUT NOT INCLUDING the
-	// closing fence's start. Closing fence starts at... let me count:
-	// `(0) `(1) `(2) \n(3) l(4) i(5) n(6) e(7) 1(8) \n(9)
-	// l(10) i(11) n(12) e(13) 2(14) \n(15) l(16) i(17) n(18) e(19) 3(20) \n(21)
-	// `(22) `(23) `(24)
-	// So body is 4..22 (18 runes including trailing \n before closing).
+	// Runes:
+	//   0..2    ```
+	//   3       \n
+	//   4..8    line1
+	//   9       \n      end of body line 1 → end region 1 here (offset 10, exclusive)
+	//   10..14  line2
+	//   15      \n      end of body line 2 → end region 2 here (offset 16)
+	//   16..20  line3
+	//   21      \n      end of body line 3 → end region 3 here (offset 22)
+	//   22..24  ```     (closing fence)
 	got := Parse(src)
-	if len(got) != 3 {
-		t.Fatalf("got %d spans, want 3; spans: %+v", len(got), got)
+	if len(got) != 9 {
+		t.Fatalf("got %d spans, want 9 (3 lines × {begin,body,end}); spans: %+v", len(got), got)
 	}
-	if got[1].Offset != 4 || got[1].Length != 18 {
-		t.Errorf("body span offset/length = (%d, %d), want (4, 18)", got[1].Offset, got[1].Length)
-	}
-	if got[2].Offset != 22 {
-		t.Errorf("end region offset = %d, want 22", got[2].Offset)
+	// Spot-check shape: lang param on first begin only;
+	// body spans abut; ends at line boundaries.
+	wantOffsets := []int{4, 4, 10, 10, 10, 16, 16, 16, 22}
+	wantLengths := []int{0, 6, 0, 0, 6, 0, 0, 6, 0}
+	for i, s := range got {
+		if s.Offset != wantOffsets[i] {
+			t.Errorf("got[%d].Offset = %d, want %d", i, s.Offset, wantOffsets[i])
+		}
+		if s.Length != wantLengths[i] {
+			t.Errorf("got[%d].Length = %d, want %d", i, s.Length, wantLengths[i])
+		}
 	}
 }
 
@@ -449,19 +462,23 @@ func TestParseFencedCodeBetweenParagraphs(t *testing.T) {
 func TestParseFencedCodeCloserMustMatchOpenerCount(t *testing.T) {
 	src := "````\nthree backticks below should not close:\n```\nstill body\n````"
 	got := Parse(src)
-	if len(got) != 3 {
-		t.Fatalf("got %d spans, want 3 (begin + body + end); spans: %+v", len(got), got)
+	// Round 6.5: per-line emission. Three body lines
+	// ("three backticks...:\n", "```\n", "still body\n")
+	// produce 9 spans. The middle line is the 3-backtick
+	// run that must NOT close (opener has 4 backticks).
+	if len(got) != 9 {
+		t.Fatalf("got %d spans, want 9 (3 lines × {begin,body,end}); spans: %+v", len(got), got)
 	}
 	if got[0].RegionBegin != "code" {
 		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
 	}
-	// Body should INCLUDE the 3-backtick line in the middle.
-	// Source: ````\nthree backticks below should not close:\n```\nstill body\n````
-	// Runes: ````=0..3 \n=4 ...
-	// The body must span past the inner ``` line.
-	body := got[1]
-	if body.Length < 50 {
-		t.Errorf("body length = %d, want >= 50 (body should include the inner ``` line)", body.Length)
+	// The middle body line is the 3-backtick line. With
+	// per-line emission, the second triple (indices 3..5)
+	// covers exactly "```\n" (4 runes); pin that the inner
+	// ``` line did NOT close the outer fence.
+	innerLine := got[4]
+	if innerLine.Length != 4 {
+		t.Errorf("middle body span length = %d, want 4 (the inner ``` line, including \\n)", innerLine.Length)
 	}
 }
 
@@ -755,6 +772,63 @@ func TestParseBlockquoteCodeBlockEndsBeforeCloserMarkers(t *testing.T) {
 	}
 	if codeEnd != 18 {
 		t.Errorf("code region end offset = %d, want 18 (closer line start in original)", codeEnd)
+	}
+}
+
+// TestParseBlockquoteCodeBlockMultilineExcludesBlockquoteMarkers
+// pins the per-line code-region emission: when a fenced
+// code block inside a nested blockquote has multiple body
+// lines, the blockquote markers BETWEEN body lines must
+// fall OUTSIDE any code region (otherwise the renderer
+// applies code-block layout to the marker runes and shifts
+// the body line right).
+//
+// Source layout (rune offsets in original):
+//
+//	>>```go        L1: 0..7   (opener line; not body)
+//	>>func main()  L2: 8..21  (body line 1)
+//	>>Testing      L3: 22..31 (body line 2)
+//	>> ```         L4: 32..37 (closer line)
+//
+// Body line 1 content "func main()\n" lives at original
+// runes [10, 22). Body line 2 content "Testing\n" lives at
+// [24, 32). The markers at [22, 24) (`>>` of body line 2)
+// must NOT be in any code region.
+//
+// Per-line code regions: [10, 22) covers body line 1's
+// content+\n; [24, 32) covers body line 2's content+\n.
+// The two `>>` markers between them are unclaimed by
+// any code region.
+func TestParseBlockquoteCodeBlockMultilineExcludesBlockquoteMarkers(t *testing.T) {
+	src := ">>```go\n>>func main()\n>>Testing\n>> ```"
+	got := Parse(src)
+	var codeBegins, codeEnds []int
+	for _, s := range got {
+		if s.RegionBegin == "code" {
+			codeBegins = append(codeBegins, s.Offset)
+		}
+		if s.Kind == SpanRegionEnd && len(codeBegins) > len(codeEnds) {
+			// Match each `end region` to the most recent
+			// unmatched code begin. Inner blockquote ends
+			// come AFTER all the code regions on the same
+			// blockquote level.
+			codeEnds = append(codeEnds, s.Offset)
+		}
+	}
+	if len(codeBegins) != 2 {
+		t.Fatalf("got %d code begins, want 2 (one per body line); spans: %+v", len(codeBegins), got)
+	}
+	if codeBegins[0] != 10 {
+		t.Errorf("code begin 1 = %d, want 10 (body line 1 content start)", codeBegins[0])
+	}
+	if codeEnds[0] != 22 {
+		t.Errorf("code end 1 = %d, want 22 (body line 2 line-start in original)", codeEnds[0])
+	}
+	if codeBegins[1] != 24 {
+		t.Errorf("code begin 2 = %d, want 24 (body line 2 content start)", codeBegins[1])
+	}
+	if codeEnds[1] != 32 {
+		t.Errorf("code end 2 = %d, want 32 (closer line-start in original)", codeEnds[1])
 	}
 }
 

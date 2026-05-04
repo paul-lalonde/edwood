@@ -326,41 +326,101 @@ func stripBlockquoteSource(src string, p paragraphRange) (string, []int, []int) 
 }
 
 // parseCodeBlockParagraph emits the spans for a fenced code
-// block: a RegionBegin sentinel at the body's start, a
-// styled span over the body runes (family=code so the
-// renderer uses the monospace font even before the region
-// machinery is consulted), and a RegionEnd sentinel at the
-// body's end. The opening / closing fence runes are not
-// covered by any span — they render as default-styled text
-// via emit-time gap-fill, consistent with markup-stays-
-// visible. Phase 3 round 5.
+// block. v1 (round 5) emitted ONE region covering the
+// whole body; v2 (round 6.5) emits ONE REGION PER BODY LINE
+// (begin / body span / end per line), so when this code
+// block is recursively remapped through a blockquote, the
+// blockquote markers BETWEEN body lines fall OUTSIDE any
+// code region. Without per-line emission, those markers
+// land inside a contiguous region [begin, end) — which the
+// renderer styles as code-block content (visible as a
+// double indent on body line 2+).
+//
+// At the top level (no recursive remap), per-line emission
+// produces multiple abutting regions that render identically
+// to one big region — the layout per-rune lookup composes
+// the same flags for adjacent identical kinds.
+//
+// Per-line spans:
+//   - `begin region code` at line's content start. The
+//     `lang=NAME` param appears only on the FIRST line's
+//     begin (the language belongs to the code BLOCK, not
+//     each line; emitting it once is consistent with the
+//     v1 protocol).
+//   - body span (family=code) covering the line's content
+//     plus its trailing `\n` (if any).
+//   - `end region` at the line's end (one past the `\n`).
+//
+// Empty body emits a single begin/end pair at the body
+// position so consumers still see the `code` region exist
+// (matches round-5 behavior).
 func parseCodeBlockParagraph(src string, p paragraphRange) []Span {
-	begin := Span{
-		Kind:        SpanRegionBegin,
-		Offset:      p.CodeBodyRuneStart,
-		Length:      0,
-		RegionBegin: "code",
-	}
-	if p.CodeLang != "" {
-		begin.RegionParams = map[string]string{"lang": p.CodeLang}
-	}
-	end := Span{
-		Kind:      SpanRegionEnd,
-		Offset:    p.CodeBodyRuneEnd,
-		Length:    0,
-		RegionEnd: true,
-	}
-	bodyLen := p.CodeBodyRuneEnd - p.CodeBodyRuneStart
-	if bodyLen == 0 {
-		// Empty body: emit just the begin/end pair.
+	bodyByteStart := p.ByteStart
+	bodyByteEnd := p.ByteEnd
+	bodyRuneStart := p.CodeBodyRuneStart
+	bodyRuneEnd := p.CodeBodyRuneEnd
+
+	// Empty body: emit just the begin/end pair.
+	if bodyRuneStart >= bodyRuneEnd {
+		begin := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      bodyRuneStart,
+			RegionBegin: "code",
+		}
+		if p.CodeLang != "" {
+			begin.RegionParams = map[string]string{"lang": p.CodeLang}
+		}
+		end := Span{
+			Kind:      SpanRegionEnd,
+			Offset:    bodyRuneEnd,
+			RegionEnd: true,
+		}
 		return []Span{begin, end}
 	}
-	body := Span{
-		Offset: p.CodeBodyRuneStart,
-		Length: bodyLen,
-		Family: "code",
+
+	var spans []Span
+	lineRuneStart := bodyRuneStart
+	runePos := bodyRuneStart
+	firstLine := true
+
+	emitLine := func(lineRuneEnd int) {
+		begin := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      lineRuneStart,
+			RegionBegin: "code",
+		}
+		if firstLine && p.CodeLang != "" {
+			begin.RegionParams = map[string]string{"lang": p.CodeLang}
+		}
+		body := Span{
+			Offset: lineRuneStart,
+			Length: lineRuneEnd - lineRuneStart,
+			Family: "code",
+		}
+		end := Span{
+			Kind:      SpanRegionEnd,
+			Offset:    lineRuneEnd,
+			RegionEnd: true,
+		}
+		spans = append(spans, begin, body, end)
+		firstLine = false
 	}
-	return []Span{begin, body, end}
+
+	for i := bodyByteStart; i < bodyByteEnd; {
+		r, size := utf8.DecodeRuneInString(src[i:])
+		i += size
+		runePos++
+		if r == '\n' {
+			emitLine(runePos)
+			lineRuneStart = runePos
+		}
+	}
+	// Final line without trailing \n (e.g., unclosed fence
+	// at EOF).
+	if lineRuneStart < bodyRuneEnd {
+		emitLine(bodyRuneEnd)
+	}
+	return spans
 }
 
 // parseHRuleParagraph emits a single Span over the HRule
