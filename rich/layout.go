@@ -629,8 +629,21 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 			indentPixels = gutterIndent
 		}
 
-		// Apply indentation at the start of a line
+		// Apply indentation at the start of a line.
 		if xPos == 0 && indentPixels > 0 {
+			xPos = indentPixels
+		}
+		// List-inside-blockquote: advance mid-line so the
+		// list content aligns at (depth + ListIndent) × Width,
+		// matching the column where top-level list items
+		// render. Without this, the `>` markers and `-`
+		// content sit contiguously and the line looks like
+		// flat blockquote text — the user can't tell at a
+		// glance that there's a list inside. Restricted to
+		// ListItem && Blockquote so it doesn't fire on
+		// inline-image / table / fenced-code boxes whose
+		// indentPixels is set as if they started a line.
+		if box.Style.ListItem && box.Style.Blockquote && indentPixels > xPos {
 			xPos = indentPixels
 		}
 

@@ -635,6 +635,60 @@ func TestLayoutListIndent(t *testing.T) {
 	})
 }
 
+// TestLayoutListInsideBlockquoteAdvancesXPos: when a list
+// item appears inside a blockquote (`> - item`), the `>`
+// markers render at blockquote-depth indent (Blockquote=
+// true, ListItem=false), and the list content following
+// the markers (ListItem=true ListIndent=1) must advance
+// xPos to (depth + ListIndent) × ListIndentWidth. Without
+// the advance, `>- item` renders contiguously and the user
+// can't tell at a glance that there's a list inside.
+//
+// Top-level list (no blockquote) is unaffected — the first
+// box is at xPos==0 and the existing line-start indent
+// rule fires.
+func TestLayoutListInsideBlockquoteAdvancesXPos(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	// Source: `> - item` rendered as:
+	//   `>` and ` `  Blockquote=true, ListItem=false
+	//   `-`         ListItem=true, Blockquote=true, ListIndent=1
+	//   ` item`     same
+	content := Content{
+		{Text: ">", Style: Style{Blockquote: true, BlockquoteDepth: 1, Scale: 1.0}},
+		{Text: " ", Style: Style{Blockquote: true, BlockquoteDepth: 1, Scale: 1.0}},
+		{Text: "-", Style: Style{Blockquote: true, BlockquoteDepth: 1, ListItem: true, ListIndent: 1, Scale: 1.0}},
+		{Text: " item", Style: Style{Blockquote: true, BlockquoteDepth: 1, ListItem: true, ListIndent: 1, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+
+	// `>` is the first box; should be at blockquote indent
+	// = 1 × 20 = 20.
+	if lines[0].Boxes[0].X != 20 {
+		t.Errorf("`>` X = %d, want 20 (blockquote depth-1 indent)", lines[0].Boxes[0].X)
+	}
+
+	// Find the `-` box. It should be at (depth + ListIndent)
+	// × Width = (1+1) × 20 = 40, NOT immediately after the
+	// space.
+	var dashX int = -1
+	for _, b := range lines[0].Boxes {
+		if string(b.Box.Text) == "-" {
+			dashX = b.X
+			break
+		}
+	}
+	if dashX != 40 {
+		t.Errorf("`-` X = %d, want 40 (advanced to depth+ListIndent indent)", dashX)
+	}
+}
+
 // TestLayoutCodeBlockIndent tests that fenced code blocks are indented.
 func TestLayoutCodeBlockIndent(t *testing.T) {
 	// Mock font with fixed character width of 10 pixels, height 14
