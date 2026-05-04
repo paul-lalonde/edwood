@@ -531,3 +531,59 @@ func TestRegionStore_DeleteDropsChildKeepsParent(t *testing.T) {
 		t.Errorf("EnclosingAt(35) = %v, want parent (child was dropped)", got)
 	}
 }
+
+// TestRegionStore_AddPanicsOnPartialOverlap pins the
+// producer-bug guardrail added in Phase 3 round 6. Partial
+// overlap (two regions that overlap without one containing
+// the other) is illegal; Add panics rather than silently
+// corrupting the forest.
+func TestRegionStore_AddPanicsOnPartialOverlap(t *testing.T) {
+	cases := []struct {
+		name     string
+		first    *Region
+		second   *Region
+	}{
+		{
+			"second-overlaps-end-of-first",
+			&Region{Start: 0, End: 20, Kind: "code"},
+			&Region{Start: 10, End: 30, Kind: "blockquote"},
+		},
+		{
+			"second-overlaps-start-of-first",
+			&Region{Start: 10, End: 30, Kind: "code"},
+			&Region{Start: 0, End: 20, Kind: "blockquote"},
+		},
+		{
+			"second-partially-overlaps-nested-child",
+			&Region{Start: 0, End: 100, Kind: "blockquote"},
+			// Add a child first, then a sibling that
+			// partially overlaps the child.
+			nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewRegionStore()
+			s.Add(c.first)
+			if c.second == nil {
+				// Special case: nested partial overlap.
+				child := &Region{Start: 10, End: 50, Kind: "code"}
+				s.Add(child)
+				bad := &Region{Start: 30, End: 70, Kind: "code"}
+				defer func() {
+					if r := recover(); r == nil {
+						t.Fatalf("Add did not panic on nested partial overlap")
+					}
+				}()
+				s.Add(bad)
+				return
+			}
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("Add did not panic on partial overlap")
+				}
+			}()
+			s.Add(c.second)
+		})
+	}
+}

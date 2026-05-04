@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // Region represents a scoped layout region in the body — a
 // contiguous rune range with a kind (code, blockquote,
 // listitem, table) and optional parameters. Regions form a
@@ -139,11 +141,15 @@ func (s *RegionStore) Clear() {
 // Preconditions: regions added to the store must not
 // partially overlap any existing region. Either nested
 // (one strictly contains the other) or disjoint
-// (non-overlapping). Partial-overlap inputs are not
-// validated and produce undefined tree shape — the
-// producer (parser of begin/end directives) is responsible
-// for emitting well-formed regions.
+// (non-overlapping). Partial overlap is a producer bug
+// (misordered begin/end directives) and panics here so
+// the bug surfaces loudly at the place it was introduced
+// rather than corrupting the forest silently.
 func (s *RegionStore) Add(r *Region) {
+	if q := findPartialOverlap(s.roots, r); q != nil {
+		panic(fmt.Sprintf("RegionStore.Add: partial overlap: new [%d,%d) %s vs existing [%d,%d) %s",
+			r.Start, r.End, r.Kind, q.Start, q.End, q.Kind))
+	}
 	parent := s.findContainer(r.Start, r.End, s.roots)
 	var siblingPool *[]*Region
 	if parent == nil {
@@ -166,6 +172,29 @@ func (s *RegionStore) Add(r *Region) {
 
 	r.Parent = parent
 	*siblingPool = append(*siblingPool, r)
+}
+
+// findPartialOverlap returns the first existing region in
+// the forest rooted at `rs` (recursing through children)
+// that overlaps r without one containing the other. Returns
+// nil when r is well-formed against the existing tree.
+func findPartialOverlap(rs []*Region, r *Region) *Region {
+	for _, q := range rs {
+		if r.End <= q.Start || q.End <= r.Start {
+			continue // disjoint
+		}
+		if q.contains(r.Start, r.End) {
+			if got := findPartialOverlap(q.Children, r); got != nil {
+				return got
+			}
+			continue
+		}
+		if r.contains(q.Start, q.End) {
+			continue
+		}
+		return q
+	}
+	return nil
 }
 
 // findContainer returns the deepest existing region in

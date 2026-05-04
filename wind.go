@@ -2775,22 +2775,21 @@ func (w *Window) styleSubRun(run StyleRun, subStart, subEnd int) rich.Span {
 // kind-specific flags into s. Order matters: the deepest
 // region applies LAST so that for fields where two kinds
 // could conflict (e.g., shared Bg), the innermost kind
-// wins. v1 of round 5 only has the idempotent "code" kind,
-// so the order is currently unobservable; round 6+ will add
-// `blockquote` (with a depth counter and a different Bg)
-// where the deepest-wins rule matters.
+// wins. Round 5 added the idempotent "code" kind; round 6
+// added "blockquote" with a depth counter, where the
+// outermost-first walk order is load-bearing (each ancestor
+// independently bumps the depth).
 //
-// Producer-responsibility note: the bridge applies region
-// flags per spanStore run based on the run's START offset.
-// A producer that emits a single run spanning both inside
-// and outside a region will have its style flags applied
-// only based on the run's start position — i.e., either all
-// inside or all outside the region. For correct rendering,
-// producers MUST emit separate s/b directives at region
-// boundaries. md2spans v1 satisfies this naturally (the
-// `family=code` run inside the region differs in style from
-// the default-styled run outside, and the spanStore won't
-// coalesce them).
+// Run-alignment note: callers must invoke this with a run
+// whose [start, end) does NOT cross any region boundary —
+// the function's per-run flag application is uniform over
+// the run. buildStyledContent satisfies this by splitting
+// each spanStore run at region boundaries via
+// RegionStore.BoundariesIn before calling here. (Earlier
+// rounds asked producers to emit boundary-aligned runs;
+// round 6 moved that responsibility to the bridge so
+// default-styled runs that span a blockquote boundary still
+// render correctly.)
 func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 	if deepest == nil {
 		return

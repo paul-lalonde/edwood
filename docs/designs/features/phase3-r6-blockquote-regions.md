@@ -31,6 +31,19 @@ ancestor strategy that resolves that concern.
   that increments `BlockquoteDepth` per ancestor (counting,
   not OR-ing). Round 5's outermost-first walk order makes
   this composes correctly when stacked.
+- Bridge: `buildStyledContent` SPLITS each spanStore run at
+  region boundaries (new `RegionStore.BoundariesIn` helper)
+  before calling `applyEnclosingRegions`. This reverses
+  round 5's "producer-responsibility" stance: previously
+  producers had to emit run boundaries aligned with region
+  boundaries, and md2spans's `code` regions satisfied this
+  naturally because the inside style differed (`family=code`
+  prevents spanStore coalescing). Round 6's `blockquote`
+  regions cover default-styled runs, which DO coalesce
+  across the boundary — so the bridge has to split. The
+  reversal keeps producers simpler and prevents an entire
+  class of "I forgot to split my run at the boundary" bugs
+  in future region-emitting features.
 
 ## Design principles inherited from rounds 1-5
 

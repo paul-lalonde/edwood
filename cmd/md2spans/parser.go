@@ -122,6 +122,18 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 	}
 	out := []Span{begin}
 	for _, s := range Parse(stripped) {
+		// Recursive Parse must return offsets within the
+		// stripped source's rune range. mapping has length
+		// stripped_rune_count + 1; an offset past the end
+		// indicates a sub-parser arithmetic bug (e.g., the
+		// EOF-fence opener that originally added 1 for a
+		// trailing \n that wasn't there). Assert here so
+		// the failure surfaces with context instead of as
+		// a generic mapping panic.
+		if s.Offset >= len(mapping) {
+			panic(fmt.Sprintf("parseBlockquoteRange: subspan offset %d past stripped end (mapping length %d, kind %q)",
+				s.Offset, len(mapping), s.RegionBegin))
+		}
 		s.Offset = mapping[s.Offset]
 		// For nested blockquote `begin region` directives,
 		// snap the offset to the start of the original line
