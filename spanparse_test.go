@@ -1424,6 +1424,28 @@ func TestParseSpanMessageRegionNested(t *testing.T) {
 	}
 }
 
+// TestParseSpanMessageBeginRegionBeforeAnyDirective: a
+// `begin region` at the very top of a write (before any
+// s/b directive sets the contiguity cursor) anchors the
+// region at offset 0, not at the parser's internal
+// expectedOffset=-1 sentinel. Pin the degenerate-case
+// behavior so a future cursor refactor doesn't break it.
+func TestParseSpanMessageBeginRegionBeforeAnyDirective(t *testing.T) {
+	data := "begin region code\n" +
+		"s 0 5 - family=code\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Start != 0 || regions[0].End != 5 {
+		t.Errorf("region range = [%d, %d), want [0, 5)", regions[0].Start, regions[0].End)
+	}
+}
+
 // TestParseSpanMessageRegionEmpty: a begin immediately
 // followed by end with no spans inside produces a region
 // with Start == End.

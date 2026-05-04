@@ -2751,15 +2751,15 @@ func (w *Window) buildStyledContent() rich.Content {
 	return rich.Content(content)
 }
 
-// applyEnclosingRegions walks from the deepest region up
-// through its ancestors, OR-ing each region's kind-specific
-// flags into s. Walking ancestor-aware (rather than just
-// reading the deepest kind) is necessary for round 6+ where
-// a code block inside a blockquote needs BOTH the code's
-// Bg AND the blockquote's depth flags.
-//
-// v1 of round 5 recognizes only "code". Future kinds add
-// cases here.
+// applyEnclosingRegions walks from the outermost ancestor
+// down to the deepest region, OR-ing each region's
+// kind-specific flags into s. Order matters: the deepest
+// region applies LAST so that for fields where two kinds
+// could conflict (e.g., shared Bg), the innermost kind
+// wins. v1 of round 5 only has the idempotent "code" kind,
+// so the order is currently unobservable; round 6+ will add
+// `blockquote` (with a depth counter and a different Bg)
+// where the deepest-wins rule matters.
 //
 // Producer-responsibility note: the bridge applies region
 // flags per spanStore run based on the run's START offset.
@@ -2773,8 +2773,18 @@ func (w *Window) buildStyledContent() rich.Content {
 // the default-styled run outside, and the spanStore won't
 // coalesce them).
 func applyEnclosingRegions(s *rich.Style, deepest *Region) {
+	if deepest == nil {
+		return
+	}
+	// Collect the ancestor chain innermost-first.
+	var chain []*Region
 	for r := deepest; r != nil; r = r.Parent {
-		switch r.Kind {
+		chain = append(chain, r)
+	}
+	// Apply outermost-first so deeper kinds layer over outer
+	// ones (last-write-wins on shared fields).
+	for i := len(chain) - 1; i >= 0; i-- {
+		switch chain[i].Kind {
 		case "code":
 			s.Block = true
 			s.Code = true

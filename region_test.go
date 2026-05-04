@@ -320,6 +320,20 @@ func TestRegionStore_InsertInsideRegion(t *testing.T) {
 	}
 }
 
+// TestRegionStore_InsertAtRegionEnd: pin the boundary
+// behavior — insert at exactly pos == r.End is treated as
+// "after the region": the region is untouched (mirrors the
+// half-open contract [Start, End)).
+func TestRegionStore_InsertAtRegionEnd(t *testing.T) {
+	s := NewRegionStore()
+	r := &Region{Start: 10, End: 20, Kind: "code"}
+	s.Add(r)
+	s.Insert(20, 5)
+	if r.Start != 10 || r.End != 20 {
+		t.Errorf("after Insert(20, 5) at End: [%d, %d), want [10, 20) (untouched)", r.Start, r.End)
+	}
+}
+
 // TestRegionStore_InsertAfterRegion: insert after End leaves
 // the region untouched.
 func TestRegionStore_InsertAfterRegion(t *testing.T) {

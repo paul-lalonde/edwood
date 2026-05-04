@@ -441,6 +441,30 @@ func TestParseFencedCodeBetweenParagraphs(t *testing.T) {
 	}
 }
 
+// TestParseFencedCodeCloserMustMatchOpenerCount: the
+// closing fence must have at least as many backticks as
+// the opening fence (CommonMark rule). A 4-backtick opener
+// with 3-backtick lines in the body must NOT close on those
+// 3-backtick lines — they're part of the body.
+func TestParseFencedCodeCloserMustMatchOpenerCount(t *testing.T) {
+	src := "````\nthree backticks below should not close:\n```\nstill body\n````"
+	got := Parse(src)
+	if len(got) != 3 {
+		t.Fatalf("got %d spans, want 3 (begin + body + end); spans: %+v", len(got), got)
+	}
+	if got[0].RegionBegin != "code" {
+		t.Errorf("got[0].RegionBegin = %q, want %q", got[0].RegionBegin, "code")
+	}
+	// Body should INCLUDE the 3-backtick line in the middle.
+	// Source: ````\nthree backticks below should not close:\n```\nstill body\n````
+	// Runes: ````=0..3 \n=4 ...
+	// The body must span past the inner ``` line.
+	body := got[1]
+	if body.Length < 50 {
+		t.Errorf("body length = %d, want >= 50 (body should include the inner ``` line)", body.Length)
+	}
+}
+
 // TestParseFencedCodeUnclosed: an opening fence with no
 // matching close — treat the rest of the document as the
 // code body (matches CommonMark behavior: no closing fence

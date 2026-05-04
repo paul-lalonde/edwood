@@ -435,10 +435,15 @@ func scanParagraphs(src string) []paragraphRange {
 	// after the opening fence's newline).
 	// fenceLang: language hint from the opening fence's info
 	// string.
+	// fenceOpenLen: number of backticks in the opening fence;
+	// closing fence must have at least this many (per
+	// CommonMark — a 4-backtick opener cannot be closed by a
+	// 3-backtick body line).
 	inFence := false
 	fenceStartByte := 0
 	fenceStartRune := 0
 	fenceLang := ""
+	fenceOpenLen := 0
 
 	commit := func(byteEnd int) {
 		if inParagraph {
@@ -471,15 +476,16 @@ func scanParagraphs(src string) []paragraphRange {
 		// Inside an open fence: only check for the closing
 		// fence on this line; skip all other paragraph logic
 		// (headings, HRule, blank-line etc. don't apply
-		// inside code blocks).
+		// inside code blocks). The closer must have at least
+		// as many backticks as the opener.
 		if inFence {
-			if isFenceLine(src, lineStart, lineEnd) {
+			if n := fenceLineLen(src, lineStart, lineEnd); n >= fenceOpenLen {
 				emitFencedBlock(lineStart, lineRuneStart)
 			}
 			return
 		}
 		// Open a new fenced block when this line is a fence.
-		if lang, ok := parseOpenFence(src, lineStart, lineEnd); ok {
+		if lang, openLen, ok := parseOpenFence(src, lineStart, lineEnd); ok {
 			commit(lineStart)
 			inFence = true
 			fenceStartByte = lineEnd + 1 // skip the \n
@@ -490,6 +496,7 @@ func scanParagraphs(src string) []paragraphRange {
 			// lineStart to lineEnd) + 1 (the \n).
 			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd]) + 1
 			fenceLang = lang
+			fenceOpenLen = openLen
 			return
 		}
 		// Detect blank-line: only whitespace between lineStart..lineEnd.
@@ -568,47 +575,50 @@ func scanParagraphs(src string) []paragraphRange {
 	return out
 }
 
-// isFenceLine reports whether [start, end) is a fenced
-// code-block delimiter line: 3+ consecutive backticks
-// optionally followed by whitespace. Used for closing
-// fences (opening fences also satisfy this; parseOpenFence
-// is the higher-level wrapper that also extracts the info
-// string). Phase 3 round 5.
-func isFenceLine(src string, start, end int) bool {
+// fenceLineLen reports the number of leading backticks on
+// the line [start, end) IF the line is a closing-fence
+// candidate (3+ backticks followed only by whitespace);
+// returns 0 otherwise. The caller compares against the
+// opener's count to decide whether the line actually closes
+// the open fence (per CommonMark: closer must have ≥ as
+// many backticks as opener). Phase 3 round 5.
+func fenceLineLen(src string, start, end int) int {
 	n := 0
 	for start+n < end && src[start+n] == '`' {
 		n++
 	}
 	if n < 3 {
-		return false
+		return 0
 	}
 	// Anything after must be whitespace.
 	for i := start + n; i < end; i++ {
 		switch src[i] {
 		case ' ', '\t', '\r':
 		default:
-			return false
+			return 0
 		}
 	}
-	return true
+	return n
 }
 
 // parseOpenFence reports whether [start, end) is an opening
 // fenced code-block delimiter and extracts the language
 // hint from the info string after the backticks. Returns
-// (lang, true) on a fence; ("", false) otherwise.
+// (lang, openLen, true) on a fence; ("", 0, false)
+// otherwise. The caller stashes openLen for use against the
+// closing fence.
 //
 // CommonMark allows a fence's info string to be any text
 // after the backticks. v1 takes the first
 // whitespace-delimited token as the language hint and
 // drops the rest.
-func parseOpenFence(src string, start, end int) (string, bool) {
+func parseOpenFence(src string, start, end int) (string, int, bool) {
 	n := 0
 	for start+n < end && src[start+n] == '`' {
 		n++
 	}
 	if n < 3 {
-		return "", false
+		return "", 0, false
 	}
 	// Skip leading whitespace before the info string.
 	i := start + n
@@ -620,7 +630,7 @@ func parseOpenFence(src string, start, end int) (string, bool) {
 	for i < end && src[i] != ' ' && src[i] != '\t' && src[i] != '\r' {
 		i++
 	}
-	return src[langStart:i], true
+	return src[langStart:i], n, true
 }
 
 // linkBlue is the v1 foreground color for inline-link text.

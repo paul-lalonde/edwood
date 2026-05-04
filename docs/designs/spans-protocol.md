@@ -361,6 +361,18 @@ Within a single Twrite:
    consumer's parser rejects writes with unbalanced
    region directives.
 
+6. **Directives at the same cursor apply in input order.**
+   Multiple region directives may share a cursor offset
+   (e.g., a parser-emitted `[begin@N, end@N]` empty region,
+   or a closing `end region` immediately followed by an
+   opening `begin region` between two adjacent fenced
+   blocks). Producers MUST emit such directives in the
+   order they should be applied; consumers MUST process
+   them in input order. The two-pointer merge in
+   `cmd/md2spans/emit.go:FormatSpans` and the stack-based
+   parser in `spanparse.go:parseSpanMessage` both honor
+   this contract.
+
 ## Side effects of `s` / `b` writes
 
 - The first `s` / `b` write to a window with empty `spanStore`

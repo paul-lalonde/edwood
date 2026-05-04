@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -45,6 +46,16 @@ func FormatSpans(input []Span, totalRunes int) string {
 			styled = append(styled, s)
 		}
 	}
+	// Stable-sort directives by Offset so the merge below
+	// can use a single forward walk. Stable preserves input
+	// order for same-offset directives (e.g., a parser-emitted
+	// [begin@N, end@N] empty region must emit begin-then-end
+	// in that order). Round 5 producers naturally emit
+	// directives in offset order; the sort makes the merge
+	// robust against future producers that don't.
+	sort.SliceStable(directives, func(i, j int) bool {
+		return directives[i].Offset < directives[j].Offset
+	})
 	// Anchors: offsets where region directives sit. fillGaps
 	// splits default-fill spans at these offsets so the
 	// interleaver can slot directives in. Without anchor
@@ -72,7 +83,7 @@ func FormatSpans(input []Span, totalRunes int) string {
 		if d.RegionBegin != "" {
 			writeBeginRegionLine(&b, d)
 		} else {
-			writeEndRegionLine(&b, d)
+			writeEndRegionLine(&b)
 		}
 	}
 	si, di := 0, 0
@@ -108,9 +119,10 @@ func writeBeginRegionLine(b *strings.Builder, s Span) {
 	b.WriteByte('\n')
 }
 
-// writeEndRegionLine emits an `end region` directive.
-// Phase 3 round 5.
-func writeEndRegionLine(b *strings.Builder, s Span) {
+// writeEndRegionLine emits an `end region` directive. v1
+// `end region` carries no kind or params; the receiver pops
+// the most recent open begin. Phase 3 round 5.
+func writeEndRegionLine(b *strings.Builder) {
 	b.WriteString("end region\n")
 }
 
