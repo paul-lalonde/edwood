@@ -108,9 +108,7 @@ type Span struct {
 // Offsets and lengths are in runes (R7 of md2spans.design.md).
 func Parse(src string) []Span {
 	var spans []Span
-	paras := scanParagraphs(src)
-	for i := 0; i < len(paras); i++ {
-		p := paras[i]
+	for _, p := range scanParagraphs(src) {
 		switch {
 		case p.IsBlockquote:
 			spans = append(spans, parseBlockquoteRange(src, p)...)
@@ -119,25 +117,7 @@ func Parse(src string) []Span {
 		case p.IsHRule:
 			spans = append(spans, parseHRuleParagraph(src, p)...)
 		case p.IsListItem:
-			// Collect the consecutive run of list items
-			// and emit them as a single nested
-			// begin/end tree. Round 7 v1 emitted each
-			// item as a flat begin/content/end triple;
-			// round 7.x interprets ListDepth and
-			// produces nested regions.
-			j := i
-			for j < len(paras) && paras[j].IsListItem {
-				j++
-			}
-			runEndByte := len(src)
-			runEndRune := utf8.RuneCountInString(src)
-			if j < len(paras) {
-				runEndByte = paras[j].ByteStart
-				runEndRune = paras[j].RuneStart
-			}
-			_ = runEndByte
-			spans = append(spans, parseListRun(src, paras[i:j], runEndRune)...)
-			i = j - 1 // outer for-loop's i++ moves us to paras[j].
+			spans = append(spans, parseListItemParagraph(src, p)...)
 		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
 		default:
@@ -481,91 +461,68 @@ func parseHRuleParagraph(src string, p paragraphRange) []Span {
 	}}
 }
 
-// parseListRun emits nested begin/end region directives
-// for a CONSECUTIVE RUN of list-item paragraphs.
+// parseListItemParagraph emits the spans for ONE list-
+// item line as a self-contained begin/content/end triple.
+// Items at deeper indent depths are emitted as SIBLINGS,
+// not nested — the visual nesting in the rendered view
+// comes from the SOURCE LEADING WHITESPACE that the
+// markup-stays-visible stance preserves in the body.
 //
-// Round 7 v1 emitted each item as a flat begin/content/end
-// triple (one region per line). Round 7.x interprets each
-// item's `ListDepth` and produces a nested tree:
+// Concretely, for a depth-N item with `2*(N-1)` source
+// leading spaces:
 //
-//   - An outer item's region SPANS its sub-list — the
-//     bridge's ancestor walk then sees N listitem
-//     ancestors at depth N and bumps `ListIndent` to N.
-//   - When a deeper item appears, its begin slots inside
-//     the current item's range; its end closes BEFORE the
-//     outer's end.
-//   - When a shallower item appears, all deeper items
-//     close at the new item's start (sibling boundary).
-//   - At the end of the run (blank line, non-list line,
-//     or EOF), all open items close at the run's last
-//     rune position.
+//   - Each list line's first box has `ListItem=true,
+//     ListIndent=1` (one ancestor — the item's own
+//     region). Layout's first-box-determines-indent rule
+//     applies one ListIndentWidth of indent to every
+//     list line, regardless of depth.
+//   - The source leading whitespace renders as plain
+//     text after that, contributing `2*(N-1)*charWidth`
+//     of additional offset.
+//   - Net: depth-N item's marker lands at column
+//     `N * ListIndentWidth`, matching the in-tree path.
 //
-// `runEndRune` is the position one past the last rune of
-// the run — typically the next non-list paragraph's
-// RuneStart, or the source's total rune count at EOF.
+// If the regions were instead nested (outer covers
+// sub-list), the bridge's ancestor walk would set
+// `ListIndent=N` for depth-N items, and the layout would
+// add `N * Width` of indent ON TOP of the source
+// whitespace — visually doubling the indent. That's
+// wrong for markup-stays-visible, so v1.1 keeps each
+// item as its own non-nested region. Wire format is
+// flat siblings; depth lives in the source whitespace.
 //
-// The marker character itself is not covered by an
-// inline span — it renders as default-styled body text
-// via emit-time gap-fill, matching the markup-stays-
-// visible stance.
-//
-// Phase 3 round 7.x.
-func parseListRun(src string, run []paragraphRange, runEndRune int) []Span {
-	var spans []Span
-	// stack tracks the depth of each currently-open
-	// listitem. The end of an entry is determined when it
-	// pops (sibling at deeper-or-equal depth, run end).
-	var stack []int
-
-	emitClose := func(offset int) {
-		spans = append(spans, Span{
-			Kind:      SpanRegionEnd,
-			Offset:    offset,
-			RegionEnd: true,
-		})
+// Phase 3 round 7 v1; round 7.x kept the per-item shape
+// after the nesting analysis showed source whitespace
+// already provides the visual depth.
+func parseListItemParagraph(src string, p paragraphRange) []Span {
+	begin := Span{
+		Kind:        SpanRegionBegin,
+		Offset:      p.RuneStart,
+		RegionBegin: "listitem",
 	}
-
-	for _, item := range run {
-		// Pop entries with depth >= current item's depth.
-		// Their close offset is THIS item's RuneStart.
-		for len(stack) > 0 && stack[len(stack)-1] >= item.ListDepth {
-			emitClose(item.RuneStart)
-			stack = stack[:len(stack)-1]
+	if p.ListMarker != 0 {
+		begin.RegionParams = map[string]string{
+			"marker": string(p.ListMarker),
 		}
-
-		begin := Span{
-			Kind:        SpanRegionBegin,
-			Offset:      item.RuneStart,
-			RegionBegin: "listitem",
+	} else {
+		begin.RegionParams = map[string]string{
+			"number": strconv.Itoa(p.ListNumber),
 		}
-		if item.ListMarker != 0 {
-			begin.RegionParams = map[string]string{
-				"marker": string(item.ListMarker),
-			}
-		} else {
-			begin.RegionParams = map[string]string{
-				"number": strconv.Itoa(item.ListNumber),
-			}
-		}
-		spans = append(spans, begin)
-
-		// Inline content spans for the item's content
-		// (after leading whitespace + marker + space).
-		contentBytes := contentBytePos(src, item)
-		if contentBytes < item.ByteEnd {
-			runes := []rune(src[contentBytes:item.ByteEnd])
-			spans = append(spans, parseInlineSpans(runes, item.ListContentRuneStart)...)
-		}
-
-		stack = append(stack, item.ListDepth)
 	}
-
-	// Close any still-open items at the run's end.
-	for len(stack) > 0 {
-		emitClose(runEndRune)
-		stack = stack[:len(stack)-1]
+	itemRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
+	end := Span{
+		Kind:      SpanRegionEnd,
+		Offset:    itemRuneEnd,
+		RegionEnd: true,
 	}
-	return spans
+	out := []Span{begin}
+	contentBytes := contentBytePos(src, p)
+	if contentBytes < p.ByteEnd {
+		runes := []rune(src[contentBytes:p.ByteEnd])
+		out = append(out, parseInlineSpans(runes, p.ListContentRuneStart)...)
+	}
+	out = append(out, end)
+	return out
 }
 
 // contentBytePos returns the byte position in src where
