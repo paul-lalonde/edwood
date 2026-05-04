@@ -33,10 +33,10 @@ correctly.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [x] Design | phase3-r7.x-nested-lists.md drafted | [base doc] | Decisions: (a) v1.1 covers leading-whitespace nesting only; (b) 2 spaces / 1 tab per level matches in-tree; (c) outer item region COVERS its sub-list (Option A — composes with bridge ancestor walk); (d) wire format unchanged from r7. |
+| [x] Design | phase3-r7.x-nested-lists.md drafted | [base doc] | Decisions: (a) v1.1 covers leading-whitespace nesting only; (b) 2 spaces / 1 tab per level matches in-tree; (c) ~~outer item region COVERS its sub-list~~ — REVISED during row 2 to: each item is a sibling region; depth lives in source whitespace, not the wire (see row 2 commit message for the rationale: nested regions double-indent under markup-stays-visible); (d) wire format unchanged from r7. |
 | [x] Tests | n/a (planning) | — | — |
 | [x] Iterate | This plan + design | — | — |
-| [ ] Commit | — | — | `Add Phase 3 round 7.x design and plan: nested lists` |
+| [x] Commit | — | — | `Add Phase 3 round 7.x design and plan: nested lists` |
 
 ## Phase 3.7.x.1: Detect indent + extend paragraphRange
 
@@ -48,10 +48,10 @@ the emit.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | `isListLine` accepts an offset within the line and counts leading whitespace as 2-spaces-or-tab per level. Returns indent level alongside marker info. paragraphRange gets `ListDepth int`. `contentBytePos` accounts for leading whitespace. | base doc § "Indent counting" / "contentBytePos" | — |
-| [ ] Tests | New tests pin: `isListLine` reports depth correctly for `- a` (depth 1), `  - b` (depth 2), `    - c` (depth 3), `\t- d` (depth 2), `   - e` (3 spaces — depth 2 by floor division). `_foo` returns no list. | `cmd/md2spans/parser_test.go` | Helper-level tests. |
-| [ ] Iterate | Update isListLine signature; extend paragraphRange; update contentBytePos. parseListItemParagraph at depth-1 still works exactly as before (no behavior change yet). | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: detect list indent depth; extend paragraphRange` |
+| [x] Design | `isListLine` accepts an offset within the line and counts leading whitespace as 2-spaces-or-tab per level. Returns indent level alongside marker info. paragraphRange gets `ListDepth int`. `contentBytePos` accounts for leading whitespace. | base doc § "Indent counting" / "contentBytePos" | — |
+| [x] Tests | TestIsListLineDepth (15 cases) + TestIsListLineContentByteSkipsLeadingWhitespace. | `cmd/md2spans/parser_test.go` | — |
+| [x] Iterate | Updated isListLine signature; extended paragraphRange; updated contentBytePos. | `cmd/md2spans/parser.go` | — |
+| [x] Commit | — | — | `md2spans: detect list indent depth; extend paragraphRange` |
 
 ## Phase 3.7.x.2: List-stack state machine + nested emission
 
@@ -62,10 +62,10 @@ their sub-lists (Option A from the design doc).
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | scanParagraphs adds a list-stack. On each list line, pop stack to current depth (or below for siblings); push new entry; emit paragraphRange with nesting info. Non-list / blank lines clear stack. Item regions emit begin at first list-marker line of that depth, end after the last sub-line at that depth or deeper. | base doc § "List-stack state machine" / "Concrete algorithm" | — |
-| [ ] Tests | `- a\n  - b` → 2 listitem regions; outer covers both, inner nested. `- a\n  - b\n- c` → 2 outer siblings, 1 inner under first outer. `- a\n  - b\n    - c` → 3-level nesting. Mixed markers compose. Stack clears on blank line. | `cmd/md2spans/parser_test.go` | — |
-| [ ] Iterate | scanParagraphs list-stack; nested begin/end emission via parseListItemParagraph or a post-processing pass. | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: emit nested listitem regions for indent-based nesting` |
+| [x] Design | First cut used a depth-stack to emit nested begin/end pairs (outer covers sub-list). Analysis on review showed nesting double-indents under markup-stays-visible; revised to SIBLING regions where each item's region covers its own line, source whitespace provides the visual depth. | base doc § "List-stack state machine" + row 2 commit body | — |
+| [x] Tests | TestParseNestedListEmitsSiblingsNotNested (precise offsets), TestParseNestedListThreeLevels, TestParseNestedListMixedMarkers, TestParseNestedListItemDepthCarriedThrough, TestParseNestedListBlankLineTerminatesRun. | `cmd/md2spans/parser_test.go` | — |
+| [x] Iterate | First commit added parseListRun with nested-stack logic (ca56fe7's predecessor). Second commit reverted to per-item parseListItemParagraph emission after the double-indent analysis. | `cmd/md2spans/parser.go` | — |
+| [x] Commit | — | — | `md2spans: emit nested list items as sibling regions, not nested` |
 
 ## Phase 3.7.x.3: Layout interactions for deep nesting
 
@@ -76,27 +76,27 @@ blockquote), patch the rule.
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | base doc § "Layout interaction" / "Risk 2" | — |
-| [ ] Tests | Add layout tests pinning xPos for `ListIndent=2` cases (top-level nested + nested-inside-blockquote). | `rich/layout_test.go` | — |
-| [ ] Iterate | If tests reveal a layout bug, fix `listitemShifted` rule. Otherwise, no code change. | `rich/layout.go` | — |
-| [ ] Commit | — | — | If patched: `rich: <fix description>`; else skip. |
+| [x] Design | n/a (validation) | base doc § "Layout interaction" / "Risk 2" | — |
+| [x] Tests | Added TestLayoutNestedListViaSourceWhitespace pinning columns 20 / 40 / 60 for depth 1 / 2 / 3 with sibling-region emission. | `rich/layout_test.go` | — |
+| [x] Iterate | No code change needed — sibling-region emission gives ListIndent=1 universally; layout's existing first-box-indent rule plus source whitespace produces the right visual. | — | — |
+| [x] Commit | — | — | `rich: pin nested-list layout — source whitespace + ListIndent=1 produce N×Width` |
 
 ## Phase 3.7.x.4: Spec + README
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (doc) | — | — |
-| [ ] Tests | n/a (doc) | — | — |
-| [ ] Iterate | spans-protocol.md adds a nested-list example. md2spans README's Lists row drops the "no nesting" caveat. Round 7.x roadmap entry. | — | — |
-| [ ] Commit | — | — | `docs: spans protocol nested listitem example; md2spans handles nested lists` |
+| [x] Design | n/a (doc) | — | — |
+| [x] Tests | n/a (doc) | — | — |
+| [x] Iterate | spans-protocol.md: rewrote Listitem-depth section to reflect the sibling-region decision; round 7 roadmap entry mentions 7.x; added a nested-list wire example. md2spans README's Lists row updated. | — | — |
+| [x] Commit | — | — | `docs: spans protocol describes round 7.x sibling-region list nesting` |
 
 ## Phase 3.7.x.5: Smoke test + merge prep
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | — | — |
-| [ ] Tests | All packages green | `go test ./...` | — |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with: 2-level nested list (top-level); 3-level nested list; mixed markers; nested list inside blockquote; mixed `- ` and `1. ` across siblings. | — | User-driven. |
+| [x] Design | n/a (validation) | — | — |
+| [x] Tests | All packages green | `go test ./...` | Green. |
+| [ ] Iterate | Build binaries; smoke-test in real edwood with: 2-level nested list (top-level); 3-level nested list; mixed markers; nested list inside blockquote; mixed `- ` and `1. ` across siblings. | — | Binaries rebuilt; awaiting user smoke. |
 | [ ] Commit | — | — | n/a unless smoke surfaces a fix. |
 
 ---
@@ -117,4 +117,5 @@ cases.
 
 ## Status
 
-Plan + design drafted. Awaiting review before any code.
+All rows complete. Awaiting smoke confirmation before
+merging to master.
