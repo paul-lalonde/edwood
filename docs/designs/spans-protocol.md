@@ -247,8 +247,8 @@ Fields:
 
 - **`<kind>`** (required on `begin region`): namespaced
   layout-mode discriminator. v1 valid values: `code`,
-  `blockquote`. Future rounds add `listitem` (round 7),
-  `table` (round 8). Unknown kinds are an error.
+  `blockquote`, `listitem`. Future rounds add `table`
+  (round 8). Unknown kinds are an error.
 - **`<param>=<value>`** (optional on `begin region`):
   zero or more space-separated key=value parameters
   carrying region attributes. v1 recognized params:
@@ -256,6 +256,15 @@ Fields:
     hint (e.g., `lang=go`, `lang=python`). Captured by
     the consumer for future use; v1 doesn't drive
     rendering off it.
+  - `marker=X` for `listitem` regions (unordered): X is
+    the bullet character (one of `-`, `*`, `+`).
+  - `number=N` for `listitem` regions (ordered): N is
+    the item's decimal number, ≥ 1. Implies ordered.
+    The bridge sets `Style.ListOrdered=true` and
+    `Style.ListNumber=N`.
+  - For `listitem` regions, exactly one of `marker=`
+    or `number=` is required. Producers that emit
+    neither produce a wire-format error.
   - Malformed params (no `=` or empty value) are silently
     ignored (forward-compat).
 - **`end region`** takes no kind / params.
@@ -270,6 +279,16 @@ blockquote ancestors during the `applyEnclosingRegions`
 walk. A producer that wants to emit `depth=N` as a hint is
 free to (it's a recognized but unenforced parameter); the
 bridge ignores it (the count is authoritative).
+
+**Listitem depth (round 7)**: same shape as blockquote
+depth — `Style.ListIndent` is the count of `listitem`
+ancestors at a given rune; the protocol does NOT carry an
+`indent=N` parameter. Per-instance payload (`marker=` /
+`number=`) IS carried — it varies per region and is read
+from the deepest listitem ancestor (nearest-of-kind via
+the bridge's outermost-first walk + per-call overwrite).
+v1 of round 7 produces only single-level lists, so depth
+is always 1; round 7.x will exercise nesting.
 
 **Constraints**:
 - Every `begin region` in a Twrite must have a matching
@@ -354,6 +373,35 @@ begin region code lang=go
 s 7 17 - family=code                                  ; "> fmt.Println()\n"
 end region
 s 24 5 -                                              ; "> ```\n"
+end region
+```
+
+Single-line list items (round 7):
+```
+begin region listitem marker=-
+s 0 5 -                                               ; "- foo"
+end region
+begin region listitem marker=-
+s 5 5 -                                               ; "- bar"
+end region
+```
+
+Ordered list:
+```
+begin region listitem number=1
+s 0 6 -                                               ; "1. foo"
+end region
+begin region listitem number=2
+s 6 6 -                                               ; "2. bar"
+end region
+```
+
+List inside blockquote (cross-kind, round 7 inside round 6):
+```
+begin region blockquote
+begin region listitem marker=-
+s 0 7 -                                               ; "> - foo"
+end region
 end region
 ```
 
@@ -507,9 +555,13 @@ update this spec in lockstep:
   First nested region kind in production use; validates
   round-5 region machinery's claims about kind-vocabulary
   extension and ancestor-walk composition. See above.
-- **Round 7 — lists**: extend region kind vocabulary with
-  `listitem`; per-item region pattern with bullet/number
-  markers and indent.
+- **Round 7 — lists (per-item regions)**: ✓ v1 landed
+  (May 2026). Adds `listitem` to v1 region kinds. Carries
+  per-region payload `marker=X` (unordered) or `number=N`
+  (ordered) — the first kind with required per-instance
+  params. v1 covers column-0 single-line items only;
+  round 7.x will extend with leading-whitespace nesting
+  and continuation lines.
 - **Round 8 — tables**: region with cells; frame-dimension
   introspection 9P file.
 
