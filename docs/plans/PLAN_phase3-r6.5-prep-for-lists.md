@@ -77,8 +77,8 @@ Mechanical migration; tests catch any miss.
 |-------|-------------|------|-------|
 | [x] Design | n/a (validation) | — | — |
 | [x] Tests | All packages green | `go test ./...` | Green. |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with the round 6 markdown sample (single + nested blockquotes + code inside blockquote). Verify visual parity is preserved (no regression from the refactor). | — | Binaries rebuilt at /Users/paul/dev/edwood/{md2spans,edwood}; awaiting smoke confirmation. |
-| [ ] Commit | — | — | n/a (no code change unless smoke surfaces something). |
+| [x] Iterate | Built binaries; smoke surfaced TWO latent round-6 bugs: (a) RegionEnd offset remap used rune-at semantics where boundary-before was correct (closer's `>>` ended up inside the code region); (b) when a multi-line code body was inside a blockquote, the body's single region+span covered the inter-line `>>` markers (visible as body line 2+ shifted right). Fixed in 6e4206c (boundary-before remap) and 8aa346e (per-line region emission). User confirmed LGTM after both fixes. | — | — |
+| [x] Commit | — | — | `md2spans: map RegionEnd offsets via boundary-before semantics` and `md2spans: emit code regions per body line so blockquote markers stay outside` |
 
 ---
 
@@ -100,4 +100,7 @@ are pure refactors with byte-equal expected behavior.
 
 ## Status
 
-Plan + design drafted. Awaiting review before any code.
+All rows complete. Round expanded beyond pure refactor —
+smoke testing surfaced two latent round-6 correctness
+bugs (offset boundary semantics; multi-line code regions
+inside blockquotes). Both fixed. Ready to merge to master.
