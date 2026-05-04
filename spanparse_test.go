@@ -1371,9 +1371,8 @@ func TestParseSpanMessageRegionUnmatchedEnd(t *testing.T) {
 func TestParseSpanMessageRegionUnknownKind(t *testing.T) {
 	cases := []string{
 		"begin region UNKNOWN_KIND\nend region",
-		"begin region\nend region",         // missing kind
-		"begin region listitem\nend region", // future round 7, not v1
-		"begin region table\nend region",    // future round 8, not v1
+		"begin region\nend region",       // missing kind
+		"begin region table\nend region", // future round 8, not v1
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
@@ -1426,6 +1425,50 @@ func TestParseSpanMessageRegionBlockquoteNested(t *testing.T) {
 		if r.Kind != "blockquote" {
 			t.Errorf("Kind = %q, want %q", r.Kind, "blockquote")
 		}
+	}
+}
+
+// TestParseSpanMessageRegionListitemMarker: `listitem`
+// joins `code` and `blockquote` in v1's recognized kind
+// set as of round 7. Unordered list item carries
+// `marker=X` (X is `-`, `*`, or `+`).
+func TestParseSpanMessageRegionListitemMarker(t *testing.T) {
+	data := "begin region listitem marker=-\n" +
+		"s 0 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Kind != "listitem" {
+		t.Errorf("Kind = %q, want %q", regions[0].Kind, "listitem")
+	}
+	if regions[0].Params["marker"] != "-" {
+		t.Errorf("Params[marker] = %q, want %q", regions[0].Params["marker"], "-")
+	}
+}
+
+// TestParseSpanMessageRegionListitemNumber: ordered list
+// items carry `number=N` for the item's decimal index.
+func TestParseSpanMessageRegionListitemNumber(t *testing.T) {
+	data := "begin region listitem number=3\n" +
+		"s 0 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Kind != "listitem" {
+		t.Errorf("Kind = %q, want %q", regions[0].Kind, "listitem")
+	}
+	if regions[0].Params["number"] != "3" {
+		t.Errorf("Params[number] = %q, want %q", regions[0].Params["number"], "3")
 	}
 }
 
