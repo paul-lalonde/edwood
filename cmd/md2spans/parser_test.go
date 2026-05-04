@@ -643,6 +643,30 @@ func TestParseBlockquoteNestedInnerBeginAtLineStart(t *testing.T) {
 	}
 }
 
+// TestParseBlockquoteUnclosedFenceInside reproduces a
+// smoke-test crash. While typing, a user can produce a
+// state where a nested blockquote contains an UNCLOSED
+// fenced code block:
+//
+//	>Quoted
+//	>>Double Quoted
+//	>> 'inline code'
+//	>> Some text
+//	>> ```
+//
+// The recursive Parse should not panic — it should treat
+// the unclosed fence as code-to-EOF inside the inner
+// blockquote.
+func TestParseBlockquoteUnclosedFenceInside(t *testing.T) {
+	src := ">Quoted\n>>Double Quoted\n>> 'inline code'\n>> Some text\n>> ```"
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Parse panicked: %v", r)
+		}
+	}()
+	_ = Parse(src)
+}
+
 // TestParseBlockquoteEndsAtBlankLine: a blank line ends
 // the blockquote group; subsequent content is outside.
 func TestParseBlockquoteEndsAtBlankLine(t *testing.T) {

@@ -701,13 +701,16 @@ func scanParagraphs(src string) []paragraphRange {
 		if lang, openLen, ok := parseOpenFence(src, lineStart, lineEnd); ok {
 			commit(lineStart)
 			inFence = true
-			fenceStartByte = lineEnd + 1 // skip the \n
-			// Body's rune-start = next line's rune-start. We
-			// don't know yet exactly which rune that is until
-			// the outer loop crosses the \n. Compute as
-			// (current line's rune-start) + (rune count from
-			// lineStart to lineEnd) + 1 (the \n).
-			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd]) + 1
+			// Body starts just after the opener's terminating
+			// `\n`. If the opener is the last line of input
+			// with no trailing `\n` (unclosed fence at EOF),
+			// the body is empty and starts at lineEnd itself.
+			fenceStartByte = lineEnd
+			fenceStartRune = lineRuneStart + utf8.RuneCountInString(src[lineStart:lineEnd])
+			if lineEnd < len(src) && src[lineEnd] == '\n' {
+				fenceStartByte++
+				fenceStartRune++
+			}
 			fenceLang = lang
 			fenceOpenLen = openLen
 			return
