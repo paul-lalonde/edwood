@@ -602,6 +602,47 @@ func TestParseBlockquoteContainingFencedCode(t *testing.T) {
 	}
 }
 
+// TestParseBlockquoteNestedInnerBeginAtLineStart: bug fix
+// regression. For source `>Quoted\n>>Double Quoted`, the
+// inner blockquote begin must anchor at the START OF
+// LINE 2 (rune 8 = the first `>`), not at the position of
+// the second `>` (rune 9). Otherwise line 2's first box
+// (the first `>` rune) would be inside the outer
+// blockquote ONLY, with BlockquoteDepth=1, and the
+// layout's first-box-determines-indent rule would produce
+// a 20px indent for line 2 instead of the expected 40px.
+//
+// Per-line indent depends on the first box's depth
+// (rich/layout.go:614 — `if box.Style.Blockquote
+// indentPixels += BlockquoteDepth * ListIndentWidth`); the
+// inner blockquote must claim the line from rune 0 of the
+// line so the line's first box is at depth=2.
+func TestParseBlockquoteNestedInnerBeginAtLineStart(t *testing.T) {
+	src := ">Quoted\n>>Double Quoted"
+	got := Parse(src)
+	begins := []int{}
+	for _, s := range got {
+		if s.RegionBegin == "blockquote" {
+			begins = append(begins, s.Offset)
+		}
+	}
+	if len(begins) != 2 {
+		t.Fatalf("expected 2 blockquote begins, got %d at %v; spans: %+v", len(begins), begins, got)
+	}
+	// begins[0] = outer at offset 0.
+	// begins[1] = inner — must be 8 (line 2 start, before
+	// the outer marker on line 2). If it's 9, the inner
+	// begins AFTER the outer's marker, leaving line 2's
+	// first box at depth=1 and producing the wrong per-line
+	// indent.
+	if begins[0] != 0 {
+		t.Errorf("outer begin offset = %d, want 0", begins[0])
+	}
+	if begins[1] != 8 {
+		t.Errorf("inner begin offset = %d, want 8 (line 2 start)", begins[1])
+	}
+}
+
 // TestParseBlockquoteEndsAtBlankLine: a blank line ends
 // the blockquote group; subsequent content is outside.
 func TestParseBlockquoteEndsAtBlankLine(t *testing.T) {
