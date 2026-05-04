@@ -280,15 +280,28 @@ walk. A producer that wants to emit `depth=N` as a hint is
 free to (it's a recognized but unenforced parameter); the
 bridge ignores it (the count is authoritative).
 
-**Listitem depth (round 7)**: same shape as blockquote
-depth — `Style.ListIndent` is the count of `listitem`
-ancestors at a given rune; the protocol does NOT carry an
-`indent=N` parameter. Per-instance payload (`marker=` /
-`number=`) IS carried — it varies per region and is read
-from the deepest listitem ancestor (nearest-of-kind via
-the bridge's outermost-first walk + per-call overwrite).
-v1 of round 7 produces only single-level lists, so depth
-is always 1; round 7.x will exercise nesting.
+**Listitem depth (round 7 / round 7.x)**: each listitem
+region is a SIBLING of its neighbors — the wire format
+does NOT encode list nesting. Visual depth lives in the
+source leading whitespace, which renders as plain text
+per the markup-stays-visible stance. The bridge sets
+`Style.ListIndent = 1` for every list-line first box
+(one ancestor: the item's own region). The layout
+applies one `ListIndentWidth` of indent uniformly; the
+source whitespace adds `(N-1) × ListIndentWidth` for a
+depth-N item, producing a marker-column of
+`N × ListIndentWidth` overall.
+
+Per-instance payload (`marker=` / `number=`) IS carried
+— it varies per region. The bridge reads it from the
+deepest listitem ancestor at a rune (nearest-of-kind via
+the outermost-first walk + per-call overwrite); v1
+typically has only one listitem ancestor per rune
+(siblings, not nested).
+
+Producers that want to convey list nesting structurally
+(rather than via source whitespace) could add a `depth=N`
+parameter; the v1 bridge ignores it.
 
 **Constraints**:
 - Every `begin region` in a Twrite must have a matching
@@ -404,6 +417,26 @@ s 0 7 -                                               ; "> - foo"
 end region
 end region
 ```
+
+Nested list (round 7.x — sibling regions, depth via source
+whitespace):
+```
+begin region listitem marker=-
+s 0 3 -                                               ; "- a\n"
+end region
+begin region listitem marker=-
+s 4 5 -                                               ; "  - b\n" (note 2-space indent)
+end region
+begin region listitem marker=-
+s 10 3 -                                              ; "- c"
+end region
+```
+
+The `  ` prefix on `  - b` is plain body text — the
+markup-stays-visible stance preserves it, and its
+rendered width (2 × char-width) is what visually indents
+the inner item one ListIndentWidth deeper than `- a` and
+`- c`.
 
 ## Per-write ordering rules
 
@@ -559,9 +592,12 @@ update this spec in lockstep:
   (May 2026). Adds `listitem` to v1 region kinds. Carries
   per-region payload `marker=X` (unordered) or `number=N`
   (ordered) — the first kind with required per-instance
-  params. v1 covers column-0 single-line items only;
-  round 7.x will extend with leading-whitespace nesting
-  and continuation lines.
+  params. Round 7 v1 covered column-0 single-line items;
+  round 7.x added leading-whitespace nesting (2 spaces or
+  1 tab per level — matches the in-tree path). Items at
+  any depth are emitted as SIBLING regions; depth is
+  conveyed via source leading whitespace, not the wire.
+  Multi-line continuation deferred to round 7.y.
 - **Round 8 — tables**: region with cells; frame-dimension
   introspection 9P file.
 

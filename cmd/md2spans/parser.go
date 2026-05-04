@@ -461,24 +461,39 @@ func parseHRuleParagraph(src string, p paragraphRange) []Span {
 	}}
 }
 
-// parseListItemParagraph emits the spans for one list-
-// item line (Phase 3 round 7 v1):
+// parseListItemParagraph emits the spans for ONE list-
+// item line as a self-contained begin/content/end triple.
+// Items at deeper indent depths are emitted as SIBLINGS,
+// not nested — the visual nesting in the rendered view
+// comes from the SOURCE LEADING WHITESPACE that the
+// markup-stays-visible stance preserves in the body.
 //
-//   - `begin region listitem marker=X` (unordered) or
-//     `begin region listitem number=N` (ordered) at the
-//     line's start.
-//   - Inline spans for the item's CONTENT (after the
-//     marker + space) — emphasis, links, inline code, etc.
-//   - `end region` at the line's end (one past `\n` if
-//     present, or at EOF).
+// Concretely, for a depth-N item with `2*(N-1)` source
+// leading spaces:
 //
-// The marker character itself is not covered by an
-// emphasis-style span — it renders as default-styled
-// body text via emit-time gap-fill, matching the
-// markup-stays-visible stance of all other v1 features.
+//   - Each list line's first box has `ListItem=true,
+//     ListIndent=1` (one ancestor — the item's own
+//     region). Layout's first-box-determines-indent rule
+//     applies one ListIndentWidth of indent to every
+//     list line, regardless of depth.
+//   - The source leading whitespace renders as plain
+//     text after that, contributing `2*(N-1)*charWidth`
+//     of additional offset.
+//   - Net: depth-N item's marker lands at column
+//     `N * ListIndentWidth`, matching the in-tree path.
 //
-// v1 limits: each list line is ONE item — no continuation
-// lines, no nested lists. Round 7.x will extend.
+// If the regions were instead nested (outer covers
+// sub-list), the bridge's ancestor walk would set
+// `ListIndent=N` for depth-N items, and the layout would
+// add `N * Width` of indent ON TOP of the source
+// whitespace — visually doubling the indent. That's
+// wrong for markup-stays-visible, so v1.1 keeps each
+// item as its own non-nested region. Wire format is
+// flat siblings; depth lives in the source whitespace.
+//
+// Phase 3 round 7 v1; round 7.x kept the per-item shape
+// after the nesting analysis showed source whitespace
+// already provides the visual depth.
 func parseListItemParagraph(src string, p paragraphRange) []Span {
 	begin := Span{
 		Kind:        SpanRegionBegin,
@@ -501,9 +516,6 @@ func parseListItemParagraph(src string, p paragraphRange) []Span {
 		RegionEnd: true,
 	}
 	out := []Span{begin}
-	// Tokenize the item's content (after the marker +
-	// space) for inline emphasis / links / code. The
-	// marker bytes themselves are skipped.
 	contentBytes := contentBytePos(src, p)
 	if contentBytes < p.ByteEnd {
 		runes := []rune(src[contentBytes:p.ByteEnd])
@@ -514,18 +526,25 @@ func parseListItemParagraph(src string, p paragraphRange) []Span {
 }
 
 // contentBytePos returns the byte position in src where
-// a list item's CONTENT begins — i.e., just past the
-// marker and the required space. Mirrors the contentByte
-// computed by isListLine; recomputed here from the
-// paragraphRange's bytes so parseListItemParagraph doesn't
-// need a fourth field on paragraphRange.
+// a list item's CONTENT begins — i.e., just past any
+// leading whitespace, the marker, and the required space.
+// Mirrors the contentByte computed by isListLine.
+//
+// Round 7 v1 ignored leading whitespace (column-0 only);
+// round 7.x adds nesting via leading spaces / tabs, so
+// the helper now skips that whitespace first.
 func contentBytePos(src string, p paragraphRange) int {
+	// Skip leading whitespace (matches isListLine's
+	// indent-counting prefix).
+	i := p.ByteStart
+	for i < p.ByteEnd && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
 	if p.ListMarker != 0 {
 		// Unordered: 1 marker byte + 1 space byte.
-		return p.ByteStart + 2
+		return i + 2
 	}
 	// Ordered: digits + ('.' | ')') + space.
-	i := p.ByteStart
 	for i < p.ByteEnd && src[i] >= '0' && src[i] <= '9' {
 		i++
 	}
@@ -730,10 +749,19 @@ type paragraphRange struct {
 	// bullet character ('-', '*', '+') for unordered, or
 	// 0 for ordered. ListNumber holds the item's decimal
 	// number for ordered, or 0 for unordered.
+	//
+	// ListDepth is the indent level (1 = column-0 top-
+	// level, 2 = one level nested, etc.). Computed from
+	// leading whitespace per the in-tree
+	// `tabCount + spaceCount/2` formula. Round 7 v1
+	// implicitly emitted ListDepth=1; round 7.x carries
+	// the depth so nested begin/end region emission can
+	// build the right tree.
 	IsListItem           bool
 	ListMarker           byte
 	ListNumber           int
 	ListContentRuneStart int
+	ListDepth            int
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -1004,7 +1032,7 @@ func scanParagraphs(src string) []paragraphRange {
 		// List item line: own one-line paragraph (Phase 3
 		// round 7 v1). Detection runs AFTER HRule so that
 		// `---` parses as HRule, not as a `-` list line.
-		if ok, marker, number, contentByte := isListLine(src, lineStart, lineEnd); ok {
+		if ok, marker, number, contentByte, depth := isListLine(src, lineStart, lineEnd); ok {
 			commit(lineStart)
 			contentRune := lineRuneStart + utf8.RuneCountInString(src[lineStart:contentByte])
 			out = append(out, paragraphRange{
@@ -1015,6 +1043,7 @@ func scanParagraphs(src string) []paragraphRange {
 				ListMarker:           marker,
 				ListNumber:           number,
 				ListContentRuneStart: contentRune,
+				ListDepth:            depth,
 			})
 			return
 		}
@@ -1072,65 +1101,98 @@ func isBlockquoteLine(src string, start, end int) bool {
 }
 
 // isListLine reports whether [start, end) opens a list
-// item at column 0 (Phase 3 round 7 v1; no leading
-// whitespace).
+// item, detecting the indent depth from leading
+// whitespace before the marker. Phase 3 round 7 v1
+// emitted at column 0 only; round 7.x adds nesting via
+// 2-space-or-tab-per-level indent.
 //
 // Returns:
 //   - ok: true if the line is a list line.
 //   - marker: '-', '*', or '+' for unordered; 0 for ordered.
 //   - number: item number for ordered; 0 for unordered.
 //   - contentByte: byte position right after the marker
-//     and required space — the start of the item's content.
+//     and required space — the start of the item's content
+//     (skipping any leading whitespace).
+//   - depth: indent level, 1 for column-0 (top-level), 2
+//     for one nesting level (2 spaces or 1 tab), etc.
+//     Computed as `1 + tabCount + spaceCount/2` (matches
+//     the in-tree markdown/parse.go semantics; odd
+//     trailing spaces round down).
 //
 // Detection rules:
-//   - Unordered: starts with `- `, `* `, or `+ ` (marker +
-//     SPACE). The space is required so emphasis (`*x*`),
-//     plain lines starting with `-foo`, and HRule (`---`)
-//     do NOT match.
-//   - Ordered: starts with one or more digits followed by
-//     `.` or `)` followed by SPACE.
+//   - Optional leading whitespace (spaces and/or tabs).
+//   - Unordered: marker `-` / `*` / `+` followed by SPACE.
+//     The space is required so emphasis (`*x*`), plain
+//     lines starting with `-foo`, and HRule (`---`) do
+//     NOT match.
+//   - Ordered: digits followed by `.` or `)` followed by
+//     SPACE.
 //
 // Callers must check HRule precedence BEFORE calling
 // this — `---` is HRule, not a list line, even though
 // detectHRule's marker char overlaps with the bullet.
-func isListLine(src string, start, end int) (ok bool, marker byte, number, contentByte int) {
+func isListLine(src string, start, end int) (ok bool, marker byte, number, contentByte, depth int) {
 	if start >= end {
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
-	c := src[start]
+	// Count leading whitespace and compute depth.
+	spaceCount := 0
+	tabCount := 0
+	i := start
+	for i < end {
+		switch src[i] {
+		case ' ':
+			spaceCount++
+			i++
+		case '\t':
+			tabCount++
+			i++
+		default:
+			goto afterIndent
+		}
+	}
+afterIndent:
+	if i >= end {
+		// Whitespace-only line is not a list.
+		return false, 0, 0, 0, 0
+	}
+	depth = 1 + tabCount + spaceCount/2
+	c := src[i]
 	// Unordered: marker + SPACE.
 	if c == '-' || c == '*' || c == '+' {
-		if start+1 < end && src[start+1] == ' ' {
-			return true, c, 0, start + 2
+		if i+1 < end && src[i+1] == ' ' {
+			return true, c, 0, i + 2, depth
 		}
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
 	// Ordered: digits + ('.' | ')') + SPACE.
 	if c < '0' || c > '9' {
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
-	i := start
+	digitStart := i
 	for i < end && src[i] >= '0' && src[i] <= '9' {
 		i++
 	}
 	// Must have at least one digit (already true) and a
 	// trailing `.` or `)` followed by space.
 	if i >= end {
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
 	if src[i] != '.' && src[i] != ')' {
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
 	if i+1 >= end || src[i+1] != ' ' {
-		return false, 0, 0, 0
+		return false, 0, 0, 0, 0
 	}
 	// Parse the digit run. We've already validated each
-	// rune is 0-9; convert to int defensively.
+	// rune is 0-9; convert to int defensively. Walk from
+	// digitStart (where the digits actually began, after
+	// any leading whitespace).
 	n := 0
-	for j := start; j < i; j++ {
+	for j := digitStart; j < i; j++ {
 		n = n*10 + int(src[j]-'0')
 	}
-	return true, 0, n, i + 2
+	return true, 0, n, i + 2, depth
 }
 
 // fenceLineLen reports the number of leading backticks on
