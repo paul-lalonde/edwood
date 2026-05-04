@@ -84,8 +84,8 @@ red→green cycle.
 |-------|-------------|------|-------|
 | [x] Design | n/a (validation) | — | — |
 | [x] Tests | All packages green | `go test ./...` | Green. |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with a markdown containing a bullet list, an ordered list, mixed, and a list inside a blockquote. Verify visual indent + bullet position match the in-tree path's rendering. | — | Binaries rebuilt at /Users/paul/dev/edwood/{md2spans,edwood}; awaiting user smoke. |
-| [ ] Commit | — | — | n/a (no code change unless smoke surfaces something). |
+| [x] Iterate | Smoke surfaced four issues, all fixed: (a) cursor-resets-to-#0 on every md2spans render — xfidspanswrite was missing the SetOrigin/SetSelection sync that exec.go's user-toggle path had; refactored both onto a shared renderStyledFromBody helper. (b) An over-eager listitem snap fix that pushed `>` markers past blockquote depth — reverted; the `>` should align with non-list blockquote lines. (c) Lists inside blockquotes had `-` flush against `>` with no visual gap — added a layout rule that shifts xPos by ListIndent×Width at the listitem region entry mid-line, restricted to ListItem && Blockquote so it doesn't fire on inline images / code / tables. (d) The first version of (c) used absolute-target indent which produced only a 10px gap; refined to shift-from-current-xPos so the gap is exactly ListIndentWidth, matching the leading indent of top-level list items. | — | — |
+| [x] Commit | — | — | Four smoke-fix commits (cursor, snap revert, layout advance, layout refinement). |
 
 ---
 
@@ -109,5 +109,5 @@ md2spans state-machine complexity in scanParagraphs.
 
 ## Status
 
-All rows complete. Awaiting smoke confirmation before
-merging to master.
+All rows complete. Smoke confirmed. Ready to merge to
+master.
