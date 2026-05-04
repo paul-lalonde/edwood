@@ -274,12 +274,16 @@ func TestParseHRuleCRLF(t *testing.T) {
 	assertSpansEqual(t, Parse(src), want)
 }
 
-// TestParseHRuleNotAList: `- item` is a list (later round),
-// NOT an HRule. v1 leaves it as plain text — emphasis tokenizer
-// ignores `-`. No spans.
+// TestParseHRuleNotAList: `- item` is a list, NOT an HRule.
+// Pre-round-7, v1 emitted no spans for this; round 7 now
+// emits a listitem region. The point of this test is to pin
+// HRule precedence — "- item" must NOT be misread as an
+// HRule.
 func TestParseHRuleNotAList(t *testing.T) {
-	if got := Parse("- item"); len(got) != 0 {
-		t.Errorf("Parse(\"- item\") = %v, want empty (list, not HRule)", got)
+	for _, s := range Parse("- item") {
+		if s.HRule {
+			t.Errorf("`- item` produced an HRule span: %+v", s)
+		}
 	}
 }
 
@@ -1491,5 +1495,221 @@ func TestSpanKindBlockquoteRegions(t *testing.T) {
 	}
 	if !begin || !end {
 		t.Fatalf("missing begin/end (begin=%v end=%v)", begin, end)
+	}
+}
+
+// --- List item tests (Phase 3 round 7) ---------------------------------
+
+// TestParseListItemUnorderedDash: `- foo` emits one
+// listitem region with marker=- around the line.
+func TestParseListItemUnorderedDash(t *testing.T) {
+	got := Parse("- foo")
+	var begins, ends int
+	var marker string
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			begins++
+			marker = s.RegionParams["marker"]
+		}
+		if s.Kind == SpanRegionEnd {
+			ends++
+		}
+	}
+	if begins != 1 || ends != 1 {
+		t.Errorf("got %d begins / %d ends, want 1/1; spans: %+v", begins, ends, got)
+	}
+	if marker != "-" {
+		t.Errorf("marker = %q, want %q", marker, "-")
+	}
+}
+
+// TestParseListItemUnorderedAsteriskAndPlus: `*` and `+`
+// markers are also recognized (with required following
+// space).
+func TestParseListItemUnorderedAsteriskAndPlus(t *testing.T) {
+	for _, src := range []string{"* foo", "+ foo"} {
+		got := Parse(src)
+		var marker string
+		for _, s := range got {
+			if s.RegionBegin == "listitem" {
+				marker = s.RegionParams["marker"]
+			}
+		}
+		want := string(src[0])
+		if marker != want {
+			t.Errorf("Parse(%q): marker = %q, want %q", src, marker, want)
+		}
+	}
+}
+
+// TestParseListItemOrdered: `1. foo` and `1) foo` emit
+// listitem regions with number=1.
+func TestParseListItemOrdered(t *testing.T) {
+	for _, src := range []string{"1. foo", "1) foo", "42. foo"} {
+		got := Parse(src)
+		var number, marker string
+		for _, s := range got {
+			if s.RegionBegin == "listitem" {
+				number = s.RegionParams["number"]
+				marker = s.RegionParams["marker"]
+			}
+		}
+		if number == "" {
+			t.Errorf("Parse(%q): number param missing", src)
+		}
+		if marker != "" {
+			t.Errorf("Parse(%q): unexpected marker %q on ordered list", src, marker)
+		}
+	}
+}
+
+// TestParseListItemMultiple: three consecutive bullet
+// lines emit three listitem regions.
+func TestParseListItemMultiple(t *testing.T) {
+	got := Parse("- a\n- b\n- c")
+	var begins int
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			begins++
+		}
+	}
+	if begins != 3 {
+		t.Errorf("got %d listitem begins, want 3; spans: %+v", begins, got)
+	}
+}
+
+// TestParseListItemMixedOrderedUnordered: mixing markers
+// across consecutive lines still produces one region per
+// line.
+func TestParseListItemMixedOrderedUnordered(t *testing.T) {
+	got := Parse("- a\n1. b\n* c")
+	var begins int
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			begins++
+		}
+	}
+	if begins != 3 {
+		t.Errorf("got %d listitem begins, want 3; spans: %+v", begins, got)
+	}
+}
+
+// TestParseListItemNotEmphasis: `*foo*` is emphasis, not
+// a list. The list detector requires a SPACE after the
+// marker.
+func TestParseListItemNotEmphasis(t *testing.T) {
+	got := Parse("*foo*")
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			t.Errorf("emphasis input misparsed as list; spans: %+v", got)
+		}
+	}
+}
+
+// TestParseListItemNotHRule: `---` is HRule, NOT a list
+// (HRule precedence over bullet detection).
+func TestParseListItemNotHRule(t *testing.T) {
+	got := Parse("---")
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			t.Errorf("HRule input misparsed as list; spans: %+v", got)
+		}
+	}
+}
+
+// TestParseListItemRequiresSpace: `-foo` (no space after
+// marker) is plain text, not a list.
+func TestParseListItemRequiresSpace(t *testing.T) {
+	got := Parse("-foo")
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			t.Errorf("`-foo` (no space) misparsed as list; spans: %+v", got)
+		}
+	}
+}
+
+// TestParseListItemTerminatedByBlankLine: a blank line
+// ends the list; following content is a fresh paragraph.
+func TestParseListItemTerminatedByBlankLine(t *testing.T) {
+	got := Parse("- foo\n\nplain text")
+	var begins int
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			begins++
+		}
+	}
+	if begins != 1 {
+		t.Errorf("got %d listitem begins, want 1 (the blank line should end the list); spans: %+v", begins, got)
+	}
+}
+
+// TestParseListItemInsideBlockquote: `> - foo` produces
+// a blockquote region containing a listitem region.
+func TestParseListItemInsideBlockquote(t *testing.T) {
+	got := Parse("> - foo")
+	var bqBegins, liBegins int
+	for _, s := range got {
+		switch s.RegionBegin {
+		case "blockquote":
+			bqBegins++
+		case "listitem":
+			liBegins++
+		}
+	}
+	if bqBegins != 1 {
+		t.Errorf("got %d blockquote begins, want 1; spans: %+v", bqBegins, got)
+	}
+	if liBegins != 1 {
+		t.Errorf("got %d listitem begins, want 1; spans: %+v", liBegins, got)
+	}
+}
+
+// TestParseListItemInsideBlockquoteBeginsAfterMarkers
+// pins the desired visual alignment: when a list item
+// appears inside a blockquote (`> - item`), the listitem
+// region must begin AFTER the `>` markers + space, NOT
+// at the line start. This way the line's first box (the
+// `>` rune) has Blockquote flags only — the layout's
+// first-box-determines-indent rule produces just the
+// blockquote indent, aligning the `>` with non-list
+// blockquote lines.
+//
+// An earlier round-7 fix (now reverted) snapped the
+// begin to line-start, which made `>` itself shift right
+// by ListIndent — visually misaligning list and non-list
+// blockquote lines. This test pins the correction.
+//
+// For source `> 1. foo`:
+//   - rune 0 = '>'
+//   - rune 1 = ' '
+//   - rune 2 = '1'
+//   - The listitem begin must be at rune 2 (where the
+//     marker actually starts), NOT at rune 0.
+func TestParseListItemInsideBlockquoteBeginsAfterMarkers(t *testing.T) {
+	got := Parse("> 1. foo")
+	var liBegin int = -1
+	for _, s := range got {
+		if s.RegionBegin == "listitem" {
+			liBegin = s.Offset
+			break
+		}
+	}
+	if liBegin != 2 {
+		t.Errorf("listitem begin offset = %d, want 2 (after `> ` markers)", liBegin)
+	}
+}
+
+// TestParseListItemEmphasisInContent: emphasis inside the
+// item content is still tokenized.
+func TestParseListItemEmphasisInContent(t *testing.T) {
+	got := Parse("- *italic*")
+	var foundItalic bool
+	for _, s := range got {
+		if s.Italic {
+			foundItalic = true
+		}
+	}
+	if !foundItalic {
+		t.Errorf("emphasis not tokenized inside list item; spans: %+v", got)
 	}
 }

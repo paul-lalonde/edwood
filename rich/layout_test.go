@@ -635,6 +635,75 @@ func TestLayoutListIndent(t *testing.T) {
 	})
 }
 
+// TestLayoutListInsideBlockquoteShiftsAtRegionEntry: when
+// a list item appears inside a blockquote, the layout
+// shifts xPos by ListIndent × ListIndentWidth at the
+// moment the listitem region begins on the line. This
+// produces a visible gap of one ListIndentWidth between
+// the blockquote markers (the `>`s) and the list content
+// (the `-` or `1.`) — the same indent gap a top-level
+// list has from the line start.
+//
+// For source `>- item` with `>` at column 20 (blockquote
+// indent) and `>` width 10, the `-` should land at:
+//
+//	(end of `>`) + ListIndent × Width = 30 + 20 = 50.
+//
+// Top-level list (no blockquote) is unaffected — the
+// first box is at xPos==0 and the existing line-start
+// indent rule applies the indent.
+func TestLayoutListInsideBlockquoteShiftsAtRegionEntry(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	// Source `>- item` (no space between `>` and `-` —
+	// matches what the user types):
+	content := Content{
+		{Text: ">", Style: Style{Blockquote: true, BlockquoteDepth: 1, Scale: 1.0}},
+		{Text: "-", Style: Style{Blockquote: true, BlockquoteDepth: 1, ListItem: true, ListIndent: 1, Scale: 1.0}},
+		{Text: " item", Style: Style{Blockquote: true, BlockquoteDepth: 1, ListItem: true, ListIndent: 1, Scale: 1.0}},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+
+	// `>` at column 20 (blockquote depth-1 indent).
+	if lines[0].Boxes[0].X != 20 {
+		t.Errorf("`>` X = %d, want 20", lines[0].Boxes[0].X)
+	}
+
+	// `-` should be at column 50: > ends at 30, plus
+	// ListIndent × Width = 20 shift = 50.
+	var dashX int = -1
+	for _, b := range lines[0].Boxes {
+		if string(b.Box.Text) == "-" {
+			dashX = b.X
+			break
+		}
+	}
+	if dashX != 50 {
+		t.Errorf("`-` X = %d, want 50 (>(@20)+>width(10)+ListIndent×Width(20))", dashX)
+	}
+
+	// Subsequent list-styled boxes don't shift again — the
+	// listitemShifted flag prevents double-shift. Find the
+	// box right after `-` and verify it's at column 60
+	// (just past the dash, no extra shift).
+	var afterDashX int = -1
+	for i, b := range lines[0].Boxes {
+		if string(b.Box.Text) == "-" && i+1 < len(lines[0].Boxes) {
+			afterDashX = lines[0].Boxes[i+1].X
+			break
+		}
+	}
+	if afterDashX != 60 {
+		t.Errorf("box after `-` X = %d, want 60 (right after dash, no extra shift)", afterDashX)
+	}
+}
+
 // TestLayoutCodeBlockIndent tests that fenced code blocks are indented.
 func TestLayoutCodeBlockIndent(t *testing.T) {
 	// Mock font with fixed character width of 10 pixels, height 14

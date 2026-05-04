@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -115,6 +116,8 @@ func Parse(src string) []Span {
 			spans = append(spans, parseCodeBlockParagraph(src, p)...)
 		case p.IsHRule:
 			spans = append(spans, parseHRuleParagraph(src, p)...)
+		case p.IsListItem:
+			spans = append(spans, parseListItemParagraph(src, p)...)
 		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
 		default:
@@ -221,11 +224,23 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 // Member criteria: the kind covers contiguous source
 // LINES (column 0 to end of line), not just a sub-range
 // within a line. "blockquote" qualifies (round 6).
-// "listitem" will qualify (round 7). "code" does NOT —
-// its body anchors AFTER the opener fence's `\n`, which
-// is already a line start; snapping a code begin would
-// move it onto the fence-opener line, mis-anchoring the
-// region.
+//
+// "listitem" does NOT qualify — when a list line lives
+// inside a blockquote (`> - item`), the listitem region
+// begins AFTER the `>` markers, leaving the line's first
+// box (the `>`) with Blockquote flags only. That's the
+// VISUAL we want: the `>` aligns with non-list
+// blockquote lines (same column), and the list content
+// appears just after the `>` at blockquote indent. If we
+// snapped listitem begins to line-start, the layout's
+// first-box-determines-indent rule would add ListIndent
+// to the line, pushing `>` past where it belongs (a
+// regression flagged in round 7 smoke testing).
+//
+// "code" does NOT qualify — its body anchors AFTER the
+// opener fence's `\n`, which is already a line start;
+// snapping a code begin would move it onto the fence-
+// opener line, mis-anchoring the region.
 var kindsAnchorAtLineStart = map[string]bool{
 	"blockquote": true,
 }
@@ -446,6 +461,85 @@ func parseHRuleParagraph(src string, p paragraphRange) []Span {
 	}}
 }
 
+// parseListItemParagraph emits the spans for one list-
+// item line (Phase 3 round 7 v1):
+//
+//   - `begin region listitem marker=X` (unordered) or
+//     `begin region listitem number=N` (ordered) at the
+//     line's start.
+//   - Inline spans for the item's CONTENT (after the
+//     marker + space) — emphasis, links, inline code, etc.
+//   - `end region` at the line's end (one past `\n` if
+//     present, or at EOF).
+//
+// The marker character itself is not covered by an
+// emphasis-style span — it renders as default-styled
+// body text via emit-time gap-fill, matching the
+// markup-stays-visible stance of all other v1 features.
+//
+// v1 limits: each list line is ONE item — no continuation
+// lines, no nested lists. Round 7.x will extend.
+func parseListItemParagraph(src string, p paragraphRange) []Span {
+	begin := Span{
+		Kind:        SpanRegionBegin,
+		Offset:      p.RuneStart,
+		RegionBegin: "listitem",
+	}
+	if p.ListMarker != 0 {
+		begin.RegionParams = map[string]string{
+			"marker": string(p.ListMarker),
+		}
+	} else {
+		begin.RegionParams = map[string]string{
+			"number": strconv.Itoa(p.ListNumber),
+		}
+	}
+	itemRuneEnd := p.RuneStart + utf8.RuneCountInString(src[p.ByteStart:p.ByteEnd])
+	end := Span{
+		Kind:      SpanRegionEnd,
+		Offset:    itemRuneEnd,
+		RegionEnd: true,
+	}
+	out := []Span{begin}
+	// Tokenize the item's content (after the marker +
+	// space) for inline emphasis / links / code. The
+	// marker bytes themselves are skipped.
+	contentBytes := contentBytePos(src, p)
+	if contentBytes < p.ByteEnd {
+		runes := []rune(src[contentBytes:p.ByteEnd])
+		out = append(out, parseInlineSpans(runes, p.ListContentRuneStart)...)
+	}
+	out = append(out, end)
+	return out
+}
+
+// contentBytePos returns the byte position in src where
+// a list item's CONTENT begins — i.e., just past the
+// marker and the required space. Mirrors the contentByte
+// computed by isListLine; recomputed here from the
+// paragraphRange's bytes so parseListItemParagraph doesn't
+// need a fourth field on paragraphRange.
+func contentBytePos(src string, p paragraphRange) int {
+	if p.ListMarker != 0 {
+		// Unordered: 1 marker byte + 1 space byte.
+		return p.ByteStart + 2
+	}
+	// Ordered: digits + ('.' | ')') + space.
+	i := p.ByteStart
+	for i < p.ByteEnd && src[i] >= '0' && src[i] <= '9' {
+		i++
+	}
+	// Skip `.` or `)` then space. Defensive: scanParagraphs
+	// only sets IsListItem after isListLine validated.
+	if i < p.ByteEnd {
+		i++ // `.` or `)`
+	}
+	if i < p.ByteEnd {
+		i++ // space
+	}
+	return i
+}
+
 // parseHeadingParagraph emits scaled spans for an ATX heading
 // paragraph. Per the Phase 3 round 1 design, the entire heading
 // content (the runes after the `# ` opener) is covered by a
@@ -626,6 +720,20 @@ type paragraphRange struct {
 	// nested blockquotes (`>>` or `> > `), headings inside,
 	// fenced code inside, etc. all work via recursion.
 	IsBlockquote bool
+	// IsListItem is true for a single list line (Phase 3
+	// round 7). v1 emits one paragraphRange per list line
+	// — runs of consecutive list lines produce a sequence
+	// of IsListItem ranges, NOT one range per group. The
+	// item's content (after the marker + space) lives at
+	// runes [ListContentRuneStart, RuneStart + rune count
+	// of [ByteStart, ByteEnd)). ListMarker holds the
+	// bullet character ('-', '*', '+') for unordered, or
+	// 0 for ordered. ListNumber holds the item's decimal
+	// number for ordered, or 0 for unordered.
+	IsListItem           bool
+	ListMarker           byte
+	ListNumber           int
+	ListContentRuneStart int
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -893,6 +1001,23 @@ func scanParagraphs(src string) []paragraphRange {
 			})
 			return
 		}
+		// List item line: own one-line paragraph (Phase 3
+		// round 7 v1). Detection runs AFTER HRule so that
+		// `---` parses as HRule, not as a `-` list line.
+		if ok, marker, number, contentByte := isListLine(src, lineStart, lineEnd); ok {
+			commit(lineStart)
+			contentRune := lineRuneStart + utf8.RuneCountInString(src[lineStart:contentByte])
+			out = append(out, paragraphRange{
+				ByteStart:            lineStart,
+				ByteEnd:              lineEnd,
+				RuneStart:            lineRuneStart,
+				IsListItem:           true,
+				ListMarker:           marker,
+				ListNumber:           number,
+				ListContentRuneStart: contentRune,
+			})
+			return
+		}
 		if !inParagraph {
 			cur = paragraphRange{
 				ByteStart: lineStart,
@@ -944,6 +1069,68 @@ func isBlockquoteLine(src string, start, end int) bool {
 		return false
 	}
 	return src[start] == '>'
+}
+
+// isListLine reports whether [start, end) opens a list
+// item at column 0 (Phase 3 round 7 v1; no leading
+// whitespace).
+//
+// Returns:
+//   - ok: true if the line is a list line.
+//   - marker: '-', '*', or '+' for unordered; 0 for ordered.
+//   - number: item number for ordered; 0 for unordered.
+//   - contentByte: byte position right after the marker
+//     and required space — the start of the item's content.
+//
+// Detection rules:
+//   - Unordered: starts with `- `, `* `, or `+ ` (marker +
+//     SPACE). The space is required so emphasis (`*x*`),
+//     plain lines starting with `-foo`, and HRule (`---`)
+//     do NOT match.
+//   - Ordered: starts with one or more digits followed by
+//     `.` or `)` followed by SPACE.
+//
+// Callers must check HRule precedence BEFORE calling
+// this — `---` is HRule, not a list line, even though
+// detectHRule's marker char overlaps with the bullet.
+func isListLine(src string, start, end int) (ok bool, marker byte, number, contentByte int) {
+	if start >= end {
+		return false, 0, 0, 0
+	}
+	c := src[start]
+	// Unordered: marker + SPACE.
+	if c == '-' || c == '*' || c == '+' {
+		if start+1 < end && src[start+1] == ' ' {
+			return true, c, 0, start + 2
+		}
+		return false, 0, 0, 0
+	}
+	// Ordered: digits + ('.' | ')') + SPACE.
+	if c < '0' || c > '9' {
+		return false, 0, 0, 0
+	}
+	i := start
+	for i < end && src[i] >= '0' && src[i] <= '9' {
+		i++
+	}
+	// Must have at least one digit (already true) and a
+	// trailing `.` or `)` followed by space.
+	if i >= end {
+		return false, 0, 0, 0
+	}
+	if src[i] != '.' && src[i] != ')' {
+		return false, 0, 0, 0
+	}
+	if i+1 >= end || src[i+1] != ' ' {
+		return false, 0, 0, 0
+	}
+	// Parse the digit run. We've already validated each
+	// rune is 0-9; convert to int defensively.
+	n := 0
+	for j := start; j < i; j++ {
+		n = n*10 + int(src[j]-'0')
+	}
+	return true, 0, n, i + 2
 }
 
 // fenceLineLen reports the number of leading backticks on

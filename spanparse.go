@@ -148,10 +148,11 @@ func parseSpanMessage(data string, bufLen int) (runs []StyleRun, regionStart int
 // round of its own (each requires renderer support); the
 // parser deliberately rejects unknown kinds so producer
 // mistakes surface loudly. Round 5 adds "code"; rounds 6-8
-// will extend.
+// extend further.
 var validRegionKinds = map[string]bool{
 	"code":       true,
 	"blockquote": true, // Phase 3 round 6
+	"listitem":   true, // Phase 3 round 7
 }
 
 // parseBeginRegion parses the fields after the "begin" prefix.

@@ -551,6 +551,47 @@ func TestAutoSwitchToStyledMode(t *testing.T) {
 	}
 }
 
+// TestRenderStyledFromBodyPreservesSelection: regression for
+// the md2spans cursor-resets-to-#0 bug. md2spans's normal
+// render pattern is `c\n` followed by spans; the `c`
+// directive triggers exitStyledMode (richBody destroyed),
+// and the subsequent spans write triggers initStyledMode
+// with a fresh richBody. The render path must sync the
+// body's dot/selection to the new richBody — without it,
+// the user's cursor visibly snaps to the start of the
+// document on every render. Phase 3 round 7.
+func TestRenderStyledFromBodyPreservesSelection(t *testing.T) {
+	w := makeStyledWindow(t, "hello world test")
+	w.body.what = Body
+	w.body.all = image.Rect(0, 0, 800, 600)
+
+	// User has positioned cursor mid-buffer in plain mode.
+	w.body.q0 = 6
+	w.body.q1 = 11
+
+	// Simulate the protocol-driven flow: a span write
+	// arrives, applyParsedSpans populates the stores,
+	// initStyledMode creates a fresh richBody (no prior
+	// rich-frame state), then renderStyledFromBody pushes
+	// content + origin + selection.
+	w.spanStore = NewSpanStore()
+	w.spanStore.Insert(0, 16)
+	w.initStyledMode()
+	if !w.styledMode || w.richBody == nil {
+		t.Fatalf("init failed: styledMode=%v richBody=%v",
+			w.styledMode, w.richBody == nil)
+	}
+
+	w.renderStyledFromBody()
+
+	// The freshly-initialized richBody must reflect the
+	// body's selection (NOT default to 0, 0).
+	p0, p1 := w.richBody.Selection()
+	if p0 != 6 || p1 != 11 {
+		t.Errorf("richBody selection = (%d, %d), want (6, 11) — render did not sync from body", p0, p1)
+	}
+}
+
 func TestStyledAndPreviewMutuallyExclusive(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 
@@ -2093,5 +2134,104 @@ func TestBoxStyleToRichStyle_HRuleAlsoMapped(t *testing.T) {
 	got := boxStyleToRichStyle(sa, "alt")
 	if !got.HRule {
 		t.Error("box rich.Style.HRule should be true for StyleAttrs.HRule=true")
+	}
+}
+
+// --- Listitem region expansion (Phase 3 round 7) -----------------
+
+// TestBuildStyledContent_RunInsideListitemRegionUnordered:
+// a StyleRun inside an unordered listitem region produces a
+// span with Style.ListItem=true, ListIndent=1, and
+// ListOrdered=false.
+func TestBuildStyledContent_RunInsideListitemRegionUnordered(t *testing.T) {
+	w := makeStyledWindow(t, "before- foo \nafter") // 18 runes
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 6, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+	}, []*Region{{
+		Start: 6, End: 12, Kind: "listitem",
+		Params: map[string]string{"marker": "-"},
+	}}, 18)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	if !mid.Style.ListItem {
+		t.Error("middle span should have Style.ListItem=true (inside listitem region)")
+	}
+	if mid.Style.ListIndent != 1 {
+		t.Errorf("ListIndent = %d, want 1", mid.Style.ListIndent)
+	}
+	if mid.Style.ListOrdered {
+		t.Error("unordered list item: ListOrdered should be false")
+	}
+}
+
+// TestBuildStyledContent_RunInsideListitemRegionOrdered:
+// `number=N` produces ListOrdered=true and ListNumber=N.
+func TestBuildStyledContent_RunInsideListitemRegionOrdered(t *testing.T) {
+	w := makeStyledWindow(t, "before3. foo \nafter") // 19 runes
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 6, Style: StyleAttrs{}},
+		{Len: 7, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+	}, []*Region{{
+		Start: 6, End: 13, Kind: "listitem",
+		Params: map[string]string{"number": "3"},
+	}}, 19)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	if !mid.Style.ListItem {
+		t.Error("middle span should have ListItem=true")
+	}
+	if !mid.Style.ListOrdered {
+		t.Error("ordered listitem: ListOrdered should be true")
+	}
+	if mid.Style.ListNumber != 3 {
+		t.Errorf("ListNumber = %d, want 3", mid.Style.ListNumber)
+	}
+}
+
+// TestBuildStyledContent_ListitemInsideBlockquote: a
+// listitem region nested inside a blockquote region
+// composes both kinds — ListItem AND Blockquote both
+// apply to the inner runes.
+func TestBuildStyledContent_ListitemInsideBlockquote(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 2, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+		{Len: 2, Style: StyleAttrs{}},
+	}, []*Region{
+		{Start: 0, End: 10, Kind: "blockquote"},
+		{
+			Start: 2, End: 8, Kind: "listitem",
+			Params: map[string]string{"marker": "-"},
+		},
+	}, 10)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	if !mid.Style.Blockquote {
+		t.Error("middle span: Blockquote should be true")
+	}
+	if mid.Style.BlockquoteDepth != 1 {
+		t.Errorf("BlockquoteDepth = %d, want 1", mid.Style.BlockquoteDepth)
+	}
+	if !mid.Style.ListItem {
+		t.Error("middle span: ListItem should be true")
+	}
+	if mid.Style.ListIndent != 1 {
+		t.Errorf("ListIndent = %d, want 1", mid.Style.ListIndent)
 	}
 }

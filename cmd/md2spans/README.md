@@ -37,7 +37,7 @@ re-render styled spans (debounced 200 ms).
 | Fenced code blocks (` ``` `) | ✓ | Phase 3 round 5 — emits `begin region code [lang=NAME]` / `end region` around the body runes; the body has `family=code` so the renderer uses the monospace font, and the consumer's RegionStore drives the gutter indent + full-line background via the existing rich.Frame layout. The opening / closing fences themselves render as default-styled text (markup-stays-visible). |
 | Indented code blocks | — | Future round; v1 of round 5 covers fenced only. |
 | Blockquote (`>`, `>>`, `> >` nested) | ✓ | Phase 3 round 6 — emits `begin region blockquote` / `end region` around the group. The body content (with `>` markers stripped) is recursively parsed, so headings, fenced code blocks, HRules, and nested blockquotes inside a blockquote all work. Depth is computed from ancestor count by the consumer's bridge — no `depth=N` param on the wire. v1 requires `>` at column 0 (no leading whitespace); CommonMark's lazy continuation and 1-3 leading spaces are deferred. |
-| Lists | — | Phase 3 round 7 (region) |
+| Lists (column-0 single-line items) | ✓ | Phase 3 round 7 v1 — emits `begin region listitem marker=X` (unordered, X is `-` / `*` / `+`) or `begin region listitem number=N` (ordered, N is the item number). Each list line is its own region. v1 requires the marker at column 0 followed by a SPACE (so `*foo*` stays emphasis and `-foo` stays plain text). Multi-line items via continuation lines and nesting via leading whitespace are deferred to round 7.x. Lists inside blockquotes work via the existing recursive parse path. |
 | Tables | — | Phase 3 round 8 (region) |
 | Reference / autolinks | — | Future |
 | Source map (Look) | — | Future |

@@ -629,15 +629,7 @@ func xfidspanswrite(x *Xfid, w *Window) {
 		w.initStyledMode()
 	}
 
-	// Build styled content and render.
-	if w.styledMode && w.richBody != nil {
-		content := w.buildStyledContent()
-		w.richBody.SetContent(content)
-		w.richBody.Render(w.body.all)
-		if w.display != nil {
-			w.display.Flush()
-		}
-	}
+	w.renderStyledFromBody()
 
 	fc.Count = x.fcall.Count
 	x.respond(&fc, nil)
