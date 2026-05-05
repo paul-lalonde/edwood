@@ -635,6 +635,499 @@ func TestLayoutListIndent(t *testing.T) {
 	})
 }
 
+// --- Round 8.x: table column-width measurement ---
+
+// TestMeasureTableColumns_BasicTwoColumn: a two-column
+// table with non-uniform cell content widths produces
+// per-column max widths.
+//
+// Source (synthesized as boxes):
+//
+//	| H1   | H2     |
+//	|------|--------|
+//	| a    | longer |
+//
+// Per-column widths (in pixels, font is 10×14):
+//   col 0: max(" H1   ", "------", " a    ") = 6 chars × 10 = 60
+//   col 1: max(" H2     ", "--------", " longer ") = 8 chars × 10 = 80
+func TestMeasureTableColumns_BasicTwoColumn(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	rows := []string{
+		"| H1   | H2     |\n",
+		"|------|--------|\n",
+		"| a    | longer |\n",
+	}
+	var content Content
+	for _, row := range rows {
+		content = append(content, Span{Text: row, Style: tableStyle})
+	}
+	boxes := contentToBoxes(content)
+
+	widths, endIdx := measureTableColumns(boxes, 0, font, nil)
+	if endIdx != len(boxes) {
+		t.Errorf("endIdx = %d, want %d (whole input is the table)", endIdx, len(boxes))
+	}
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2; widths: %v", len(widths), widths)
+	}
+	// Column 0: ` H1   `, `------`, ` a    ` → all 6 chars (60px).
+	if widths[0] != 60 {
+		t.Errorf("col 0 width = %d, want 60", widths[0])
+	}
+	// Column 1: ` H2     `, `--------`, ` longer ` → all 8 chars (80px).
+	if widths[1] != 80 {
+		t.Errorf("col 1 width = %d, want 80", widths[1])
+	}
+}
+
+// TestMeasureTableColumns_RaggedSourceWidthsTakeMax:
+// non-uniform source widths still produce a single max
+// per column. This is the round 8.x pivot from round
+// 8.0c — v1's source-aligned-only rendering becomes
+// auto-aligned when measurement picks the max.
+func TestMeasureTableColumns_RaggedSourceWidthsTakeMax(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	rows := []string{
+		"| a | b |\n",        // both cells: ` a ` / ` b ` = 3 chars each (30px)
+		"|---|---|\n",        // both cells: `---` = 3 chars (30px)
+		"| longer | xx |\n",  // col 0: ` longer ` = 8 chars (80px); col 1: ` xx ` = 4 chars (40px)
+	}
+	var content Content
+	for _, row := range rows {
+		content = append(content, Span{Text: row, Style: tableStyle})
+	}
+	boxes := contentToBoxes(content)
+
+	widths, _ := measureTableColumns(boxes, 0, font, nil)
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2; widths: %v", len(widths), widths)
+	}
+	if widths[0] != 80 {
+		t.Errorf("col 0 width = %d, want 80 (` longer ` is widest)", widths[0])
+	}
+	if widths[1] != 40 {
+		t.Errorf("col 1 width = %d, want 40 (` xx ` is widest)", widths[1])
+	}
+}
+
+// TestLayoutTable_AlignmentLeftPadsTrailing: for cells
+// with `align=left`, the content sits at the cell's
+// start (no leading pad) and the trailing pad fills to
+// the column's right edge before the next `|`.
+//
+// Source (one short cell, one wide column):
+//
+//	| a    | b    |
+//	|------|------|
+//
+// Column widths: col0=col1=6 chars (60px). Cell `| a `
+// has content " a " (3 chars = 30px, content width).
+// align=left → leading pad 0; trailing pad 30px. The
+// next `|` lands at column 0 right edge = 70px (line
+// indent gutter + barW + colW).
+//
+// Test the simpler property: with column widths
+// computed and applied, `|` boxes on different rows
+// land at the SAME x positions.
+func TestLayoutTable_VerticalBarsAlignAcrossRows(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	cellStyle := tableStyle
+	cellStyle.TableAlign = AlignLeft
+	// Row 1 cells short; row 2 cells longer. After 8.x's
+	// column-width padding, all `|` separators across
+	// rows must land at the same X positions.
+	content := Content{
+		Span{Text: "| a | b |\n", Style: cellStyle},
+		Span{Text: "|---|---|\n", Style: cellStyle},
+		Span{Text: "| longer | xx |\n", Style: cellStyle},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	// Collect bar positions per line (skipping the
+	// closing \n marker).
+	type rowBars struct{ xs []int }
+	var rows []rowBars
+	for _, line := range lines {
+		var xs []int
+		for _, pb := range line.Boxes {
+			if string(pb.Box.Text) == "|" {
+				xs = append(xs, pb.X)
+			}
+		}
+		if len(xs) > 0 {
+			rows = append(rows, rowBars{xs})
+		}
+	}
+	if len(rows) < 3 {
+		t.Fatalf("expected 3 rows of bars, got %d", len(rows))
+	}
+	// All rows should have 3 `|` positions (opening,
+	// separator, closing) and they should match.
+	for col := 0; col < len(rows[0].xs); col++ {
+		x0 := rows[0].xs[col]
+		for r := 1; r < len(rows); r++ {
+			if col >= len(rows[r].xs) {
+				t.Fatalf("row %d has %d bars, expected ≥%d", r, len(rows[r].xs), col+1)
+			}
+			if rows[r].xs[col] != x0 {
+				t.Errorf("row %d bar %d at X=%d, expected %d (= row 0 column %d)",
+					r, col, rows[r].xs[col], x0, col)
+			}
+		}
+	}
+}
+
+// TestLayoutTable_ThreeColumnMixedAlignment: mimics the
+// user's mixed-alignment test.md table. Three columns:
+// left / center / right. Body row 1 has narrow cells.
+// Verifies the body row's `b` and `c` are shifted from
+// the cell's left edge per their declared alignment.
+func TestLayoutTable_ThreeColumnMixedAlignment(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableRaw := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	leftCell := tableRaw
+	leftCell.TableAlign = AlignLeft
+	centerCell := tableRaw
+	centerCell.TableAlign = AlignCenter
+	rightCell := tableRaw
+	rightCell.TableAlign = AlignRight
+	// Header row — sets column widths.
+	// Body row — narrow cells; alignment should make
+	// the difference visible.
+	content := Content{
+		// Header row: `| L | C | R |\n` — cells ` L `, ` C `, ` R ` (3 chars each).
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " L ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " C ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " R ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Separator row: `|:---|:---:|---:|\n`
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: ":---", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: ":---:", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: "---:", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Body row 1: `| a | b | c |\n` — narrow cells.
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " a ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " b ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " c ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Body row 2: `| longer text | longer too | longer right |\n`
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer text ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer too ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer right ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 1000, 80, nil, nil)
+	if len(lines) < 4 {
+		t.Fatalf("expected ≥4 lines, got %d", len(lines))
+	}
+	bodyRow := lines[2] // header, separator, body row 1.
+
+	// Find positions of `a`, `b`, `c` in body row.
+	var aX, bX, cX int = -1, -1, -1
+	for _, pb := range bodyRow.Boxes {
+		switch string(pb.Box.Text) {
+		case "a":
+			aX = pb.X
+		case "b":
+			bX = pb.X
+		case "c":
+			cX = pb.X
+		}
+	}
+	t.Logf("body row 1 positions: a=%d b=%d c=%d", aX, bX, cX)
+
+	// Find the bars in body row to extract column boundaries.
+	var bars []int
+	for _, pb := range bodyRow.Boxes {
+		if string(pb.Box.Text) == "|" {
+			bars = append(bars, pb.X)
+		}
+	}
+	t.Logf("body row bars: %v", bars)
+	if len(bars) != 4 {
+		t.Fatalf("expected 4 bars, got %d", len(bars))
+	}
+
+	// Column boundaries: bars[0]..bars[1] = col 0, etc.
+	// Each cell's content width is 30px (3 chars).
+	// Column widths come from row 4's longer cells:
+	//   col 0: ` longer text ` = 13 chars = 130px
+	//   col 1: ` longer too ` = 12 chars = 120px
+	//   col 2: ` longer right ` = 14 chars = 140px
+
+	// `a` (left): should be near bars[0] (cell 0 left edge + 1 space).
+	// `b` (center): should be near middle of col 1.
+	// `c` (right): should be near bars[3] (col 2 right edge minus content).
+
+	// Specific assertions:
+	// - col 0 left: aX should be bars[0]+barW+1space = bars[0]+10+10 = bars[0]+20.
+	// - col 1 center: bX should be near bars[1]+barW+leadingPad+space.
+	//     leadingPad for center on (120-30)/2 = 45px. So bX = bars[1]+10+45+10 = bars[1]+65.
+	// - col 2 right: cX should be near bars[2]+barW+leadingPad+space.
+	//     leadingPad for right on (140-30) = 110. cX = bars[2]+10+110+10 = bars[2]+130.
+
+	col0Width := bars[1] - bars[0]
+	col1Width := bars[2] - bars[1]
+	col2Width := bars[3] - bars[2]
+	t.Logf("col widths from bars: %d / %d / %d", col0Width, col1Width, col2Width)
+
+	// The minimum a/b/c X positions for left/center/right alignment.
+	wantAtLeast := map[string]int{
+		"a-near-cell-0-left":    bars[0] + 15, // left-aligned, content close to cell start
+		"b-shifted-from-center": bars[1] + 30, // centered should be at least 30px past col 1 left
+		"c-shifted-to-right":    bars[2] + 80, // right should be close to col 2 right
+	}
+	if aX < bars[0] || aX > bars[0]+30 {
+		t.Errorf("a X=%d, expected near bars[0]=%d (left-aligned)", aX, bars[0])
+	}
+	if bX < wantAtLeast["b-shifted-from-center"] {
+		t.Errorf("b X=%d, expected ≥%d (center-aligned should pad)", bX, wantAtLeast["b-shifted-from-center"])
+	}
+	if cX < wantAtLeast["c-shifted-to-right"] {
+		t.Errorf("c X=%d, expected ≥%d (right-aligned should pad)", cX, wantAtLeast["c-shifted-to-right"])
+	}
+}
+
+// TestLayoutTable_CenterAlignmentVisibleOnNarrowCell:
+// when a cell's content is narrower than the column,
+// `align=center` produces a leadingPad that shifts the
+// content's first rune to the right. Verifies the
+// alignment is actually applied.
+//
+// Setup: 2 rows, 1 column. Header has `| header |` (8
+// chars wide, contributes max). Body has `| x |` (3
+// chars, much narrower). With align=center the body's
+// `x` should NOT sit at the column's left edge; it
+// should be shifted to the center.
+func TestLayoutTable_CenterAlignmentVisibleOnNarrowCell(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	headerStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignCenter, TableHeader: true}
+	cellStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignCenter}
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	content := Content{
+		// Header row: `|` (table only) + ` header ` (cellStyle for content)
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: " header ", Style: headerStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+		// Separator: `|---|`
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "---", Style: cellStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+		// Body: `|` + ` x ` + `|`
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: " x ", Style: cellStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+
+	// Find the body row (3rd line, index 2). Find the
+	// `x` box. Its X position should be greater than
+	// where it'd sit if alignment weren't applied (=
+	// just past the opening `|`).
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	bodyRow := lines[2]
+	var xPos, openingBarX int = -1, -1
+	for _, pb := range bodyRow.Boxes {
+		txt := string(pb.Box.Text)
+		if openingBarX == -1 && txt == "|" {
+			openingBarX = pb.X
+		}
+		if txt == "x" {
+			xPos = pb.X
+			break
+		}
+	}
+	if xPos == -1 {
+		t.Fatalf("`x` box not found in body row; row: %+v", bodyRow)
+	}
+	if openingBarX == -1 {
+		t.Fatal("opening | not found")
+	}
+	// Header column is 8 chars (` header `). Body cell
+	// content is 3 chars (` x `). Extra is 5 chars (50px).
+	// Center alignment leadingPad = 25px. So `x` should
+	// be at openingBarX + barW(10) + leadingPad(25) +
+	// space(10) = openingBarX + 45.
+	barW := 10
+	wantMin := openingBarX + barW + 20 // at least 20px past barW (some leadingPad)
+	if xPos < wantMin {
+		t.Errorf("`x` X=%d, expected ≥%d (openingBarX=%d, barW=%d, leadingPad expected ~25)",
+			xPos, wantMin, openingBarX, barW)
+	}
+}
+
+// TestLayoutTable_RightAlignmentLeadingPad: a cell with
+// `align=right` and content narrower than its column
+// gets a leading pad equal to (colWidth - contentWidth).
+// The cell's content boxes start at colStart + leadingPad.
+func TestLayoutTable_RightAlignmentLeadingPad(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableLeft := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignLeft}
+	tableRight := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignRight}
+	// Two-row table; col 1 is right-aligned. Row 1 has
+	// short content; row 2 has long content.
+	content := Content{
+		Span{Text: "| a | b |\n", Style: tableLeft},   // header (default left for measurement)
+		Span{Text: "|---|---:|\n", Style: tableLeft},  // separator
+		Span{Text: "| 1 | ", Style: tableLeft},        // row body up to second cell
+		Span{Text: "x", Style: tableRight},            // right-aligned cell content
+		Span{Text: " |\n", Style: tableLeft},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+
+	// Find the `x` box on row 3 (the body row). With
+	// right alignment, its X position should be greater
+	// than where it'd land with left alignment.
+	var bodyRow Line
+	for li, line := range lines {
+		if li == 2 {
+			bodyRow = line
+			break
+		}
+	}
+	var xX int = -1
+	for _, pb := range bodyRow.Boxes {
+		if string(pb.Box.Text) == "x" {
+			xX = pb.X
+			break
+		}
+	}
+	if xX == -1 {
+		t.Fatalf("`x` box not found in body row; row: %+v", bodyRow)
+	}
+
+	// Find the closing `|` of row 3. The right-aligned
+	// `x` should sit just before it (modulo a trailing
+	// space). Specifically: closing-|.X - x.X should be
+	// ≤ 2 char widths (for the trailing ` |`).
+	var closingBarX int = -1
+	for i := len(bodyRow.Boxes) - 1; i >= 0; i-- {
+		if string(bodyRow.Boxes[i].Box.Text) == "|" {
+			closingBarX = bodyRow.Boxes[i].X
+			break
+		}
+	}
+	if closingBarX == -1 {
+		t.Fatal("closing | not found")
+	}
+	if closingBarX-xX > 30 {
+		// Threshold: right-align should place `x` close
+		// to the closing bar (not far away).
+		t.Errorf("right-aligned `x` at X=%d is %dpx from closing bar at X=%d; expected close placement",
+			xX, closingBarX-xX, closingBarX)
+	}
+}
+
+// TestLayoutTable_InBlockquoteHasBlockquoteIndent: a
+// table inside a blockquote should preserve the
+// blockquote's indent (BlockquoteDepth × ListIndentWidth)
+// in addition to the table's own gutter indent. Without
+// this, in-blockquote tables render at the same xPos as
+// non-blockquote tables (gutterIndent only), losing the
+// visual cue that they're nested inside the blockquote.
+//
+// Repro: smoke screenshot 11 (Phase 3 round 8.x) — user
+// reported the in-blockquote table flush-left, no
+// blockquote indent visible.
+func TestLayoutTable_InBlockquoteHasBlockquoteIndent(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	// Table-styled spans with BlockquoteDepth=1 — what the
+	// bridge produces for `> | H1 | H2 |\n> |----|----|\n
+	// > | x  | y  |`.
+	bqTable := Style{
+		Table: true, Block: true, Code: true, Scale: 1.0,
+		Blockquote: true, BlockquoteDepth: 1,
+	}
+	cell := bqTable
+	cell.TableAlign = AlignLeft
+	content := Content{
+		Span{Text: "| H1 | H2 |\n", Style: cell},
+		Span{Text: "|----|----|\n", Style: cell},
+		Span{Text: "| x  | y  |\n", Style: cell},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 1000, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	// First box of each row is the opening `|`. Its X
+	// should be ≥ ListIndentWidth (the blockquote's
+	// contribution). With the bug it would be exactly
+	// gutterIndent (= GutterIndentChars * 10 = 80px) and
+	// have NO blockquote contribution; the fix adds
+	// BlockquoteDepth*ListIndentWidth on top.
+	gutterIndent := GutterIndentChars * font.BytesWidth([]byte("M"))
+	wantMin := gutterIndent + 1*ListIndentWidth
+	for rowIdx := 0; rowIdx < 3; rowIdx++ {
+		if len(lines[rowIdx].Boxes) == 0 {
+			t.Fatalf("row %d has no boxes", rowIdx)
+		}
+		gotX := lines[rowIdx].Boxes[0].X
+		if gotX < wantMin {
+			t.Errorf("row %d first-bar X = %d, want ≥%d "+
+				"(gutter %d + blockquoteDepth×ListIndentWidth %d)",
+				rowIdx, gotX, wantMin, gutterIndent, 1*ListIndentWidth)
+		}
+	}
+}
+
+// TestMeasureTableColumns_StopsAtNonTableBox: if the
+// next box after the table run isn't `Style.Table`,
+// the function returns at that boundary.
+func TestMeasureTableColumns_StopsAtNonTableBox(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	plainStyle := Style{Scale: 1.0}
+	content := Content{
+		Span{Text: "| a | b |\n", Style: tableStyle},
+		Span{Text: "|---|---|\n", Style: tableStyle},
+		Span{Text: "| 1 | 2 |\n", Style: tableStyle},
+		Span{Text: "after table", Style: plainStyle},
+	}
+	boxes := contentToBoxes(content)
+
+	widths, endIdx := measureTableColumns(boxes, 0, font, nil)
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2", len(widths))
+	}
+	// endIdx should point at the first non-Table box.
+	if endIdx >= len(boxes) {
+		t.Fatalf("endIdx = %d, want < len(boxes) = %d", endIdx, len(boxes))
+	}
+	if boxes[endIdx].Style.Table {
+		t.Errorf("boxes[endIdx] should not have Style.Table; got Style=%+v", boxes[endIdx].Style)
+	}
+}
+
 // TestLayoutNestedListViaSourceWhitespace pins the
 // Phase 3 round 7.x nesting model: each list item is its
 // own region (no nesting in the wire), all items have

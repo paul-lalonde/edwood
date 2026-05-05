@@ -2366,3 +2366,56 @@ func TestBuildStyledContent_TableInsideBlockquote(t *testing.T) {
 		t.Errorf("no span with Table+Blockquote both set; spans: %+v", content)
 	}
 }
+
+// TestBuildStyledContent_TableCellAlignmentInBodyRow:
+// drives the full bridge pipeline for a table where the
+// HEADER row sets alignment metadata and the BODY row's
+// cells should pick up the same alignment via the
+// tablecell region's `align=` param.
+//
+// Verifies that buildStyledContent produces rich.Spans
+// where the body cell's content runes have
+// `Style.TableAlign` set to the column's alignment.
+// This is the property that round-8.x's layout uses to
+// apply leadingPad.
+func TestBuildStyledContent_TableCellAlignmentInBodyRow(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghijklmnopqrstuvwxyz0123456789")
+	// Synthesize a table with one centered column.
+	// Set up regions for a 3-row table: header (rune 0..9),
+	// separator (rune 10..19), body (rune 20..29). Each row
+	// has one cell at runes [start+1, start+9) (centered).
+	regions := []*Region{
+		{Start: 0, End: 30, Kind: "table"},
+		{Start: 0, End: 10, Kind: "tablerow", Params: map[string]string{"header": "true"}},
+		{Start: 1, End: 9, Kind: "tablecell", Params: map[string]string{"align": "center"}},
+		{Start: 10, End: 20, Kind: "tablerow"},
+		{Start: 11, End: 19, Kind: "tablecell", Params: map[string]string{"align": "center"}},
+		{Start: 20, End: 30, Kind: "tablerow"},
+		{Start: 21, End: 29, Kind: "tablecell", Params: map[string]string{"align": "center"}},
+	}
+	w.applyParsedSpans(0, []StyleRun{{Len: 36, Style: StyleAttrs{}}}, regions, 36)
+
+	content := w.buildStyledContent()
+	// Collect spans whose runes are inside the body cell
+	// region (Start: 21, End: 29).
+	var bodyCellAligns []rich.Alignment
+	cursor := 0
+	for _, s := range content {
+		runeLen := len([]rune(s.Text))
+		spanStart := cursor
+		spanEnd := cursor + runeLen
+		// Body cell region [21, 29).
+		if spanStart >= 21 && spanEnd <= 29 {
+			bodyCellAligns = append(bodyCellAligns, s.Style.TableAlign)
+		}
+		cursor = spanEnd
+	}
+	if len(bodyCellAligns) == 0 {
+		t.Fatal("no spans found inside body cell region [21, 29)")
+	}
+	for i, a := range bodyCellAligns {
+		if a != rich.AlignCenter {
+			t.Errorf("bodyCellAligns[%d] = %v, want AlignCenter", i, a)
+		}
+	}
+}

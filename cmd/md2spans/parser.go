@@ -683,9 +683,20 @@ func parseTableParagraph(src string, p paragraphRange) []Span {
 		cellIdx := 0
 
 		emitCell := func(byteEnd, runeEnd int) {
+			// Capture the cell's CONTENT-START positions
+			// from the outer scope. cellStart / cellRune
+			// Start point at the byte/rune immediately
+			// after the previous `|` (or after the row's
+			// opening `|` for cell 0). cursor / cursorRune
+			// have already advanced to the CURRENT `|` (=
+			// the cell's END), so they're not what we want
+			// for the begin offset.
+			contentByteStart := cellStart
+			contentRuneStart := cellRuneStart
+
 			cellSpan := Span{
 				Kind:        SpanRegionBegin,
-				Offset:      cursorRune,
+				Offset:      contentRuneStart,
 				RegionBegin: "tablecell",
 			}
 			align := "left"
@@ -696,7 +707,7 @@ func parseTableParagraph(src string, p paragraphRange) []Span {
 			out = append(out, cellSpan)
 
 			// Content spans with family=code overlay.
-			out = append(out, emitTableCellContent(src, cursor, byteEnd, cursorRune, runeEnd)...)
+			out = append(out, emitTableCellContent(src, contentByteStart, byteEnd, contentRuneStart, runeEnd)...)
 
 			out = append(out, Span{
 				Kind:      SpanRegionEnd,

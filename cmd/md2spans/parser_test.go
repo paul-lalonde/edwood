@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestParseEmpty: empty input produces no spans (R3).
 func TestParseEmpty(t *testing.T) {
@@ -2268,6 +2271,69 @@ func TestParseTableInsideBlockquote(t *testing.T) {
 	}
 }
 
+// TestParseTable_AlignmentInWireFormat verifies that
+// align= params survive FormatSpans → wire bytes (the
+// consumer-facing format).
+func TestParseTable_AlignmentInWireFormat(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	if !strings.Contains(wire, "align=center") {
+		t.Errorf("wire format missing align=center; wire:\n%s", wire)
+	}
+	if !strings.Contains(wire, "align=right") {
+		t.Errorf("wire format missing align=right; wire:\n%s", wire)
+	}
+	if !strings.Contains(wire, "align=left") {
+		t.Errorf("wire format missing align=left; wire:\n%s", wire)
+	}
+}
+
+// TestParseTable_DumpWire is a diagnostic test that
+// prints the full wire format md2spans produces for the
+// user's mixed-alignment table. Used to verify what the
+// consumer side actually receives during smoke testing.
+func TestParseTable_DumpWire(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	t.Logf("source (%d bytes):\n%s", len(src), src)
+	t.Logf("wire (%d bytes):\n%s", len(wire), wire)
+	for i, s := range spans {
+		t.Logf("span[%d]: %+v", i, s)
+	}
+}
+
+// TestParseTable_BodyRowCellAlignmentParams pins that
+// body rows' tablecell regions carry the same align=
+// param as the separator row dictated. A round 8.x
+// smoke-fix regression test — an earlier symptom was
+// body cells appearing left-aligned even when the
+// separator declared center/right.
+func TestParseTable_BodyRowCellAlignmentParams(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	got := Parse(src)
+	wantAligns := []string{"left", "center", "right"}
+	// Each of 3 rows × 3 cells = 9 tablecell begins.
+	// Cell aligns repeat per row.
+	var cellIdx int
+	for _, s := range got {
+		if s.RegionBegin != "tablecell" {
+			continue
+		}
+		col := cellIdx % 3
+		want := wantAligns[col]
+		got := s.RegionParams["align"]
+		if got != want {
+			t.Errorf("cellIdx=%d (col=%d) align = %q, want %q", cellIdx, col, got, want)
+		}
+		cellIdx++
+	}
+	if cellIdx != 9 {
+		t.Errorf("got %d tablecell regions, want 9 (3 rows × 3 cells)", cellIdx)
+	}
+}
+
 // TestParseTableInsideBlockquoteSnapsToLineStart pins
 // the round-8 smoke fix: when a table is inside a
 // blockquote, the table region's begin must snap to the
@@ -2297,4 +2363,152 @@ func TestParseTableInsideBlockquoteSnapsToLineStart(t *testing.T) {
 	if tableBegin != 0 {
 		t.Errorf("table begin offset = %d, want 0 (line start of table block in original)", tableBegin)
 	}
+}
+
+// TestParseTable_DumpWireInBlockquote dumps wire for the
+// in-blockquote table from the user's smoke test. Used to
+// diagnose the screenshot-11 issue (table flush-left, no
+// blockquote indent, no vertical bar).
+func TestParseTable_DumpWireInBlockquote(t *testing.T) {
+	src := "> | H1 | H2 |\n> |----|----|\n> | x  | y  |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	t.Logf("source (%d bytes):\n%s", len(src), src)
+	t.Logf("wire (%d bytes):\n%s", len(wire), wire)
+	for i, s := range spans {
+		t.Logf("span[%d]: %+v", i, s)
+	}
+}
+
+// TestParseTable_DumpWireEmptyCells dumps wire for the
+// user's empty-cells smoke table. Diagnosing why the
+// table renders as raw markdown (no Style.Table).
+func TestParseTable_DumpWireEmptyCells(t *testing.T) {
+	src := "|  | A | B |\n|---|---|---|\n|  |   |   |\n| 1 | 2 | 3 |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	t.Logf("source (%d bytes):\n%s", len(src), src)
+	t.Logf("wire (%d bytes):\n%s", len(wire), wire)
+	for i, s := range spans {
+		t.Logf("span[%d]: %+v", i, s)
+	}
+}
+
+// TestParseTable_FullTestMdChunkBoundaries simulates
+// md2spans's writeChunked + the consumer's
+// parseSpanMessage to verify the wire round-trips through
+// chunking without losing/garbling regions.
+func TestParseTable_FullTestMdChunkBoundaries(t *testing.T) {
+	src := "# Tables\n\n" +
+		"Simple 2-column table:\n\n" +
+		"| Name    | Score |\n" +
+		"|---------|-------|\n" +
+		"| Alice   | 95    |\n" +
+		"| Bob     | 87    |\n" +
+		"| Charlie | 100   |\n\n" +
+		"Mixed alignment (un-padded source — alignment SHOULD be visible):\n\n" +
+		"| L | C | R |\n" +
+		"|:---|:---:|---:|\n" +
+		"| a | b | c |\n" +
+		"| longer text | longer too | longer right |\n\n" +
+		"Mixed alignment (pre-padded source — column widths already filled, alignment markers have nothing to redistribute):\n\n" +
+		"| Left   | Center | Right |\n" +
+		"|:-------|:------:|------:|\n" +
+		"| a      | b      | c     |\n" +
+		"| longer | text   | here  |\n\n" +
+		"Empty cells:\n\n" +
+		"|  | A | B |\n" +
+		"|---|---|---|\n" +
+		"|  |   |   |\n" +
+		"| 1 | 2 | 3 |\n\n" +
+		"Table inside a blockquote:\n\n" +
+		"> | H1 | H2 |\n" +
+		"> |----|----|\n" +
+		"> | x  | y  |\n"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+
+	// Capture chunks via writeChunked.
+	var chunks []string
+	var sink chunkSink
+	sink.cb = func(chunk string) { chunks = append(chunks, chunk) }
+	if err := writeChunked(&sink, wire); err != nil {
+		t.Fatalf("writeChunked failed: %v", err)
+	}
+	t.Logf("got %d chunks", len(chunks))
+	for i, c := range chunks {
+		t.Logf("chunk[%d] (%d bytes) head: %q tail: %q", i, len(c),
+			truncate(c, 100), tailOf(c, 100))
+	}
+}
+
+type chunkSink struct {
+	cb func(string)
+}
+
+func (s *chunkSink) Write(p []byte) (int, error) {
+	s.cb(string(p))
+	return len(p), nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+// TestParseTable_DumpWireFullTestMd parses the full
+// test.md the user is smoke-testing, dumps wire, and
+// reports whether each of the 5 tables produced a
+// `table` region.
+func TestParseTable_DumpWireFullTestMd(t *testing.T) {
+	src := "# Tables\n\n" +
+		"Simple 2-column table:\n\n" +
+		"| Name    | Score |\n" +
+		"|---------|-------|\n" +
+		"| Alice   | 95    |\n" +
+		"| Bob     | 87    |\n" +
+		"| Charlie | 100   |\n\n" +
+		"Mixed alignment (un-padded source — alignment SHOULD be visible):\n\n" +
+		"| L | C | R |\n" +
+		"|:---|:---:|---:|\n" +
+		"| a | b | c |\n" +
+		"| longer text | longer too | longer right |\n\n" +
+		"Mixed alignment (pre-padded source — column widths already filled, alignment markers have nothing to redistribute):\n\n" +
+		"| Left   | Center | Right |\n" +
+		"|:-------|:------:|------:|\n" +
+		"| a      | b      | c     |\n" +
+		"| longer | text   | here  |\n\n" +
+		"Empty cells:\n\n" +
+		"|  | A | B |\n" +
+		"|---|---|---|\n" +
+		"|  |   |   |\n" +
+		"| 1 | 2 | 3 |\n\n" +
+		"Table inside a blockquote:\n\n" +
+		"> | H1 | H2 |\n" +
+		"> |----|----|\n" +
+		"> | x  | y  |\n"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	tables := 0
+	for _, s := range spans {
+		if s.RegionBegin == "table" {
+			tables++
+			t.Logf("table region begin at offset %d", s.Offset)
+		}
+	}
+	t.Logf("total tables found: %d (expected 5)", tables)
+	if tables != 5 {
+		t.Errorf("expected 5 tables, got %d. Wire (%d bytes):\n%s",
+			tables, len(wire), wire)
+	}
+	// Always dump wire for offline analysis.
+	t.Logf("full wire (%d bytes):\n%s", len(wire), wire)
 }

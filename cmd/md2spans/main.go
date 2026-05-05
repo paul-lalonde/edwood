@@ -332,18 +332,29 @@ func writeChunked(fid io.Writer, payload string) error {
 
 // nextChunkEnd returns the byte position just past the end
 // of the next chunk. Rule: the chunk ends at the latest
-// newline at-or-before maxChunk where region-nesting depth
-// is zero. If no such newline exists, the chunker extends
-// past maxChunk to find the next depth-zero newline (a
-// region's body forced the extension); but if we extend
+// newline at-or-before maxChunk where (a) region-nesting
+// depth is zero AND (b) the line immediately AFTER the
+// split establishes a contiguity cursor (starts with `s `
+// or `b `, or is end-of-payload). If no such newline
+// exists, the chunker extends past maxChunk to find the
+// next eligible split (a region's body or a leading
+// `begin region` forced the extension); but if we extend
 // past maxChunk WITHOUT having seen any newlines before
-// maxChunk and WITHOUT having opened a region, the payload
-// has a single line longer than maxChunk and we error.
-// Phase 3 round 5.
+// maxChunk and WITHOUT having opened a region, the
+// payload has a single line longer than maxChunk and we
+// error.
+//
+// The "next-line establishes cursor" rule (Phase 3 round
+// 8.x smoke fix) prevents a chunk from beginning with a
+// `begin region` directive: parseSpanMessage initializes
+// expectedOffset = -1 in each Twrite, and a leading
+// `begin region` would fall back to start=0,
+// mis-anchoring the region at the buffer's beginning
+// rather than the wire's real cursor.
 func nextChunkEnd(payload string) (int, error) {
 	depth := 0
 	lineStart := 0
-	lastSafe := 0           // latest \n position+1 at depth 0, <= maxChunk; 0 means none yet
+	lastSafe := 0           // latest cursor-safe \n position+1 at depth 0, <= maxChunk; 0 means none yet
 	newlineBeforeMax := false // any \n at-or-before maxChunk?
 	for i := 0; i < len(payload); i++ {
 		if payload[i] != '\n' {
@@ -360,21 +371,23 @@ func nextChunkEnd(payload string) (int, error) {
 			}
 		}
 		end := i + 1
+		safeHere := depth == 0 && cursorEstablishingNext(payload[end:])
 		if end <= maxChunk {
 			newlineBeforeMax = true
-			if depth == 0 {
+			if safeHere {
 				lastSafe = end
 			}
-		} else if depth == 0 {
-			// Past maxChunk at depth 0. Decide.
+		} else if safeHere {
+			// Past maxChunk at a cursor-safe depth-zero
+			// newline. Decide.
 			if lastSafe > 0 {
 				return lastSafe, nil
 			}
 			if !newlineBeforeMax {
 				return 0, fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
 			}
-			// We had newlines before maxChunk but they were
-			// inside open regions; extend the chunk to here.
+			// We had newlines before maxChunk but none were
+			// cursor-safe; extend the chunk to here.
 			return end, nil
 		}
 		lineStart = i + 1
@@ -393,4 +406,17 @@ func nextChunkEnd(payload string) (int, error) {
 		return 0, fmt.Errorf("spans payload contains a line longer than %d bytes", maxChunk)
 	}
 	return len(payload), nil
+}
+
+// cursorEstablishingNext reports whether the given
+// remaining payload starts with a directive that sets the
+// contiguity cursor — `s ` (span) or `b ` (box) — or is
+// empty (no further directives). `begin region` and `end
+// region` do NOT establish a cursor, so chunks must not
+// begin with those.
+func cursorEstablishingNext(s string) bool {
+	if len(s) == 0 {
+		return true
+	}
+	return strings.HasPrefix(s, "s ") || strings.HasPrefix(s, "b ")
 }

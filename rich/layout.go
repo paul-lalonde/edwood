@@ -44,11 +44,20 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 	}
 
 	for len(text) > 0 {
-		// Find the next break character (newline, tab, or space)
+		// Find the next break character (newline, tab, or
+		// space — plus `|` for table-styled spans, where
+		// `|` is a structural cell separator that must
+		// land in its own box for the round-8.x table
+		// layout pass to recognize cell boundaries).
 		idx := -1
 		var special rune
 		for i, r := range text {
 			if r == '\n' || r == '\t' || r == ' ' {
+				idx = i
+				special = r
+				break
+			}
+			if r == '|' && style.Table {
 				idx = i
 				special = r
 				break
@@ -86,6 +95,16 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 				Bc:    special,
 				Style: style,
 			})
+		} else if special == '|' {
+			// Table cell separator: emit `|` as its own
+			// regular-text box so the layout pass can
+			// recognize cell boundaries.
+			boxes = append(boxes, Box{
+				Text:  []byte{'|'},
+				Nrune: 1,
+				Bc:    0,
+				Style: style,
+			})
 		} else {
 			// Space is a regular text box (so it has measurable width)
 			boxes = append(boxes, Box{
@@ -101,6 +120,256 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 	}
 
 	return boxes
+}
+
+// measureTableColumns walks the table-region boxes
+// starting at boxes[startIdx] (which must have
+// Style.Table=true) and computes the per-column max
+// content width in pixels. Returns the width slice and
+// the index of the first box AFTER the table region
+// (= len(boxes) if the table runs to EOF, or the index
+// of the first box with !Style.Table otherwise).
+//
+// Per-row, cells are bounded by `|` boxes (the bar
+// rune ends up in its own one-rune box because the
+// surrounding spaces are word-break points). Each
+// cell's content width = sum of boxWidth for the
+// boxes BETWEEN the bounding `|`s (excluding `|` and
+// excluding any '\n' / break boxes).
+//
+// `getFontFor` resolves a per-style font (used because
+// header cells render bold and have slightly different
+// metrics); pass nil to default to the supplied
+// `defaultFont` for every box.
+//
+// Phase 3 round 8.x.
+func measureTableColumns(boxes []Box, startIdx int, defaultFont draw.Font, getFontFor func(Style) draw.Font) ([]int, int) {
+	fontFor := func(s Style) draw.Font {
+		if getFontFor != nil {
+			return getFontFor(s)
+		}
+		return defaultFont
+	}
+	var widths []int
+	i := startIdx
+	for i < len(boxes) && boxes[i].Style.Table {
+		// Process one row: walk until \n or end-of-table.
+		col := 0
+		cellWidth := 0
+		inCell := false
+		for i < len(boxes) && boxes[i].Style.Table {
+			b := &boxes[i]
+			if b.IsNewline() {
+				// End of row: finalize the current cell
+				// (the closing `|` already finalized the
+				// last cell on its own; this branch
+				// covers an unclosed row, defensive).
+				if inCell && cellWidth > 0 {
+					widths = growMax(widths, col, cellWidth)
+				}
+				i++
+				break
+			}
+			// Detect cell boundary `|` box.
+			if string(b.Text) == "|" {
+				if inCell {
+					widths = growMax(widths, col, cellWidth)
+					col++
+				}
+				cellWidth = 0
+				inCell = true
+				i++
+				continue
+			}
+			// Accumulate the box's width into the
+			// current cell.
+			if inCell {
+				cellWidth += boxWidth(b, fontFor(b.Style))
+			}
+			i++
+		}
+	}
+	return widths, i
+}
+
+// growMax extends widths to length col+1 (zero-filled)
+// and updates widths[col] to max(widths[col], w).
+func growMax(widths []int, col, w int) []int {
+	for len(widths) <= col {
+		widths = append(widths, 0)
+	}
+	if w > widths[col] {
+		widths[col] = w
+	}
+	return widths
+}
+
+// layoutTable places a table's boxes with cell-aware
+// xPos positioning. Cells are padded to per-column
+// widths (computed by measureTableColumns); cell
+// content is positioned within the cell per the cell's
+// `Style.TableAlign` (left / right / center). Padding
+// is achieved entirely by xPos advances — the cell's
+// rune content (and its visible `|` markers) are
+// placed verbatim, preserving md2spans's "rendered
+// text === body text" invariant.
+//
+// Returns the updated lines, currentLine, and xPos.
+// Phase 3 round 8.x.
+func layoutTable(
+	lines []Line,
+	currentLine Line,
+	xPos int,
+	boxes []Box,
+	startIdx, endIdx int,
+	widths []int,
+	font draw.Font,
+	frameWidth int,
+	getFontHeight func(Style) int,
+	getFontFor func(Style) draw.Font,
+) ([]Line, Line, int) {
+	gutterIndent := GutterIndentChars * font.BytesWidth([]byte("M"))
+	barW := font.BytesWidth([]byte("|"))
+
+	// Compute the line indent once. Inside a blockquote, the
+	// table preserves the blockquote's BlockquoteDepth ×
+	// ListIndentWidth indent on top of the gutter, so each
+	// row's first `|` lands inside (not flush with the edge
+	// of) the blockquote. Without this, an in-blockquote
+	// table renders at gutterIndent only and visually loses
+	// its nesting cue. Phase 3 round 8.x smoke fix.
+	lineIndent := gutterIndent
+	if startIdx < len(boxes) && boxes[startIdx].Style.Blockquote {
+		lineIndent += boxes[startIdx].Style.BlockquoteDepth * ListIndentWidth
+	}
+
+	i := startIdx
+	for i < endIdx {
+		// Pre-walk the row to compute per-cell content
+		// widths and to find row end (the \n box, or
+		// endIdx if the row is unterminated).
+		var cellWidths []int
+		var cellAligns []Alignment
+		curContentW := 0
+		curAlign := AlignLeft
+		inCell := false
+		rowEndIdx := endIdx
+		for j := i; j < endIdx; j++ {
+			b := &boxes[j]
+			if b.IsNewline() {
+				if inCell {
+					cellWidths = append(cellWidths, curContentW)
+					cellAligns = append(cellAligns, curAlign)
+				}
+				rowEndIdx = j
+				break
+			}
+			if string(b.Text) == "|" {
+				if inCell {
+					cellWidths = append(cellWidths, curContentW)
+					cellAligns = append(cellAligns, curAlign)
+				}
+				curContentW = 0
+				curAlign = AlignLeft
+				inCell = true
+				continue
+			}
+			if inCell {
+				curContentW += boxWidth(b, getFontFor(b.Style))
+				if b.Style.TableAlign != AlignLeft {
+					curAlign = b.Style.TableAlign
+				}
+			}
+		}
+
+		// Place row boxes with cell-aware xPos. xPos starts
+		// at the line indent when at xPos==0; otherwise we
+		// honor the caller's passed-in xPos.
+		if xPos == 0 {
+			xPos = lineIndent
+		}
+		lineLeft := xPos // table's left edge for this row.
+
+		cellIdx := -1   // -1 = before first cell.
+		cellStartX := 0 // xPos at the start of the current cell's content area (after leadingPad).
+		colStartX := 0  // xPos at the start of the current cell's column (= just after the opening `|`).
+
+		// Track running line height during placement.
+		actualLineHeight := 0
+		for j := i; j < rowEndIdx; j++ {
+			b := &boxes[j]
+			boxHeight := getFontHeight(b.Style)
+			if boxHeight > currentLine.Height {
+				currentLine.Height = boxHeight
+			}
+			if !b.IsNewline() && !b.IsTab() && boxHeight > actualLineHeight {
+				actualLineHeight = boxHeight
+			}
+
+			if string(b.Text) == "|" {
+				// If we just finished a cell, advance
+				// xPos to the column's right edge before
+				// placing the closing `|`.
+				if cellIdx >= 0 && cellIdx < len(cellWidths) && cellIdx < len(widths) {
+					xPos = colStartX + widths[cellIdx]
+				}
+				currentLine.Boxes = append(currentLine.Boxes, PositionedBox{Box: *b, X: xPos})
+				xPos += barW
+				cellIdx++
+				if cellIdx < len(cellWidths) && cellIdx < len(widths) {
+					colStartX = xPos
+					contentW := cellWidths[cellIdx]
+					colW := widths[cellIdx]
+					extra := colW - contentW
+					if extra < 0 {
+						extra = 0
+					}
+					var leadingPad int
+					switch cellAligns[cellIdx] {
+					case AlignRight:
+						leadingPad = extra
+					case AlignCenter:
+						leadingPad = extra / 2
+					default:
+						leadingPad = 0
+					}
+					xPos += leadingPad
+					cellStartX = xPos
+				}
+				continue
+			}
+
+			// Content box: place at xPos, advance.
+			w := boxWidth(b, getFontFor(b.Style))
+			b.Wid = w
+			currentLine.Boxes = append(currentLine.Boxes, PositionedBox{Box: *b, X: xPos})
+			xPos += w
+			_ = cellStartX // (kept for potential future use)
+		}
+
+		// Row terminator: if there's a \n at rowEndIdx,
+		// place it and end the line.
+		if rowEndIdx < endIdx && boxes[rowEndIdx].IsNewline() {
+			nl := boxes[rowEndIdx]
+			nl.Wid = 0
+			currentLine.Boxes = append(currentLine.Boxes, PositionedBox{Box: nl, X: xPos})
+			if actualLineHeight > 0 {
+				currentLine.Height = actualLineHeight
+			}
+			lines = append(lines, currentLine)
+			currentLine = Line{
+				Y:      lines[len(lines)-1].Y + currentLine.Height,
+				Height: getFontHeight(Style{}),
+			}
+			xPos = 0
+			i = rowEndIdx + 1
+			continue
+		}
+		// No \n at row end (unterminated last row).
+		i = rowEndIdx
+		_ = lineLeft
+	}
+	return lines, currentLine, xPos
 }
 
 // boxWidth calculates the width of a box in pixels using font metrics.
@@ -518,8 +787,28 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 	imagesBelowHeight := 0    // Sum of ImageBelow box heights on the current line (Phase 3 round 4)
 	listitemShifted := false  // Did we already advance xPos at the listitem region entry on this line? (Phase 3 round 7)
 
-	for i := range boxes {
+	for i := 0; i < len(boxes); i++ {
 		box := &boxes[i]
+
+		// Round 8.x: when a Table-styled box appears,
+		// hand off to layoutTable for cell-aware xPos
+		// placement (per-column widths + per-cell
+		// alignment). Advance `i` past the table block
+		// and continue the main loop after.
+		if box.Style.Table {
+			widths, endIdx := measureTableColumns(boxes, i, font, getFontForStyle)
+			lines, currentLine, xPos = layoutTable(
+				lines, currentLine, xPos,
+				boxes, i, endIdx, widths,
+				font, frameWidth, getFontHeight, getFontForStyle)
+			i = endIdx - 1 // for-loop's i++ takes us to endIdx.
+			pendingParaBreak = false
+			actualLineHeight = 0
+			imagesBelowHeight = 0
+			listitemShifted = false
+			currentListIndent = 0
+			continue
+		}
 
 		// Update line height if this box uses a taller font
 		boxHeight := getFontHeight(box.Style)

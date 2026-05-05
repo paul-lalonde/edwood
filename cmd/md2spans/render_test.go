@@ -307,6 +307,65 @@ func TestWriteChunkedKeepsRegionInOneChunk(t *testing.T) {
 	_ = endIdx
 }
 
+// TestWriteChunkedNeverStartsChunkWithBeginRegion: each
+// chunk must start with a directive that establishes the
+// contiguity cursor (`s` or `b`). Starting a chunk with
+// `begin region` is malformed because parseSpanMessage's
+// expectedOffset starts at -1 in each Twrite — a leading
+// `begin region` falls back to start=0, mis-anchoring the
+// region at the buffer's beginning instead of the wire's
+// real cursor.
+//
+// Repro pattern (the user's test.md exercise): plain
+// lines push the cursor to ~end-of-chunk, then a depth-
+// zero `\n` lands right before a `begin region table`.
+// The naive chunker splits there and the next chunk
+// begins with the begin-region. Phase 3 round 8.x smoke
+// fix.
+func TestWriteChunkedNeverStartsChunkWithBeginRegion(t *testing.T) {
+	// Build a payload that has plain s-lines totalling
+	// ~3500 bytes (under maxChunk=4000), then a `begin
+	// region table` that opens a region whose body extends
+	// past maxChunk — when depth returns to zero, the
+	// chunker returns lastSafe (the depth-zero newline
+	// just before begin-region), and chunk 2 starts with
+	// `begin region table`.
+	var b strings.Builder
+	for i := 0; i < 437; i++ {
+		b.WriteString("s 0 1 -\n") // 8 bytes × 437 = 3496 bytes, depth=0 throughout
+	}
+	b.WriteString("begin region table\n") // depth → 1, payload byte 3496..3514
+	for i := 0; i < 200; i++ {
+		b.WriteString("s 100 4 -\n") // 10 bytes × 200 = 2000 bytes
+	}
+	b.WriteString("end region\n") // depth → 0
+	payload := b.String()
+
+	file := &fakeSpansFile{failOn: -1}
+	if err := writeChunked(file, payload); err != nil {
+		t.Fatalf("writeChunked: %v", err)
+	}
+	// No chunk may start with `begin ` or `end `.
+	for i, w := range file.writes {
+		s := string(w)
+		if strings.HasPrefix(s, "begin ") {
+			t.Errorf("chunk %d starts with `begin region` — would mis-anchor at offset 0\n"+
+				"head: %q", i, head(s, 80))
+		}
+		if strings.HasPrefix(s, "end ") {
+			t.Errorf("chunk %d starts with `end region` — stack is empty in new Twrite\n"+
+				"head: %q", i, head(s, 80))
+		}
+	}
+}
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // TestWriteChunkedRejectsUnclosedRegion: a payload with an
 // unclosed `begin region` (no matching `end region` at EOF)
 // is malformed; the chunker must reject rather than emit a
