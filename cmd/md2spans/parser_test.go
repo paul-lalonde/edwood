@@ -2267,3 +2267,34 @@ func TestParseTableInsideBlockquote(t *testing.T) {
 		t.Errorf("got %d table begins, want 1", tableBegins)
 	}
 }
+
+// TestParseTableInsideBlockquoteSnapsToLineStart pins
+// the round-8 smoke fix: when a table is inside a
+// blockquote, the table region's begin must snap to the
+// SOURCE LINE START (column 0 of the original) rather
+// than landing at the `|` after the stripped `>`
+// markers. Without the snap, line 1 of the table has
+// the `>` rune outside the table region (line indent =
+// blockquote-only) while lines 2-3 have `>` inside
+// (line indent = table gutter), producing a vertical
+// jog. With the snap, all three lines have their `>`
+// inside the table region and align at the same column.
+//
+// Source `> | H |\n> |---|\n> | a |`:
+//   - rune 0 = '>' (line 1's blockquote marker)
+//   - The table begin must be at rune 0, NOT at rune 2
+//     (the `|` after `> `).
+func TestParseTableInsideBlockquoteSnapsToLineStart(t *testing.T) {
+	src := "> | H |\n> |---|\n> | a |"
+	got := Parse(src)
+	var tableBegin int = -1
+	for _, s := range got {
+		if s.RegionBegin == "table" {
+			tableBegin = s.Offset
+			break
+		}
+	}
+	if tableBegin != 0 {
+		t.Errorf("table begin offset = %d, want 0 (line start of table block in original)", tableBegin)
+	}
+}

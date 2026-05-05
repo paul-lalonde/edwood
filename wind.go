@@ -2921,12 +2921,26 @@ func parseListNumber(s string) int {
 // applyTableRegion sets the per-rune flags for a `table`
 // region ancestor. Composition rule: idempotent — the
 // outermost table is the only one that matters (v1
-// disallows table-in-table). `Block` is forced on so
-// the existing layout treats the run as a block-level
-// element (gutter indent, no wrap). Phase 3 round 8.
+// disallows table-in-table). The full set:
+//
+//   - Table: triggers the existing rich.Frame BlockTable
+//     handling (gutter indent + block-level layout).
+//   - Block: redundant for layout purposes (Table alone
+//     triggers the same gutterIndent path) but kept for
+//     consistency with code-block flagging and any
+//     downstream consumers checking the Block boolean.
+//   - Code: forces monospace font selection for EVERY
+//     rune in the table — including the `|` markers
+//     between cells, not just the cell content.
+//     Without Code on the markers, columns would render
+//     in proportional font and `|` wouldn't align even
+//     when cell content does.
+//
+// Phase 3 round 8.
 func applyTableRegion(s *rich.Style, _ *Region) {
 	s.Table = true
 	s.Block = true
+	s.Code = true
 }
 
 // applyTableRowRegion sets the per-rune flags for a
