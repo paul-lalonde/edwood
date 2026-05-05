@@ -248,28 +248,27 @@ type StyleRun struct {
 
 # Slide 11: Markdown Preview
 
-## Live Markdown Rendering
+## Two Paths to Rendered Markdown
 
-### Supported Elements
-- Headings (H1-H6 with scaling)
-- Bold, italic, inline code
-- Fenced code blocks with language tags
-- Links, images, lists (ordered & unordered)
-- Tables, blockquotes, horizontal rules
-- Double hrules (---\n---) as page breaks
-- CommonMark subset parser
-
-
-### Key Feature: Source Position Mapping
-When user clicks in rendered preview:
-- Maps click back to byte offset in markdown source
-- Enables inline editing
-- `LinkMap` tracks link positions for B3 (right-click look)
-
-### Automatic Activation
-- Activates automatically on opening `.md` files
+### Internal `Markdown` mode (used to present these slides)
+- In-tree CommonMark parser + `rich/mdrender` wrapper
+- Hides source markers — true preview / "clean mode"
+- Source position mapping: click back to byte offset; `LinkMap` tracks link ranges for B3
+- Double hrules (`---\n---`) as page breaks → drives this very deck
 - `Markdown` tag command toggles preview ↔ source
-- Incremental updates avoid full re-render
+
+### `md2spans` (the external producer — current default)
+- Auto-launched by edwood when a `.md` file opens (file-hook, same shape as `edcolor` for source files)
+- Reads `body` over 9P, parses CommonMark + GFM, writes `spans` + region directives
+- **Invariant: rendered text === body text.** No source hiding; the `|`s and `#`s stay visible. Editing happens in-place.
+- Adds `Plain` to the tag so the user can exit styled mode with one B2 click
+- **Round 8.x (just landed):** column-width-aware tables with per-cell alignment
+
+### Why both?
+The internal mode supports clean-mode presentation; md2spans is the
+philosophically-correct external producer. Eventually md2spans
+absorbs the clean-mode capability and the in-tree wrapper goes
+away.
 
 ---
 ---
@@ -392,15 +391,25 @@ Chunked writes stay within 9P message limits (4000 bytes per chunk)
 - External syntax coloring through filesystem interface
 - Markdown preview with source mapping
 - Selection events for tool feedback
+- **Markdown rendering moved to an external tool (`md2spans`)**, completed since paper submission — same `spans`-file pattern as `edcolor`
 
 ### The Philosophy Preserved
 Just as external programs read `event` and write `ctl`, they now write `spans` to control presentation.
 
-### Future Directions
-1. Move Markdown rendering to external tool
-2. Expose canvas/framebuffer for helper tools
-3. Add scope-name field for editor-based theming
-4. Extend to additional languages
+### Future Direction: B3spans
+Externalize the B3-click expansion heuristic the same way `spans` externalized colors.
+
+- Today: edwood has a fixed heuristic for what B3 expands to (filename → word → line)
+- Tomorrow: an external tool publishes a `b3spans` file marking ranges with custom expansion behaviors
+  - md2spans marks **table cells** so B3 selects the whole cell
+  - md2spans marks **blockquote** ranges so B3 selects the whole quote
+  - Potentially: language tools mark identifiers for jump-to-definition
+- **Hybrid for performance:** only marked ranges route through the external tool; unmarked B3 clicks stay on the fast in-tree path
+
+### Other Directions
+- Expose canvas/framebuffer for helper tools
+- Add scope-name field for editor-based theming
+- Extend `edcolor` to additional languages
 
 ### Implementation Notes
 - 53,000 lines of tests, 17,000 lines of implementation
