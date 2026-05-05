@@ -4512,6 +4512,39 @@ func TestExpandWordAtPos(t *testing.T) {
 			wantQ0:  0,
 			wantQ1:  7,
 		},
+		// Out-of-range positions: a click past the end of
+		// content (e.g. blank space below a slide) reaches
+		// here as a rune offset > len(plain). Must clamp,
+		// not panic. Repro: IWP9 slide-deck navigation
+		// crash, /tmp/edwood-debug.log goroutine 71.
+		{
+			name:    "pos past end → caret at end, no expansion",
+			content: Content{{Text: "hello", Style: DefaultStyle()}},
+			pos:     20, // past end (len = 5)
+			wantQ0:  5,  // caret at end of content, no back-scan
+			wantQ1:  5,
+		},
+		{
+			name:    "pos at exact len → caret, no expansion",
+			content: Content{{Text: "hello", Style: DefaultStyle()}},
+			pos:     5, // == len
+			wantQ0:  5,
+			wantQ1:  5,
+		},
+		{
+			name:    "pos past end with trailing punctuation",
+			content: Content{{Text: "hello.", Style: DefaultStyle()}},
+			pos:     20, // past end — clamped to 6 (after the '.')
+			wantQ0:  6,
+			wantQ1:  6,
+		},
+		{
+			name:    "pos negative clamps to zero (then expands forward)",
+			content: Content{{Text: "hello", Style: DefaultStyle()}},
+			pos:     -3,
+			wantQ0:  0,
+			wantQ1:  5, // same as a real click at pos 0
+		},
 	}
 
 	for _, tt := range tests {

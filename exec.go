@@ -1346,6 +1346,13 @@ func previewcmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 		}()
 	}))
 
+	// Surface image-load failures to +Errors instead of inserting
+	// the error text into the rendered buffer (would shift carets
+	// and break source-map mapping).
+	rtOpts = append(rtOpts, WithRichTextOnImageError(func(path, msg string) {
+		warning(nil, "image %s: %s\n", path, msg)
+	}))
+
 	// Set the base path for resolving relative image paths
 	// The name variable contains the file path from the window tag
 	// Convert to absolute path for proper image resolution regardless of working directory

@@ -2474,6 +2474,13 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 			}
 		}()
 	}))
+	// Surface image-load failures to +Errors instead of inserting
+	// the error text into the rendered buffer (which would shift
+	// every subsequent caret position by the suffix length and
+	// break source-map mapping).
+	rtOpts = append(rtOpts, WithRichTextOnImageError(func(path, msg string) {
+		warning(nil, "image %s: %s\n", path, msg)
+	}))
 	name := w.body.file.Name()
 	basePath := name
 	if !filepath.IsAbs(basePath) {

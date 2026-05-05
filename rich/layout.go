@@ -1,9 +1,7 @@
 package rich
 
 import (
-	"bytes"
 	"path/filepath"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/rjkroege/edwood/draw"
@@ -1228,7 +1226,14 @@ func layoutWithCache(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHe
 //
 // The onImageLoaded callback, if non-nil, is passed to LoadAsync and will be
 // called (on an unspecified goroutine) when a cache-miss image finishes loading.
-func layoutWithCacheAndBasePath(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn FontHeightFunc, fontForStyleFn FontForStyleFunc, cache *ImageCache, basePath string, onImageLoaded func(string)) []Line {
+//
+// The onImageError callback, if non-nil, is invoked synchronously during
+// layout when an image returns a load error from the cache (e.g., unsupported
+// format). The host can route the message to its error surface (e.g.,
+// +Errors). Unlike the legacy in-buffer marker, this callback NEVER mutates
+// box.Text or box.Nrune — preserving the rendered-text === source-text
+// invariant the source map relies on for caret mapping.
+func layoutWithCacheAndBasePath(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn FontHeightFunc, fontForStyleFn FontForStyleFunc, cache *ImageCache, basePath string, onImageLoaded func(string), onImageError func(path, msg string)) []Line {
 	// If no cache, fall back to regular layout
 	if cache == nil {
 		return layout(boxes, font, frameWidth, maxtab, fontHeightFn, fontForStyleFn)
@@ -1246,18 +1251,18 @@ func layoutWithCacheAndBasePath(boxes []Box, font draw.Font, frameWidth, maxtab 
 			cached, loadErr := cache.LoadAsync(imgPath, onImageLoaded)
 			if cached != nil {
 				box.ImageData = cached
-				// If the image failed with an unsupported format, append
-				// a suffix to the placeholder text so the content rune count
-				// matches what would be rendered (needed for hit-testing).
-				// Only check the error for cache hits (loadErr != nil);
-				// for cache misses, LoadAsync returns nil error and the
-				// entry is being populated by a background goroutine.
-				if loadErr != nil && strings.Contains(loadErr.Error(), "unknown format") {
-					suffix := []byte(" <unsupported format>")
-					if !bytes.HasSuffix(box.Text, suffix) {
-						box.Text = append(box.Text, suffix...)
-						box.Nrune = utf8.RuneCount(box.Text)
-					}
+				// Image load failed: report the error via the
+				// onImageError callback (if any) so the host can
+				// surface it in a +Errors window. We MUST NOT
+				// modify box.Text or box.Nrune here — the source
+				// map maps rendered runes back to source offsets,
+				// and any extra runes inserted at render time
+				// would shift every subsequent caret position by
+				// the suffix length. The visual cue that loading
+				// failed is the placeholder rendered in blue
+				// (paintImageBox → drawImageErrorPlaceholder).
+				if loadErr != nil && onImageError != nil {
+					onImageError(imgPath, loadErr.Error())
 				}
 			}
 		}

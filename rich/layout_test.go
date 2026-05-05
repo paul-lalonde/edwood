@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/edwoodtest"
@@ -2198,6 +2199,74 @@ func TestLayoutWithCachePopulatesImageData(t *testing.T) {
 	}
 }
 
+// TestLayoutImageError_DoesNotModifyTextOrNrune pins the
+// invariant that an image load failure must NOT mutate
+// box.Text or box.Nrune. Earlier code appended
+// " <unsupported format>" to box.Text so the rendered
+// width matched, which broke source-map caret mapping
+// (cursor positions shifted by the suffix length for every
+// click after a failed image). Now the failure is surfaced
+// via onImageError and the rendered placeholder is just
+// the alt text in blue.
+func TestLayoutImageError_DoesNotModifyTextOrNrune(t *testing.T) {
+	font := &testLayoutFont{width: 10, height: 14}
+	frameWidth := 500
+	maxtab := 80
+
+	origText := []byte("[Image: alt]")
+	origNrune := utf8.RuneCount(origText)
+	boxes := []Box{
+		{
+			Text:  append([]byte(nil), origText...),
+			Nrune: origNrune,
+			Bc:    0,
+			Style: Style{Image: true, ImageURL: "/nonexistent/x.png", ImageAlt: "alt", Scale: 1.0},
+		},
+	}
+
+	cache := NewImageCache(10)
+	cache.Load("/nonexistent/x.png") // synchronous cache hit with error
+
+	var gotPath, gotMsg string
+	onErr := func(path, msg string) {
+		gotPath = path
+		gotMsg = msg
+	}
+
+	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, "", nil, onErr)
+	if len(lines) == 0 {
+		t.Fatal("no lines")
+	}
+
+	// Find the image box in the laid-out lines and check
+	// Text/Nrune were preserved verbatim.
+	var found bool
+	for _, line := range lines {
+		for _, pb := range line.Boxes {
+			if pb.Box.Style.Image {
+				found = true
+				if string(pb.Box.Text) != string(origText) {
+					t.Errorf("box.Text mutated by error: got %q, want %q",
+						string(pb.Box.Text), string(origText))
+				}
+				if pb.Box.Nrune != origNrune {
+					t.Errorf("box.Nrune mutated by error: got %d, want %d",
+						pb.Box.Nrune, origNrune)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("image box not found in layout output")
+	}
+	if gotPath != "/nonexistent/x.png" {
+		t.Errorf("onImageError path = %q, want /nonexistent/x.png", gotPath)
+	}
+	if gotMsg == "" {
+		t.Error("onImageError msg is empty; expected a load error message")
+	}
+}
+
 // TestLayoutWithCacheHandlesLoadError verifies that layoutWithCache handles
 // image load errors gracefully. When an image fails to load, the CachedImage
 // is still stored in the box but with an error and zero dimensions.
@@ -2391,7 +2460,7 @@ func TestLayoutResolvesRelativePaths(t *testing.T) {
 
 	// Call layoutWithCache WITH a basePath
 	// The basePath should be the markdown file's path
-	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, mdPath, nil)
+	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, mdPath, nil, nil)
 
 	if len(lines) == 0 {
 		t.Fatal("layoutWithCacheAndBasePath returned no lines")
@@ -2483,7 +2552,7 @@ func TestLayoutResolvesRelativePathsWithParentDir(t *testing.T) {
 		t.Fatalf("failed to pre-load image: %v", err)
 	}
 
-	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, mdPath, nil)
+	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, mdPath, nil, nil)
 
 	if len(lines) == 0 {
 		t.Fatal("layoutWithCacheAndBasePath returned no lines")
@@ -2540,7 +2609,7 @@ func TestLayoutAbsolutePathIgnoresBasePath(t *testing.T) {
 		t.Fatalf("failed to pre-load image: %v", err)
 	}
 
-	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, basePath, nil)
+	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, basePath, nil, nil)
 
 	if len(lines) == 0 {
 		t.Fatal("layoutWithCacheAndBasePath returned no lines")
@@ -2592,7 +2661,7 @@ func TestLayoutEmptyBasePathFallsBack(t *testing.T) {
 	// Pre-load the error entry so layout gets a synchronous cache hit.
 	cache.Load("nonexistent/image.png")
 
-	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, "", nil)
+	lines := layoutWithCacheAndBasePath(boxes, font, frameWidth, maxtab, nil, nil, cache, "", nil, nil)
 
 	if len(lines) == 0 {
 		t.Fatal("layoutWithCacheAndBasePath returned no lines")

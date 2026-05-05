@@ -57,6 +57,12 @@ type RichText struct {
 	// Callback invoked when an async image load completes
 	onImageLoaded func(path string)
 
+	// Callback invoked synchronously when an image fails to load
+	// (e.g., unsupported format). The host wires this to a +Errors
+	// surface so the failure is visible without polluting the body
+	// buffer's rune count.
+	onImageError func(path, msg string)
+
 	// Tab width in characters (forwarded to rich.WithMaxTab)
 	maxtabChars int
 
@@ -130,6 +136,9 @@ func (rt *RichText) Init(display draw.Display, font draw.Font, opts ...RichTextO
 	}
 	if rt.onImageLoaded != nil {
 		frameOpts = append(frameOpts, rich.WithOnImageLoaded(rt.onImageLoaded))
+	}
+	if rt.onImageError != nil {
+		frameOpts = append(frameOpts, rich.WithOnImageError(rt.onImageError))
 	}
 	if rt.selectionColor != nil {
 		frameOpts = append(frameOpts, rich.WithSelectionColor(rt.selectionColor))
@@ -504,6 +513,16 @@ func WithRichTextBasePath(path string) RichTextOption {
 func WithRichTextOnImageLoaded(fn func(path string)) RichTextOption {
 	return func(rt *RichText) {
 		rt.onImageLoaded = fn
+	}
+}
+
+// WithRichTextOnImageError sets a callback invoked when an image fails to
+// load (e.g., unsupported format). The host wires this to a +Errors window
+// so the failure is visible. The callback fires synchronously on the layout
+// goroutine.
+func WithRichTextOnImageError(fn func(path, msg string)) RichTextOption {
+	return func(rt *RichText) {
+		rt.onImageError = fn
 	}
 }
 

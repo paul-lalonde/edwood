@@ -179,6 +179,11 @@ type frameImpl struct {
 	// must marshal through the row lock or a channel.
 	onImageLoaded func(path string)
 
+	// Callback invoked synchronously during layout when an image
+	// returns a load error from the cache (e.g., unsupported format).
+	// The host can route the message to a +Errors window.
+	onImageError func(path, msg string)
+
 	// Tab width in characters (default 4 when zero)
 	maxtabChars int
 
@@ -430,8 +435,24 @@ func (f *frameImpl) Ptofchar(p int) image.Point {
 
 // Charofpt maps a screen point to a character position.
 // The point is in screen coordinates. Returns the rune offset
-// of the character at that position.
+// of the character at that position. Clicks past the end of
+// content (vertically below the last line, or horizontally
+// past the last box on a line) are clamped to len(plain) so
+// callers can SetSelection without going out of range.
 func (f *frameImpl) Charofpt(pt image.Point) int {
+	pos := f.charofptRaw(pt)
+	if n := len(f.content.Plain()); pos > n {
+		pos = n
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	return pos
+}
+
+// charofptRaw is the unclamped point→rune mapping; callers
+// should use Charofpt which clamps the result.
+func (f *frameImpl) charofptRaw(pt image.Point) int {
 	// Use layoutFromOrigin to get viewport-relative lines and the origin rune offset.
 	// After scrolling, click coordinates are viewport-relative but layoutBoxes()
 	// returns document-absolute Y positions. layoutFromOrigin() adjusts Y to start
@@ -651,7 +672,13 @@ func (f *frameImpl) ExpandAtPos(pos int) (q0, q1 int) {
 	}
 
 	// Not in a code block: expand to word (alphanumeric + underscore).
+	// At pos == len(plain) we don't back-scan — a click past content
+	// should leave a caret at end, not select a trailing word.
 	plain := f.content.Plain()
+	pos = clampPos(pos, len(plain))
+	if pos == len(plain) {
+		return pos, pos
+	}
 	q0 = pos
 	for q0 > 0 && isExpandWordChar(plain[q0-1]) {
 		q0--
@@ -665,8 +692,16 @@ func (f *frameImpl) ExpandAtPos(pos int) (q0, q1 int) {
 
 // ExpandWordAtPos returns word boundaries at pos (alphanumeric + underscore).
 // Unlike ExpandAtPos, it never expands to full code blocks or inline code spans.
+//
+// At the buffer boundary (pos == len(plain)) we deliberately do NOT
+// back-scan into a trailing word: a click past the end of content
+// should leave a caret at end, not select the last word.
 func (f *frameImpl) ExpandWordAtPos(pos int) (q0, q1 int) {
 	plain := f.content.Plain()
+	pos = clampPos(pos, len(plain))
+	if pos == len(plain) {
+		return pos, pos
+	}
 	q0, q1 = pos, pos
 	for q0 > 0 && isExpandWordChar(plain[q0-1]) {
 		q0--
@@ -675,6 +710,20 @@ func (f *frameImpl) ExpandWordAtPos(pos int) (q0, q1 int) {
 		q1++
 	}
 	return q0, q1
+}
+
+// clampPos confines pos to [0, n]. Mouse handling can deliver
+// positions past the end of content (e.g. clicks in the blank
+// space below the last line); without clamping, the word-scan
+// loops would dereference plain[pos-1] out of bounds.
+func clampPos(pos, n int) int {
+	if pos < 0 {
+		return 0
+	}
+	if pos > n {
+		return n
+	}
+	return pos
 }
 
 // isExpandWordChar returns true if the rune is part of a word for double-click
@@ -2586,7 +2635,7 @@ func (f *frameImpl) fontForStyle(style Style) edwooddraw.Font {
 // images and populate their ImageData. Otherwise, it uses the regular layout.
 func (f *frameImpl) layoutBoxes(boxes []Box, frameWidth, maxtab int) []Line {
 	if f.imageCache != nil {
-		return layoutWithCacheAndBasePath(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle, f.imageCache, f.basePath, f.onImageLoaded)
+		return layoutWithCacheAndBasePath(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle, f.imageCache, f.basePath, f.onImageLoaded, f.onImageError)
 	}
 	return layout(boxes, f.font, frameWidth, maxtab, f.fontHeightForStyle, f.fontForStyle)
 }
@@ -2758,8 +2807,10 @@ func (f *frameImpl) drawImageLoadingPlaceholder(target edwooddraw.Image, pt imag
 }
 
 // drawImageErrorPlaceholder renders an error placeholder for failed image loads.
-// It displays the box's text (e.g. "[Image: alt]" or "[Image: alt <unsupported format>]")
-// in blue (like a link) so it can be clicked to open the image path.
+// It displays the box's alt text (e.g. "[Image: alt]") in blue (like a link)
+// so it can be clicked to open the image path. The reason for the failure
+// is surfaced via the onImageError callback, not appended to the rendered
+// text — keeping rendered runes === source runes for caret mapping.
 func (f *frameImpl) drawImageErrorPlaceholder(target edwooddraw.Image, pt image.Point, boxText string) {
 	if f.font == nil || f.textColor == nil {
 		return

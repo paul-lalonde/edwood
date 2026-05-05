@@ -5195,18 +5195,17 @@ func setupPreviewChordTestWindow(t *testing.T) (*Window, *RichText, image.Rectan
 // 2. B1 press followed by B3 while B1 held is detected as a chord
 // 3. B1 press and release without B2/B3 is a normal selection (no chord)
 func TestPreviewChordDetection(t *testing.T) {
-	w, rt, frameRect := setupPreviewChordTestWindow(t)
-
-	// Ensure body.w is set so cut() can operate on the text properly
-	w.body.w = w
-
-	// Set up global.row so acmeputsnarf() can call display.WriteSnarf()
-	global.row = Row{display: w.display}
-	defer func() { global.row = Row{} }()
+	// Each subtest runs against a fresh setup. Subtest 1
+	// performs a Cut that mutates the body buffer; without
+	// fresh state, subsequent subtests would drag against
+	// shifted content and land past the end. (setupPreview-
+	// ChordTestWindow already sets w.body.w = w and global.row
+	// via t.Cleanup, so no outer plumbing is needed.)
 
 	// Test 1: B1 sweep to select "Hello" (chars 0-5), then B2 pressed while B1 held
 	// This should be detected as B1+B2 chord (Cut)
 	t.Run("B1ThenB2Chord", func(t *testing.T) {
+		w, rt, frameRect := setupPreviewChordTestWindow(t)
 		// B1 mouse down at char 0
 		downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
 		m := draw.Mouse{
@@ -5247,6 +5246,7 @@ func TestPreviewChordDetection(t *testing.T) {
 	// Test 2: B1 sweep to select "world" (chars 6-11), then B3 pressed while B1 held
 	// This should be detected as B1+B3 chord (Paste)
 	t.Run("B1ThenB3Chord", func(t *testing.T) {
+		w, rt, frameRect := setupPreviewChordTestWindow(t)
 		// B1 mouse down at char 6
 		downPt := image.Pt(frameRect.Min.X+60, frameRect.Min.Y+5)
 		m := draw.Mouse{
@@ -5284,6 +5284,7 @@ func TestPreviewChordDetection(t *testing.T) {
 
 	// Test 3: B1 sweep and release (no chord) should be a normal selection
 	t.Run("B1OnlyNoChord", func(t *testing.T) {
+		w, rt, frameRect := setupPreviewChordTestWindow(t)
 		downPt := image.Pt(frameRect.Min.X, frameRect.Min.Y+5)
 		m := draw.Mouse{
 			Point:   downPt,
@@ -5311,8 +5312,6 @@ func TestPreviewChordDetection(t *testing.T) {
 			t.Error("Expected non-empty selection after B1 sweep")
 		}
 	})
-
-	_ = w
 }
 
 // TestPreviewChordCut tests that the B1+B2 chord in preview mode performs a Cut

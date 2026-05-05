@@ -108,6 +108,17 @@ func WithOnImageLoaded(fn func(path string)) Option {
 	}
 }
 
+// WithOnImageError is an Option that sets a callback invoked synchronously
+// during layout when an image fails to load (e.g., unsupported format).
+// The host can route the message to its error surface (e.g., a +Errors
+// window). The callback receives the resolved image path and the error
+// message text.
+func WithOnImageError(fn func(path, msg string)) Option {
+	return func(fi *frameImpl) {
+		fi.onImageError = fn
+	}
+}
+
 // WithHScrollColors is an Option that sets the horizontal scrollbar colors.
 // These should match the vertical scrollbar colors for visual consistency.
 func WithHScrollColors(bg, thumb draw.Image) Option {
