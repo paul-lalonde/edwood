@@ -2829,6 +2829,12 @@ func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 			applyBlockquoteRegion(s, r)
 		case "listitem":
 			applyListitemRegion(s, r)
+		case "table":
+			applyTableRegion(s, r)
+		case "tablerow":
+			applyTableRowRegion(s, r)
+		case "tablecell":
+			applyTableCellRegion(s, r)
 		}
 	}
 }
@@ -2910,6 +2916,49 @@ func parseListNumber(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// applyTableRegion sets the per-rune flags for a `table`
+// region ancestor. Composition rule: idempotent — the
+// outermost table is the only one that matters (v1
+// disallows table-in-table). `Block` is forced on so
+// the existing layout treats the run as a block-level
+// element (gutter indent, no wrap). Phase 3 round 8.
+func applyTableRegion(s *rich.Style, _ *Region) {
+	s.Table = true
+	s.Block = true
+}
+
+// applyTableRowRegion sets the per-rune flags for a
+// `tablerow` region ancestor. Composition rule:
+// idempotent (no shared field with table). The
+// `header=true` param promotes the row's runes to
+// `Style.TableHeader=true`, which the existing layout
+// uses to render bold + a separator line. Phase 3
+// round 8.
+func applyTableRowRegion(s *rich.Style, r *Region) {
+	if r.Params["header"] == "true" {
+		s.TableHeader = true
+	}
+}
+
+// applyTableCellRegion sets the per-rune flags for a
+// `tablecell` region ancestor. The `align=` param maps
+// to `Style.TableAlign` (left, right, center; left is
+// the default and matches the rich.AlignLeft zero
+// value). Composition rule: nearest-of-kind — cells
+// don't nest in v1, so per-call overwrite is moot, but
+// the pattern is consistent with listitem's marker/
+// number payload. Phase 3 round 8.
+func applyTableCellRegion(s *rich.Style, r *Region) {
+	switch r.Params["align"] {
+	case "right":
+		s.TableAlign = rich.AlignRight
+	case "center":
+		s.TableAlign = rich.AlignCenter
+	default: // "left", "", or unrecognized
+		s.TableAlign = rich.AlignLeft
+	}
 }
 
 // styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
