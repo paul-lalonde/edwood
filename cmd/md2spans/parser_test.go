@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestParseEmpty: empty input produces no spans (R3).
 func TestParseEmpty(t *testing.T) {
@@ -2265,6 +2268,54 @@ func TestParseTableInsideBlockquote(t *testing.T) {
 	}
 	if tableBegins != 1 {
 		t.Errorf("got %d table begins, want 1", tableBegins)
+	}
+}
+
+// TestParseTable_AlignmentInWireFormat verifies that
+// align= params survive FormatSpans → wire bytes (the
+// consumer-facing format).
+func TestParseTable_AlignmentInWireFormat(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	if !strings.Contains(wire, "align=center") {
+		t.Errorf("wire format missing align=center; wire:\n%s", wire)
+	}
+	if !strings.Contains(wire, "align=right") {
+		t.Errorf("wire format missing align=right; wire:\n%s", wire)
+	}
+	if !strings.Contains(wire, "align=left") {
+		t.Errorf("wire format missing align=left; wire:\n%s", wire)
+	}
+}
+
+// TestParseTable_BodyRowCellAlignmentParams pins that
+// body rows' tablecell regions carry the same align=
+// param as the separator row dictated. A round 8.x
+// smoke-fix regression test — an earlier symptom was
+// body cells appearing left-aligned even when the
+// separator declared center/right.
+func TestParseTable_BodyRowCellAlignmentParams(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	got := Parse(src)
+	wantAligns := []string{"left", "center", "right"}
+	// Each of 3 rows × 3 cells = 9 tablecell begins.
+	// Cell aligns repeat per row.
+	var cellIdx int
+	for _, s := range got {
+		if s.RegionBegin != "tablecell" {
+			continue
+		}
+		col := cellIdx % 3
+		want := wantAligns[col]
+		got := s.RegionParams["align"]
+		if got != want {
+			t.Errorf("cellIdx=%d (col=%d) align = %q, want %q", cellIdx, col, got, want)
+		}
+		cellIdx++
+	}
+	if cellIdx != 9 {
+		t.Errorf("got %d tablecell regions, want 9 (3 rows × 3 cells)", cellIdx)
 	}
 }
 
