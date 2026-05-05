@@ -140,6 +140,16 @@ func attachAndRender(winid int, once bool, stderr io.Writer) error {
 	}
 	defer win.CloseFiles()
 
+	// Append `Plain` to the tag so the user can B2-click it
+	// to take the window out of styled mode (the Plain
+	// builtin in exec.go's command table). The tag file is
+	// DMAPPEND, so this lands at the right edge of the
+	// existing tag (after `Edit` and any other builtins).
+	// Errors here are non-fatal: log and proceed.
+	if err := win.Fprintf("tag", " Plain"); err != nil {
+		fmt.Fprintf(stderr, "md2spans: append Plain to tag: %v\n", err)
+	}
+
 	fsys, err := client.MountService("acme")
 	if err != nil {
 		return fmt.Errorf("mount acme: %w", err)

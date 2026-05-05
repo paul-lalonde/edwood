@@ -167,12 +167,11 @@ func (w *Window) setTag1() {
 		Ldelsnarf = " Del Snarf"
 		Lundo     = " Undo"
 		Lredo     = " Redo"
-		Lget      = " Get"
-		Lput      = " Put"
-		Llook     = " Look"
-		Ledit     = " Edit"
-		Lmarkdown = " Markdown"
-		Lpipe     = " |"
+		Lget  = " Get"
+		Lput  = " Put"
+		Llook = " Look"
+		Ledit = " Edit"
+		Lpipe = " |"
 	)
 
 	// (flux) The C implemtation does a lot of work to avoid re-setting the
@@ -212,10 +211,6 @@ func (w *Window) setTag1() {
 		sb.WriteString(Lpipe)
 		sb.WriteString(Llook)
 		sb.WriteString(Ledit)
-		// Add Markdown command for markdown files
-		if strings.HasSuffix(strings.ToLower(w.body.file.Name()), ".md") {
-			sb.WriteString(Lmarkdown)
-		}
 		sb.WriteString(" ")
 	}
 

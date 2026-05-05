@@ -1480,6 +1480,7 @@ var fileHooks = map[string]string{
 	".tex": "edcolor",
 	".sty": "edcolor",
 	".cls": "edcolor",
+	".md":  "md2spans",
 }
 
 // fileHookTool returns the tool name for the given filename based on its
