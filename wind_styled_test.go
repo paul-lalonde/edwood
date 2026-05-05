@@ -2235,3 +2235,128 @@ func TestBuildStyledContent_ListitemInsideBlockquote(t *testing.T) {
 		t.Errorf("ListIndent = %d, want 1", mid.Style.ListIndent)
 	}
 }
+
+// --- Table region expansion (Phase 3 round 8) -------------------
+
+// TestBuildStyledContent_RunInsideTableRegion: a
+// StyleRun inside a `table` region produces a span with
+// Style.Table=true and Style.Block=true.
+func TestBuildStyledContent_RunInsideTableRegion(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 2, Style: StyleAttrs{}},
+		{Len: 6, Style: StyleAttrs{}},
+		{Len: 2, Style: StyleAttrs{}},
+	}, []*Region{{Start: 2, End: 8, Kind: "table"}}, 10)
+
+	content := w.buildStyledContent()
+	if len(content) != 3 {
+		t.Fatalf("got %d spans, want 3", len(content))
+	}
+	mid := content[1]
+	if !mid.Style.Table {
+		t.Error("middle span: Table should be true")
+	}
+	if !mid.Style.Block {
+		t.Error("middle span: Block should be true (Table forces block-level rendering)")
+	}
+}
+
+// TestBuildStyledContent_RunInsideTableHeaderRow: a
+// `tablerow` region with `header=true` produces
+// TableHeader=true on the row's runes.
+func TestBuildStyledContent_RunInsideTableHeaderRow(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 10, Style: StyleAttrs{}},
+	}, []*Region{
+		{Start: 0, End: 10, Kind: "table"},
+		{
+			Start: 0, End: 5, Kind: "tablerow",
+			Params: map[string]string{"header": "true"},
+		},
+		{Start: 5, End: 10, Kind: "tablerow"},
+	}, 10)
+
+	content := w.buildStyledContent()
+	var headerSeen, bodySeen bool
+	for _, s := range content {
+		if s.Style.TableHeader {
+			headerSeen = true
+		}
+		if s.Style.Table && !s.Style.TableHeader {
+			bodySeen = true
+		}
+	}
+	if !headerSeen {
+		t.Errorf("no span with TableHeader=true; spans: %+v", content)
+	}
+	if !bodySeen {
+		t.Errorf("no span with Table=true && TableHeader=false; spans: %+v", content)
+	}
+}
+
+// TestBuildStyledContent_RunInsideTableCellAlignment:
+// a `tablecell` region maps `align=` param to
+// `Style.TableAlign`.
+func TestBuildStyledContent_RunInsideTableCellAlignment(t *testing.T) {
+	cases := []struct {
+		name  string
+		param string
+		want  rich.Alignment
+	}{
+		{"left", "left", rich.AlignLeft},
+		{"right", "right", rich.AlignRight},
+		{"center", "center", rich.AlignCenter},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := makeStyledWindow(t, "abcdefghij")
+			w.applyParsedSpans(0, []StyleRun{
+				{Len: 10, Style: StyleAttrs{}},
+			}, []*Region{
+				{Start: 0, End: 10, Kind: "table"},
+				{
+					Start: 2, End: 8, Kind: "tablecell",
+					Params: map[string]string{"align": tc.param},
+				},
+			}, 10)
+
+			content := w.buildStyledContent()
+			var found bool
+			for _, s := range content {
+				if s.Style.Table && s.Style.TableAlign == tc.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no span with TableAlign=%v; spans: %+v", tc.want, content)
+			}
+		})
+	}
+}
+
+// TestBuildStyledContent_TableInsideBlockquote: cross-
+// kind composition. A table inside a blockquote produces
+// runes with BOTH Table+Block AND Blockquote+
+// BlockquoteDepth flags.
+func TestBuildStyledContent_TableInsideBlockquote(t *testing.T) {
+	w := makeStyledWindow(t, "abcdefghij")
+	w.applyParsedSpans(0, []StyleRun{
+		{Len: 10, Style: StyleAttrs{}},
+	}, []*Region{
+		{Start: 0, End: 10, Kind: "blockquote"},
+		{Start: 2, End: 8, Kind: "table"},
+	}, 10)
+
+	content := w.buildStyledContent()
+	var found bool
+	for _, s := range content {
+		if s.Style.Table && s.Style.Blockquote && s.Style.BlockquoteDepth == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no span with Table+Blockquote both set; spans: %+v", content)
+	}
+}
