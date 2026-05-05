@@ -31,34 +31,34 @@ No `cmd/md2spans/` changes; no `rich/` changes.
 | [x] Design | Three new kinds (`table`, `tablerow`, `tablecell`); `header=true` on tablerow; `align=L|R|C` on tablecell. | base doc § "Wire format" | — |
 | [x] Tests | n/a (planning) | — | — |
 | [x] Iterate | This plan | — | — |
-| [ ] Commit | — | — | `Add Phase 3 round 8.0a plan: tables protocol + bridge` |
+| [x] Commit | — | — | `Split round 8 plan into three sub-rounds (8.0a / 8.0b / 8.0c)` |
 
 ## Phase 3.8.0a.1: Spans parser accepts the three new kinds
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Extend `validRegionKinds` in `spanparse.go` with `table`, `tablerow`, `tablecell`. | base doc § "Wire format" | One-line vocabulary change per round 6/7 pattern. |
-| [ ] Tests | TestParseSpanMessageRegionTable, TestParseSpanMessageRegionTableRowHeader, TestParseSpanMessageRegionTableCellAlignment, TestParseSpanMessageRegionTableNested (3-deep nesting). Update TestParseSpanMessageRegionUnknownKind to remove `table` from the unknown list. | `spanparse_test.go` | — |
-| [ ] Iterate | Three lines added to validRegionKinds. | `spanparse.go` | — |
-| [ ] Commit | — | — | `spans: accept table / tablerow / tablecell as region kinds` |
+| [x] Design | Extend `validRegionKinds` in `spanparse.go` with `table`, `tablerow`, `tablecell`. | base doc § "Wire format" | — |
+| [x] Tests | Added TestParseSpanMessageRegionTable / TableRowHeader / TableCellAlignment / TableNested. Updated TestParseSpanMessageRegionUnknownKind. | `spanparse_test.go` | — |
+| [x] Iterate | Three lines added to validRegionKinds. | `spanparse.go` | — |
+| [x] Commit | — | — | `spans: accept table / tablerow / tablecell as region kinds` |
 
 ## Phase 3.8.0a.2: Bridge — apply functions for the three new kinds
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | Add `applyTableRegion` (sets `Table=true, Block=true`), `applyTableRowRegion` (reads `header=true` param), `applyTableCellRegion` (reads `align=` param, maps to `Style.TableAlign`). Three new cases in `applyEnclosingRegions`. | base doc § "Bridge changes" | — |
-| [ ] Tests | TestBuildStyledContent_RunInsideTableRegion, _InsideTableHeaderRow, _CellAlignment{Left,Right,Center}, _TableInsideBlockquote (composition). | `wind_styled_test.go` | — |
-| [ ] Iterate | Three apply functions + dispatch cases + parseAlignment helper (similar to round 7's parseListNumber). | `wind.go` | — |
-| [ ] Commit | — | — | `wind: applyEnclosingRegions handles table / tablerow / tablecell (bridge)` |
+| [x] Design | Add `applyTableRegion` (sets `Table=true, Block=true`), `applyTableRowRegion` (reads `header=true` param), `applyTableCellRegion` (reads `align=` param). | base doc § "Bridge changes" | — |
+| [x] Tests | TestBuildStyledContent_RunInsideTableRegion / TableHeaderRow / TableCellAlignment{left,right,center} / TableInsideBlockquote. | `wind_styled_test.go` | — |
+| [x] Iterate | Three apply functions inline (no helper needed; switch handles align directly). | `wind.go` | — |
+| [x] Commit | — | — | `wind: applyEnclosingRegions handles table / tablerow / tablecell (bridge)` |
 
 ## Phase 3.8.0a.3: Merge prep
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | — | — |
-| [ ] Tests | All packages green | `go test ./...` | — |
-| [ ] Iterate | No smoke at this sub-round — there's no producer yet. End-to-end smoke happens in 8.0b. | — | — |
-| [ ] Commit | — | — | n/a (no smoke fixes possible without producer). |
+| [x] Design | n/a (validation) | — | — |
+| [x] Tests | All packages green | `go test ./...` | Green. |
+| [x] Iterate | No smoke at this sub-round — no producer yet. | — | — |
+| [x] Commit | — | — | n/a |
 
 ---
 
@@ -77,4 +77,4 @@ composition (table inside blockquote) tested explicitly.
 
 ## Status
 
-Plan drafted. Awaiting review before any code.
+All rows complete. Ready to merge to master.
