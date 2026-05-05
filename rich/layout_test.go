@@ -712,6 +712,143 @@ func TestMeasureTableColumns_RaggedSourceWidthsTakeMax(t *testing.T) {
 	}
 }
 
+// TestLayoutTable_AlignmentLeftPadsTrailing: for cells
+// with `align=left`, the content sits at the cell's
+// start (no leading pad) and the trailing pad fills to
+// the column's right edge before the next `|`.
+//
+// Source (one short cell, one wide column):
+//
+//	| a    | b    |
+//	|------|------|
+//
+// Column widths: col0=col1=6 chars (60px). Cell `| a `
+// has content " a " (3 chars = 30px, content width).
+// align=left → leading pad 0; trailing pad 30px. The
+// next `|` lands at column 0 right edge = 70px (line
+// indent gutter + barW + colW).
+//
+// Test the simpler property: with column widths
+// computed and applied, `|` boxes on different rows
+// land at the SAME x positions.
+func TestLayoutTable_VerticalBarsAlignAcrossRows(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	cellStyle := tableStyle
+	cellStyle.TableAlign = AlignLeft
+	// Row 1 cells short; row 2 cells longer. After 8.x's
+	// column-width padding, all `|` separators across
+	// rows must land at the same X positions.
+	content := Content{
+		Span{Text: "| a | b |\n", Style: cellStyle},
+		Span{Text: "|---|---|\n", Style: cellStyle},
+		Span{Text: "| longer | xx |\n", Style: cellStyle},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	// Collect bar positions per line (skipping the
+	// closing \n marker).
+	type rowBars struct{ xs []int }
+	var rows []rowBars
+	for _, line := range lines {
+		var xs []int
+		for _, pb := range line.Boxes {
+			if string(pb.Box.Text) == "|" {
+				xs = append(xs, pb.X)
+			}
+		}
+		if len(xs) > 0 {
+			rows = append(rows, rowBars{xs})
+		}
+	}
+	if len(rows) < 3 {
+		t.Fatalf("expected 3 rows of bars, got %d", len(rows))
+	}
+	// All rows should have 3 `|` positions (opening,
+	// separator, closing) and they should match.
+	for col := 0; col < len(rows[0].xs); col++ {
+		x0 := rows[0].xs[col]
+		for r := 1; r < len(rows); r++ {
+			if col >= len(rows[r].xs) {
+				t.Fatalf("row %d has %d bars, expected ≥%d", r, len(rows[r].xs), col+1)
+			}
+			if rows[r].xs[col] != x0 {
+				t.Errorf("row %d bar %d at X=%d, expected %d (= row 0 column %d)",
+					r, col, rows[r].xs[col], x0, col)
+			}
+		}
+	}
+}
+
+// TestLayoutTable_RightAlignmentLeadingPad: a cell with
+// `align=right` and content narrower than its column
+// gets a leading pad equal to (colWidth - contentWidth).
+// The cell's content boxes start at colStart + leadingPad.
+func TestLayoutTable_RightAlignmentLeadingPad(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableLeft := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignLeft}
+	tableRight := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignRight}
+	// Two-row table; col 1 is right-aligned. Row 1 has
+	// short content; row 2 has long content.
+	content := Content{
+		Span{Text: "| a | b |\n", Style: tableLeft},   // header (default left for measurement)
+		Span{Text: "|---|---:|\n", Style: tableLeft},  // separator
+		Span{Text: "| 1 | ", Style: tableLeft},        // row body up to second cell
+		Span{Text: "x", Style: tableRight},            // right-aligned cell content
+		Span{Text: " |\n", Style: tableLeft},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+
+	// Find the `x` box on row 3 (the body row). With
+	// right alignment, its X position should be greater
+	// than where it'd land with left alignment.
+	var bodyRow Line
+	for li, line := range lines {
+		if li == 2 {
+			bodyRow = line
+			break
+		}
+	}
+	var xX int = -1
+	for _, pb := range bodyRow.Boxes {
+		if string(pb.Box.Text) == "x" {
+			xX = pb.X
+			break
+		}
+	}
+	if xX == -1 {
+		t.Fatalf("`x` box not found in body row; row: %+v", bodyRow)
+	}
+
+	// Find the closing `|` of row 3. The right-aligned
+	// `x` should sit just before it (modulo a trailing
+	// space). Specifically: closing-|.X - x.X should be
+	// ≤ 2 char widths (for the trailing ` |`).
+	var closingBarX int = -1
+	for i := len(bodyRow.Boxes) - 1; i >= 0; i-- {
+		if string(bodyRow.Boxes[i].Box.Text) == "|" {
+			closingBarX = bodyRow.Boxes[i].X
+			break
+		}
+	}
+	if closingBarX == -1 {
+		t.Fatal("closing | not found")
+	}
+	if closingBarX-xX > 30 {
+		// Threshold: right-align should place `x` close
+		// to the closing bar (not far away).
+		t.Errorf("right-aligned `x` at X=%d is %dpx from closing bar at X=%d; expected close placement",
+			xX, closingBarX-xX, closingBarX)
+	}
+}
+
 // TestMeasureTableColumns_StopsAtNonTableBox: if the
 // next box after the table run isn't `Style.Table`,
 // the function returns at that boundary.
