@@ -2240,7 +2240,10 @@ func TestBuildStyledContent_ListitemInsideBlockquote(t *testing.T) {
 
 // TestBuildStyledContent_RunInsideTableRegion: a
 // StyleRun inside a `table` region produces a span with
-// Style.Table=true and Style.Block=true.
+// Table=true, Block=true, and Code=true (the latter
+// forces monospace on every rune in the table —
+// including the `|` markers between cells, so columns
+// align character-by-character).
 func TestBuildStyledContent_RunInsideTableRegion(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
 	w.applyParsedSpans(0, []StyleRun{
@@ -2259,6 +2262,9 @@ func TestBuildStyledContent_RunInsideTableRegion(t *testing.T) {
 	}
 	if !mid.Style.Block {
 		t.Error("middle span: Block should be true (Table forces block-level rendering)")
+	}
+	if !mid.Style.Code {
+		t.Error("middle span: Code should be true (table renders monospace throughout)")
 	}
 }
 

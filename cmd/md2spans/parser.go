@@ -226,6 +226,13 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 // Member criteria: the kind covers contiguous source
 // LINES (column 0 to end of line), not just a sub-range
 // within a line. "blockquote" qualifies (round 6).
+// "table" qualifies (round 8) — when a table is inside
+// a blockquote, the table region's begin would land at
+// the `|` of the first row (after the stripped `>`
+// markers); without snapping, line 1 of the table
+// renders at blockquote-only indent while subsequent
+// lines (where `>` IS in the table region) jump to
+// gutter indent, producing a vertical jog.
 //
 // "listitem" does NOT qualify — when a list line lives
 // inside a blockquote (`> - item`), the listitem region
@@ -245,6 +252,7 @@ func parseBlockquoteRange(src string, p paragraphRange) []Span {
 // opener line, mis-anchoring the region.
 var kindsAnchorAtLineStart = map[string]bool{
 	"blockquote": true,
+	"table":      true,
 }
 
 // snapToLineStart returns the largest line-start offset in
