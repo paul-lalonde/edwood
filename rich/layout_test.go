@@ -783,6 +783,204 @@ func TestLayoutTable_VerticalBarsAlignAcrossRows(t *testing.T) {
 	}
 }
 
+// TestLayoutTable_ThreeColumnMixedAlignment: mimics the
+// user's mixed-alignment test.md table. Three columns:
+// left / center / right. Body row 1 has narrow cells.
+// Verifies the body row's `b` and `c` are shifted from
+// the cell's left edge per their declared alignment.
+func TestLayoutTable_ThreeColumnMixedAlignment(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableRaw := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	leftCell := tableRaw
+	leftCell.TableAlign = AlignLeft
+	centerCell := tableRaw
+	centerCell.TableAlign = AlignCenter
+	rightCell := tableRaw
+	rightCell.TableAlign = AlignRight
+	// Header row — sets column widths.
+	// Body row — narrow cells; alignment should make
+	// the difference visible.
+	content := Content{
+		// Header row: `| L | C | R |\n` — cells ` L `, ` C `, ` R ` (3 chars each).
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " L ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " C ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " R ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Separator row: `|:---|:---:|---:|\n`
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: ":---", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: ":---:", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: "---:", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Body row 1: `| a | b | c |\n` — narrow cells.
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " a ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " b ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " c ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+		// Body row 2: `| longer text | longer too | longer right |\n`
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer text ", Style: leftCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer too ", Style: centerCell},
+		Span{Text: "|", Style: tableRaw},
+		Span{Text: " longer right ", Style: rightCell},
+		Span{Text: "|\n", Style: tableRaw},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 1000, 80, nil, nil)
+	if len(lines) < 4 {
+		t.Fatalf("expected ≥4 lines, got %d", len(lines))
+	}
+	bodyRow := lines[2] // header, separator, body row 1.
+
+	// Find positions of `a`, `b`, `c` in body row.
+	var aX, bX, cX int = -1, -1, -1
+	for _, pb := range bodyRow.Boxes {
+		switch string(pb.Box.Text) {
+		case "a":
+			aX = pb.X
+		case "b":
+			bX = pb.X
+		case "c":
+			cX = pb.X
+		}
+	}
+	t.Logf("body row 1 positions: a=%d b=%d c=%d", aX, bX, cX)
+
+	// Find the bars in body row to extract column boundaries.
+	var bars []int
+	for _, pb := range bodyRow.Boxes {
+		if string(pb.Box.Text) == "|" {
+			bars = append(bars, pb.X)
+		}
+	}
+	t.Logf("body row bars: %v", bars)
+	if len(bars) != 4 {
+		t.Fatalf("expected 4 bars, got %d", len(bars))
+	}
+
+	// Column boundaries: bars[0]..bars[1] = col 0, etc.
+	// Each cell's content width is 30px (3 chars).
+	// Column widths come from row 4's longer cells:
+	//   col 0: ` longer text ` = 13 chars = 130px
+	//   col 1: ` longer too ` = 12 chars = 120px
+	//   col 2: ` longer right ` = 14 chars = 140px
+
+	// `a` (left): should be near bars[0] (cell 0 left edge + 1 space).
+	// `b` (center): should be near middle of col 1.
+	// `c` (right): should be near bars[3] (col 2 right edge minus content).
+
+	// Specific assertions:
+	// - col 0 left: aX should be bars[0]+barW+1space = bars[0]+10+10 = bars[0]+20.
+	// - col 1 center: bX should be near bars[1]+barW+leadingPad+space.
+	//     leadingPad for center on (120-30)/2 = 45px. So bX = bars[1]+10+45+10 = bars[1]+65.
+	// - col 2 right: cX should be near bars[2]+barW+leadingPad+space.
+	//     leadingPad for right on (140-30) = 110. cX = bars[2]+10+110+10 = bars[2]+130.
+
+	col0Width := bars[1] - bars[0]
+	col1Width := bars[2] - bars[1]
+	col2Width := bars[3] - bars[2]
+	t.Logf("col widths from bars: %d / %d / %d", col0Width, col1Width, col2Width)
+
+	// The minimum a/b/c X positions for left/center/right alignment.
+	wantAtLeast := map[string]int{
+		"a-near-cell-0-left":    bars[0] + 15, // left-aligned, content close to cell start
+		"b-shifted-from-center": bars[1] + 30, // centered should be at least 30px past col 1 left
+		"c-shifted-to-right":    bars[2] + 80, // right should be close to col 2 right
+	}
+	if aX < bars[0] || aX > bars[0]+30 {
+		t.Errorf("a X=%d, expected near bars[0]=%d (left-aligned)", aX, bars[0])
+	}
+	if bX < wantAtLeast["b-shifted-from-center"] {
+		t.Errorf("b X=%d, expected ≥%d (center-aligned should pad)", bX, wantAtLeast["b-shifted-from-center"])
+	}
+	if cX < wantAtLeast["c-shifted-to-right"] {
+		t.Errorf("c X=%d, expected ≥%d (right-aligned should pad)", cX, wantAtLeast["c-shifted-to-right"])
+	}
+}
+
+// TestLayoutTable_CenterAlignmentVisibleOnNarrowCell:
+// when a cell's content is narrower than the column,
+// `align=center` produces a leadingPad that shifts the
+// content's first rune to the right. Verifies the
+// alignment is actually applied.
+//
+// Setup: 2 rows, 1 column. Header has `| header |` (8
+// chars wide, contributes max). Body has `| x |` (3
+// chars, much narrower). With align=center the body's
+// `x` should NOT sit at the column's left edge; it
+// should be shifted to the center.
+func TestLayoutTable_CenterAlignmentVisibleOnNarrowCell(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	headerStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignCenter, TableHeader: true}
+	cellStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0, TableAlign: AlignCenter}
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	content := Content{
+		// Header row: `|` (table only) + ` header ` (cellStyle for content)
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: " header ", Style: headerStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+		// Separator: `|---|`
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "---", Style: cellStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+		// Body: `|` + ` x ` + `|`
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: " x ", Style: cellStyle},
+		Span{Text: "|", Style: tableStyle},
+		Span{Text: "\n", Style: tableStyle},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 500, 80, nil, nil)
+
+	// Find the body row (3rd line, index 2). Find the
+	// `x` box. Its X position should be greater than
+	// where it'd sit if alignment weren't applied (=
+	// just past the opening `|`).
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	bodyRow := lines[2]
+	var xPos, openingBarX int = -1, -1
+	for _, pb := range bodyRow.Boxes {
+		txt := string(pb.Box.Text)
+		if openingBarX == -1 && txt == "|" {
+			openingBarX = pb.X
+		}
+		if txt == "x" {
+			xPos = pb.X
+			break
+		}
+	}
+	if xPos == -1 {
+		t.Fatalf("`x` box not found in body row; row: %+v", bodyRow)
+	}
+	if openingBarX == -1 {
+		t.Fatal("opening | not found")
+	}
+	// Header column is 8 chars (` header `). Body cell
+	// content is 3 chars (` x `). Extra is 5 chars (50px).
+	// Center alignment leadingPad = 25px. So `x` should
+	// be at openingBarX + barW(10) + leadingPad(25) +
+	// space(10) = openingBarX + 45.
+	barW := 10
+	wantMin := openingBarX + barW + 20 // at least 20px past barW (some leadingPad)
+	if xPos < wantMin {
+		t.Errorf("`x` X=%d, expected ≥%d (openingBarX=%d, barW=%d, leadingPad expected ~25)",
+			xPos, wantMin, openingBarX, barW)
+	}
+}
+
 // TestLayoutTable_RightAlignmentLeadingPad: a cell with
 // `align=right` and content narrower than its column
 // gets a leading pad equal to (colWidth - contentWidth).
@@ -846,6 +1044,59 @@ func TestLayoutTable_RightAlignmentLeadingPad(t *testing.T) {
 		// to the closing bar (not far away).
 		t.Errorf("right-aligned `x` at X=%d is %dpx from closing bar at X=%d; expected close placement",
 			xX, closingBarX-xX, closingBarX)
+	}
+}
+
+// TestLayoutTable_InBlockquoteHasBlockquoteIndent: a
+// table inside a blockquote should preserve the
+// blockquote's indent (BlockquoteDepth × ListIndentWidth)
+// in addition to the table's own gutter indent. Without
+// this, in-blockquote tables render at the same xPos as
+// non-blockquote tables (gutterIndent only), losing the
+// visual cue that they're nested inside the blockquote.
+//
+// Repro: smoke screenshot 11 (Phase 3 round 8.x) — user
+// reported the in-blockquote table flush-left, no
+// blockquote indent visible.
+func TestLayoutTable_InBlockquoteHasBlockquoteIndent(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	// Table-styled spans with BlockquoteDepth=1 — what the
+	// bridge produces for `> | H1 | H2 |\n> |----|----|\n
+	// > | x  | y  |`.
+	bqTable := Style{
+		Table: true, Block: true, Code: true, Scale: 1.0,
+		Blockquote: true, BlockquoteDepth: 1,
+	}
+	cell := bqTable
+	cell.TableAlign = AlignLeft
+	content := Content{
+		Span{Text: "| H1 | H2 |\n", Style: cell},
+		Span{Text: "|----|----|\n", Style: cell},
+		Span{Text: "| x  | y  |\n", Style: cell},
+	}
+	boxes := contentToBoxes(content)
+	lines := layout(boxes, font, 1000, 80, nil, nil)
+	if len(lines) < 3 {
+		t.Fatalf("expected ≥3 lines, got %d", len(lines))
+	}
+	// First box of each row is the opening `|`. Its X
+	// should be ≥ ListIndentWidth (the blockquote's
+	// contribution). With the bug it would be exactly
+	// gutterIndent (= GutterIndentChars * 10 = 80px) and
+	// have NO blockquote contribution; the fix adds
+	// BlockquoteDepth*ListIndentWidth on top.
+	gutterIndent := GutterIndentChars * font.BytesWidth([]byte("M"))
+	wantMin := gutterIndent + 1*ListIndentWidth
+	for rowIdx := 0; rowIdx < 3; rowIdx++ {
+		if len(lines[rowIdx].Boxes) == 0 {
+			t.Fatalf("row %d has no boxes", rowIdx)
+		}
+		gotX := lines[rowIdx].Boxes[0].X
+		if gotX < wantMin {
+			t.Errorf("row %d first-bar X = %d, want ≥%d "+
+				"(gutter %d + blockquoteDepth×ListIndentWidth %d)",
+				rowIdx, gotX, wantMin, gutterIndent, 1*ListIndentWidth)
+		}
 	}
 }
 

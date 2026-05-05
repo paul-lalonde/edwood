@@ -231,6 +231,18 @@ func layoutTable(
 	gutterIndent := GutterIndentChars * font.BytesWidth([]byte("M"))
 	barW := font.BytesWidth([]byte("|"))
 
+	// Compute the line indent once. Inside a blockquote, the
+	// table preserves the blockquote's BlockquoteDepth ×
+	// ListIndentWidth indent on top of the gutter, so each
+	// row's first `|` lands inside (not flush with the edge
+	// of) the blockquote. Without this, an in-blockquote
+	// table renders at gutterIndent only and visually loses
+	// its nesting cue. Phase 3 round 8.x smoke fix.
+	lineIndent := gutterIndent
+	if startIdx < len(boxes) && boxes[startIdx].Style.Blockquote {
+		lineIndent += boxes[startIdx].Style.BlockquoteDepth * ListIndentWidth
+	}
+
 	i := startIdx
 	for i < endIdx {
 		// Pre-walk the row to compute per-cell content
@@ -270,13 +282,11 @@ func layoutTable(
 			}
 		}
 
-		// Place row boxes with cell-aware xPos. Line
-		// indent: gutter (the existing layout's table
-		// indent rule). xPos starts at the line indent
-		// when at xPos==0; otherwise we honor the caller's
-		// passed-in xPos.
+		// Place row boxes with cell-aware xPos. xPos starts
+		// at the line indent when at xPos==0; otherwise we
+		// honor the caller's passed-in xPos.
 		if xPos == 0 {
-			xPos = gutterIndent
+			xPos = lineIndent
 		}
 		lineLeft := xPos // table's left edge for this row.
 

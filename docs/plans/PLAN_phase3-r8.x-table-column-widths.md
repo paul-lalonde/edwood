@@ -26,25 +26,25 @@ producer + bridge are already correct.
 | [x] Design | phase3-r8.x design drafted | [base doc] | Decisions: (a) layout-side two-pass; (b) NO text padding (rendered text === body text invariant); (c) xPos advances for alignment; (d) wire format unchanged from r8.0. |
 | [x] Tests | n/a (planning) | — | — |
 | [x] Iterate | This plan | — | — |
-| [ ] Commit | — | — | `Add Phase 3 round 8.x design and plan: table column-width alignment` |
+| [x] Commit | — | — | `Add Phase 3 round 8.x design and plan: table column-width alignment` |
 
 ## Phase 3.8.x.1: Pre-pass — measure per-column widths
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | When the layout enters a sequence of `Style.Table=true` boxes, do a sub-pass: walk all boxes in the table region, identify cell boundaries (`|` runes), measure each cell's content pixel-width via the appropriate font (`getFontForStyle`), record per-column max width. Returns a `[]int` of column widths used by pass 2. | base doc § "Approach" / "Column boundary detection" | First case where layout has a sub-pass. |
-| [ ] Tests | TestLayoutTable_MeasurePerColumnWidths: synthetic table with rows of different cell widths → measured widths = max per column. | `rich/layout_test.go` | Test internals via a helper export OR via observable layout output. |
-| [ ] Iterate | Extract `measureTableColumns(boxes []Box, startIdx int, font fontResolver) ([]int, int)` returning column widths + the index where the table ends. | `rich/layout.go` | — |
-| [ ] Commit | — | — | `rich: measure per-column widths in a table pre-pass` |
+| [x] Design | measureTableColumns walks the Table-styled boxes from startIdx, identifies cell boundaries by `\|` boxes, measures per-cell widths via boxWidth + per-style font resolver, returns per-column max width + the endIdx of the table. | base doc § "Approach" / "Column boundary detection" | — |
+| [x] Tests | TestMeasureTableColumns_BasicTwoColumn / RaggedSourceWidthsTakeMax / StopsAtNonTableBox. | `rich/layout_test.go` | — |
+| [x] Iterate | measureTableColumns + growMax helper. | `rich/layout.go` | — |
+| [x] Commit | — | — | `rich: measure per-column widths in a table pre-pass` |
 
 ## Phase 3.8.x.2: Pass 2 — apply alignment via xPos
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | When `layout` reaches a table boundary, call `measureTableColumns`, then iterate the table's boxes again with cell-aware xPos placement. At each cell start: xPos = lineStart + (Σ prior column widths) + leading_pad (per align). After the cell's content: xPos = lineStart + (Σ prior column widths) + currentColWidth + trailing_pad. | base doc § "Alignment math" | — |
-| [ ] Tests | TestLayoutTable_AlignmentLeft / _Right / _Center: each verifies the cell content's X position relative to the column's start. TestLayoutTable_EmptyCellsPadToColumnWidth. TestLayoutTable_HeaderBoldUsedForMeasurement (subtle: bold widths can differ). TestLayoutTable_InsideBlockquote (composition with blockquote indent). | `rich/layout_test.go` | — |
-| [ ] Iterate | Inline the table-aware layout block in `layout`. The first-box-of-cell logic determines leading pad; the last-box-of-cell determines trailing pad. | `rich/layout.go` | — |
-| [ ] Commit | — | — | `rich: pad table cells via xPos advances; honor TableAlign` |
+| [x] Design | layoutTable helper places each table row with cell-aware xPos. Per-row pre-walk computes content widths + alignment; place-walk advances xPos to column edges at `\|` boundaries and applies leading pad based on alignment. | base doc § "Alignment math" | — |
+| [x] Tests | TestLayoutTable_VerticalBarsAlignAcrossRows (column-width property) + TestLayoutTable_RightAlignmentLeadingPad. | `rich/layout_test.go` | — |
+| [x] Iterate | layoutTable function + main layout loop hand-off + appendSpanBoxes splits on `\|` for Table spans (separator rows like `\|---\|---\|` need each `\|` in its own box). | `rich/layout.go` | — |
+| [x] Commit | — | — | `rich: pad table cells via xPos advances; honor TableAlign` |
 
 ## Phase 3.8.x.3: Smoke + merge prep
 
