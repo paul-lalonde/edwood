@@ -153,6 +153,9 @@ var validRegionKinds = map[string]bool{
 	"code":       true,
 	"blockquote": true, // Phase 3 round 6
 	"listitem":   true, // Phase 3 round 7
+	"table":      true, // Phase 3 round 8
+	"tablerow":   true, // Phase 3 round 8
+	"tablecell":  true, // Phase 3 round 8
 }
 
 // parseBeginRegion parses the fields after the "begin" prefix.

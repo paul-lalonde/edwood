@@ -1371,8 +1371,7 @@ func TestParseSpanMessageRegionUnmatchedEnd(t *testing.T) {
 func TestParseSpanMessageRegionUnknownKind(t *testing.T) {
 	cases := []string{
 		"begin region UNKNOWN_KIND\nend region",
-		"begin region\nend region",       // missing kind
-		"begin region table\nend region", // future round 8, not v1
+		"begin region\nend region", // missing kind
 	}
 	for _, data := range cases {
 		t.Run(data, func(t *testing.T) {
@@ -1469,6 +1468,102 @@ func TestParseSpanMessageRegionListitemNumber(t *testing.T) {
 	}
 	if regions[0].Params["number"] != "3" {
 		t.Errorf("Params[number] = %q, want %q", regions[0].Params["number"], "3")
+	}
+}
+
+// TestParseSpanMessageRegionTable: `table`, `tablerow`,
+// `tablecell` join the recognized kind set in round 8.
+func TestParseSpanMessageRegionTable(t *testing.T) {
+	data := "begin region table\n" +
+		"s 0 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Kind != "table" {
+		t.Errorf("Kind = %q, want %q", regions[0].Kind, "table")
+	}
+}
+
+// TestParseSpanMessageRegionTableRowHeader: a tablerow
+// region carries `header=true` for the header row.
+func TestParseSpanMessageRegionTableRowHeader(t *testing.T) {
+	data := "begin region tablerow header=true\n" +
+		"s 0 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 1 {
+		t.Fatalf("got %d regions, want 1", len(regions))
+	}
+	if regions[0].Kind != "tablerow" {
+		t.Errorf("Kind = %q, want %q", regions[0].Kind, "tablerow")
+	}
+	if regions[0].Params["header"] != "true" {
+		t.Errorf("Params[header] = %q, want %q", regions[0].Params["header"], "true")
+	}
+}
+
+// TestParseSpanMessageRegionTableCellAlignment: a
+// tablecell region carries `align=left|right|center`.
+func TestParseSpanMessageRegionTableCellAlignment(t *testing.T) {
+	for _, align := range []string{"left", "right", "center"} {
+		data := "begin region tablecell align=" + align + "\n" +
+			"s 0 5 -\n" +
+			"end region"
+		_, _, regions, _, err := parseSpanMessage(data, 100)
+		if err != nil {
+			t.Fatalf("align=%s: parseSpanMessage: %v", align, err)
+		}
+		if len(regions) != 1 {
+			t.Fatalf("align=%s: got %d regions, want 1", align, len(regions))
+		}
+		if regions[0].Kind != "tablecell" {
+			t.Errorf("align=%s: Kind = %q, want %q", align, regions[0].Kind, "tablecell")
+		}
+		if regions[0].Params["align"] != align {
+			t.Errorf("align=%s: Params[align] = %q, want %q", align, regions[0].Params["align"], align)
+		}
+	}
+}
+
+// TestParseSpanMessageRegionTableNested: 3-deep nesting
+// (table → tablerow → tablecell). The flat parser
+// emits regions in `end region` order — innermost first
+// (the cell ends before its row's end, which ends before
+// the table's end). The store turns this flat list into
+// a containment tree via Add.
+func TestParseSpanMessageRegionTableNested(t *testing.T) {
+	data := "begin region table\n" +
+		"begin region tablerow header=true\n" +
+		"begin region tablecell align=left\n" +
+		"s 0 5 -\n" +
+		"end region\n" +
+		"end region\n" +
+		"s 5 5 -\n" +
+		"end region"
+	_, _, regions, _, err := parseSpanMessage(data, 100)
+	if err != nil {
+		t.Fatalf("parseSpanMessage: %v", err)
+	}
+	if len(regions) != 3 {
+		t.Fatalf("got %d regions, want 3 (table + tablerow + tablecell)", len(regions))
+	}
+	// Verify all three kinds present, regardless of order.
+	gotKinds := map[string]int{}
+	for _, r := range regions {
+		gotKinds[r.Kind]++
+	}
+	for _, k := range []string{"table", "tablerow", "tablecell"} {
+		if gotKinds[k] != 1 {
+			t.Errorf("kind %q count = %d, want 1; regions: %+v", k, gotKinds[k], regions)
+		}
 	}
 }
 
