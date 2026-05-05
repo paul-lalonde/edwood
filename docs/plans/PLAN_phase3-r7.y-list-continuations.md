@@ -60,8 +60,8 @@ item tracking and continuation handling.
 |-------|-------------|------|-------|
 | [x] Design | n/a (validation) | — | — |
 | [x] Tests | All packages green | `go test ./...` | Green. |
-| [ ] Iterate | Build binaries; smoke-test in real edwood with: simple multi-line item; ordered multi-line; mixed continuation + sibling; continuation inside blockquote; nested item with continuation. | — | Binaries rebuilt; awaiting user smoke. |
-| [ ] Commit | — | — | n/a unless smoke surfaces a fix. |
+| [x] Iterate | Smoke confirmed via test.md (covers continuation, ordered, nested, blockquote, lazy-not-supported). No fixes needed. | — | — |
+| [x] Commit | — | — | n/a (no smoke fixes). |
 
 ---
 
@@ -81,5 +81,5 @@ ambiguity (resolved by "most recent active item").
 
 ## Status
 
-All rows complete. Awaiting smoke confirmation before
-merging to master.
+All rows complete. Smoke confirmed. Ready to merge to
+master.
