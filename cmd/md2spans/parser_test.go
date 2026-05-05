@@ -2097,3 +2097,173 @@ func TestParseListContinuationListLineIsSubItemNotContinuation(t *testing.T) {
 		t.Fatalf("got %d events, want 4 (two sibling items, not one continuation); events: %+v", len(events), events)
 	}
 }
+
+// --- Table tests (Phase 3 round 8) -----------------------------------
+
+// regionEventsByKind extracts {kind, regionKind, params}
+// for every region directive in the parse output. Helper
+// for table tests.
+type regionEvent struct {
+	kind       string // "begin" or "end"
+	regionKind string // for begin only
+	marker     string // for begin only (for listitem reuse)
+	number     string
+	header     string
+	align      string
+}
+
+func regionEventsByKind(spans []Span) []regionEvent {
+	var out []regionEvent
+	for _, s := range spans {
+		switch {
+		case s.RegionBegin != "":
+			out = append(out, regionEvent{
+				kind:       "begin",
+				regionKind: s.RegionBegin,
+				marker:     s.RegionParams["marker"],
+				number:     s.RegionParams["number"],
+				header:     s.RegionParams["header"],
+				align:      s.RegionParams["align"],
+			})
+		case s.Kind == SpanRegionEnd:
+			out = append(out, regionEvent{kind: "end"})
+		}
+	}
+	return out
+}
+
+// TestParseTableSimple: 2-column 2-row table produces
+// the expected nested region structure: 1 table region
+// + 3 tablerow regions (header, separator, body) + 6
+// tablecell regions.
+func TestParseTableSimple(t *testing.T) {
+	src := "| H1 | H2 |\n|---|---|\n| a | b |"
+	got := Parse(src)
+	events := regionEventsByKind(got)
+
+	var tables, rows, cells int
+	var headerRows int
+	for _, e := range events {
+		if e.kind == "begin" {
+			switch e.regionKind {
+			case "table":
+				tables++
+			case "tablerow":
+				rows++
+				if e.header == "true" {
+					headerRows++
+				}
+			case "tablecell":
+				cells++
+			}
+		}
+	}
+	if tables != 1 {
+		t.Errorf("got %d table begins, want 1", tables)
+	}
+	if rows != 3 {
+		t.Errorf("got %d tablerow begins, want 3 (header + separator + body)", rows)
+	}
+	if cells != 6 {
+		t.Errorf("got %d tablecell begins, want 6 (3 rows × 2 cells)", cells)
+	}
+	if headerRows != 1 {
+		t.Errorf("got %d header tablerows, want 1", headerRows)
+	}
+}
+
+// TestParseTableAlignment: separator row `|---|:--:|---:|`
+// produces cells with align=left, center, right per
+// column.
+func TestParseTableAlignment(t *testing.T) {
+	src := "| L | C | R |\n|---|:--:|---:|\n| a | b | c |"
+	got := Parse(src)
+	events := regionEventsByKind(got)
+
+	wantAligns := []string{"left", "center", "right"}
+	// Cells appear in order: header row 3 cells, separator
+	// row 3 cells, body row 3 cells. Pick the first 3 cell
+	// begins (= header row's cells).
+	var cellAligns []string
+	for _, e := range events {
+		if e.kind == "begin" && e.regionKind == "tablecell" {
+			cellAligns = append(cellAligns, e.align)
+			if len(cellAligns) == 3 {
+				break
+			}
+		}
+	}
+	if len(cellAligns) != 3 {
+		t.Fatalf("got %d header cells, want 3", len(cellAligns))
+	}
+	for i, want := range wantAligns {
+		if cellAligns[i] != want {
+			t.Errorf("cell[%d] align = %q, want %q", i, cellAligns[i], want)
+		}
+	}
+}
+
+// TestParseTableNotATable: a `|`-line WITHOUT a separator
+// row right after stays as plain text — no table region.
+func TestParseTableNotATable(t *testing.T) {
+	src := "| not a table |\nplain text"
+	got := Parse(src)
+	for _, s := range got {
+		if s.RegionBegin == "table" {
+			t.Errorf("`|`-line without separator misparsed as table; spans: %+v", got)
+		}
+	}
+}
+
+// TestParseTableLeadingPipeOnPlainText: a `|` line not
+// followed by a separator stays plain (no table) AND
+// a separator that's not preceded by a `|`-line
+// stays plain.
+func TestParseTableLeadingPipeAlone(t *testing.T) {
+	src := "| just one line"
+	got := Parse(src)
+	for _, s := range got {
+		if s.RegionBegin == "table" {
+			t.Errorf("single `|` line misparsed as table; spans: %+v", got)
+		}
+	}
+}
+
+// TestParseTableEmptyCells: all-empty cells still produce
+// the structure.
+func TestParseTableEmptyCells(t *testing.T) {
+	src := "|   |   |\n|---|---|\n|   |   |"
+	got := Parse(src)
+	events := regionEventsByKind(got)
+	var cells int
+	for _, e := range events {
+		if e.kind == "begin" && e.regionKind == "tablecell" {
+			cells++
+		}
+	}
+	if cells != 6 {
+		t.Errorf("got %d cells, want 6 (empty cells still emit regions)", cells)
+	}
+}
+
+// TestParseTableInsideBlockquote: a table inside a
+// blockquote works via the recursive parse path.
+func TestParseTableInsideBlockquote(t *testing.T) {
+	src := "> | H |\n> |---|\n> | a |"
+	got := Parse(src)
+	var bqBegins, tableBegins int
+	for _, s := range got {
+		switch s.RegionBegin {
+		case "blockquote":
+			bqBegins++
+		case "table":
+			tableBegins++
+		}
+	}
+	if bqBegins != 1 {
+		t.Errorf("got %d blockquote begins, want 1", bqBegins)
+	}
+	if tableBegins != 1 {
+		t.Errorf("got %d table begins, want 1", tableBegins)
+	}
+}

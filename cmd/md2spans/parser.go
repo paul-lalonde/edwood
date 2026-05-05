@@ -118,6 +118,8 @@ func Parse(src string) []Span {
 			spans = append(spans, parseHRuleParagraph(src, p)...)
 		case p.IsListItem:
 			spans = append(spans, parseListItemParagraph(src, p)...)
+		case p.IsTable:
+			spans = append(spans, parseTableParagraph(src, p)...)
 		case p.HeadingLevel > 0:
 			spans = append(spans, parseHeadingParagraph(src, p)...)
 		default:
@@ -559,6 +561,224 @@ func contentBytePos(src string, p paragraphRange) int {
 	return i
 }
 
+// parseTableParagraph emits the nested begin/end region
+// directives for a GFM table block + the inline content
+// spans for each cell with `family=code` overlay.
+//
+// Wire structure for a 2-column 2-row table:
+//
+//	begin region table
+//	  begin region tablerow header=true
+//	    begin region tablecell align=left
+//	      ... cell content (family=code overlay) ...
+//	    end region
+//	    ... more cells ...
+//	  end region (close header tablerow)
+//	  begin region tablerow             (separator row)
+//	    ... cells with --- content ...
+//	  end region
+//	  begin region tablerow             (body row)
+//	    ... cells ...
+//	  end region
+//	end region (close table)
+//
+// The separator row IS emitted as a tablerow with normal
+// cells; its content is the `---` characters (visible
+// per markup-stays-visible). v1 doesn't try to hide it.
+//
+// Cell content gets `family=code` on every emitted span
+// so the rendered cells use the monospace font; if the
+// user's source has columns aligned (one of the two
+// supported v1 paths), the rendered cells stay aligned.
+//
+// Phase 3 round 8 v1 — column-width-aware alignment is
+// deferred to round 8.x.
+func parseTableParagraph(src string, p paragraphRange) []Span {
+	out := []Span{{
+		Kind:        SpanRegionBegin,
+		Offset:      p.RuneStart,
+		RegionBegin: "table",
+	}}
+
+	// Walk lines within [p.ByteStart, p.ByteEnd] to find
+	// row bounds and rune-positions.
+	type rowBounds struct {
+		byteStart, byteEnd int
+		runeStart, runeEnd int
+	}
+	var rows []rowBounds
+	rowByteStart := p.ByteStart
+	rowRuneStart := p.RuneStart
+	runePos := p.RuneStart
+	for i := p.ByteStart; i < p.ByteEnd; {
+		r, size := utf8.DecodeRuneInString(src[i:])
+		if r == '\n' {
+			rows = append(rows, rowBounds{
+				byteStart: rowByteStart,
+				byteEnd:   i,
+				runeStart: rowRuneStart,
+				runeEnd:   runePos,
+			})
+			i += size
+			runePos++
+			rowByteStart = i
+			rowRuneStart = runePos
+			continue
+		}
+		i += size
+		runePos++
+	}
+	if rowByteStart < p.ByteEnd {
+		rows = append(rows, rowBounds{
+			byteStart: rowByteStart,
+			byteEnd:   p.ByteEnd,
+			runeStart: rowRuneStart,
+			runeEnd:   runePos,
+		})
+	}
+
+	// Parse the separator row (index 1) for per-column
+	// alignment. Defensive: if rows[1] doesn't parse as
+	// a separator (shouldn't happen — scanParagraphs
+	// confirmed it), treat all columns as left-aligned.
+	var aligns []string
+	if len(rows) >= 2 {
+		aligns, _ = isTableSeparatorLine(src, rows[1].byteStart, rows[1].byteEnd)
+	}
+
+	// tableEndRune: the rune position just past the last
+	// row's last rune. Used for the closing `end region`
+	// of the table.
+	tableEndRune := p.RuneStart
+	if len(rows) > 0 {
+		tableEndRune = rows[len(rows)-1].runeEnd
+	}
+
+	for rowIdx, row := range rows {
+		rowSpan := Span{
+			Kind:        SpanRegionBegin,
+			Offset:      row.runeStart,
+			RegionBegin: "tablerow",
+		}
+		if rowIdx == 0 {
+			rowSpan.RegionParams = map[string]string{"header": "true"}
+		}
+		out = append(out, rowSpan)
+
+		// Walk cells: split on `|`. The leading `|`
+		// (always present for a table row) is its own
+		// "cell boundary" — content starts after it.
+		cellStart := row.byteStart + 1
+		cellRuneStart := row.runeStart + 1
+		cursor := cellStart
+		cursorRune := cellRuneStart
+		cellIdx := 0
+
+		emitCell := func(byteEnd, runeEnd int) {
+			cellSpan := Span{
+				Kind:        SpanRegionBegin,
+				Offset:      cursorRune,
+				RegionBegin: "tablecell",
+			}
+			align := "left"
+			if cellIdx < len(aligns) {
+				align = aligns[cellIdx]
+			}
+			cellSpan.RegionParams = map[string]string{"align": align}
+			out = append(out, cellSpan)
+
+			// Content spans with family=code overlay.
+			out = append(out, emitTableCellContent(src, cursor, byteEnd, cursorRune, runeEnd)...)
+
+			out = append(out, Span{
+				Kind:      SpanRegionEnd,
+				Offset:    runeEnd,
+				RegionEnd: true,
+			})
+			cellIdx++
+		}
+
+		// Walk byte-by-byte to find cell `|` boundaries
+		// and rune-count concurrently.
+		for cursor < row.byteEnd {
+			r, size := utf8.DecodeRuneInString(src[cursor:])
+			if r == '|' {
+				// Cell ends here. Emit it.
+				emitCell(cursor, cursorRune)
+				cursor += size
+				cursorRune++
+				cellStart = cursor
+				cellRuneStart = cursorRune
+				continue
+			}
+			cursor += size
+			cursorRune++
+		}
+		// Trailing cell content (after the last `|`, if
+		// any). v1 GFM tables typically have a trailing
+		// `|`, in which case cellStart..cursor is empty.
+		// If not, emit the dangling text as a final cell.
+		if cellStart < cursor {
+			emitCell(cursor, cursorRune)
+		}
+
+		out = append(out, Span{
+			Kind:      SpanRegionEnd,
+			Offset:    row.runeEnd,
+			RegionEnd: true,
+		})
+	}
+
+	out = append(out, Span{
+		Kind:      SpanRegionEnd,
+		Offset:    tableEndRune,
+		RegionEnd: true,
+	})
+	return out
+}
+
+// emitTableCellContent emits styled spans for a cell's
+// content runes [byteStart, byteEnd) with `family=code`
+// on every rune. Inline tokens (emphasis / links /
+// inline code) come from parseInlineSpans; gaps between
+// them are filled with explicit `family=code` spans so
+// the entire cell renders monospace.
+func emitTableCellContent(src string, byteStart, byteEnd, runeStart, runeEnd int) []Span {
+	if byteStart >= byteEnd {
+		return nil
+	}
+	runes := []rune(src[byteStart:byteEnd])
+	inline := parseInlineSpans(runes, runeStart)
+	// Add Family=code to each inline span (unless one is
+	// already set — e.g. inline-code with family=code).
+	for i := range inline {
+		if inline[i].Family == "" {
+			inline[i].Family = "code"
+		}
+	}
+	var out []Span
+	cursor := runeStart
+	for _, sp := range inline {
+		if sp.Offset > cursor {
+			out = append(out, Span{
+				Offset: cursor,
+				Length: sp.Offset - cursor,
+				Family: "code",
+			})
+		}
+		out = append(out, sp)
+		cursor = sp.Offset + sp.Length
+	}
+	if cursor < runeEnd {
+		out = append(out, Span{
+			Offset: cursor,
+			Length: runeEnd - cursor,
+			Family: "code",
+		})
+	}
+	return out
+}
+
 // parseHeadingParagraph emits scaled spans for an ATX heading
 // paragraph. Per the Phase 3 round 1 design, the entire heading
 // content (the runes after the `# ` opener) is covered by a
@@ -762,6 +982,13 @@ type paragraphRange struct {
 	ListNumber           int
 	ListContentRuneStart int
 	ListDepth            int
+	// IsTable is true for a GFM table block: header row +
+	// separator row + zero or more body rows. The whole
+	// block is one paragraphRange; parseTableParagraph
+	// walks rows + cells inside [ByteStart, ByteEnd) and
+	// emits the nested begin/end region tree.
+	// Phase 3 round 8.
+	IsTable bool
 }
 
 // headingScale maps an ATX heading level (1-6) to its font
@@ -923,6 +1150,44 @@ func scanParagraphs(src string) []paragraphRange {
 		return n
 	}
 
+	// inTable: true while accumulating a confirmed table
+	// block (header + separator confirmed). tableStart*
+	// bracket the block; tableEndByte extends as more
+	// `|`-rows are encountered. Phase 3 round 8.
+	inTable := false
+	tableStartByte := 0
+	tableStartRune := 0
+	tableEndByte := 0
+	emitTable := func() {
+		if !inTable {
+			return
+		}
+		out = append(out, paragraphRange{
+			ByteStart: tableStartByte,
+			ByteEnd:   tableEndByte,
+			RuneStart: tableStartRune,
+			IsTable:   true,
+		})
+		inTable = false
+	}
+	// nextLineSep peeks at the line immediately after
+	// [lineStart, lineEnd) and returns true if it's a
+	// separator line. Used by the table-detection path
+	// to confirm `|`-line at column 0 is a real table
+	// (header followed by a separator) vs. plain text.
+	nextLineSep := func(lineEnd int) bool {
+		nextStart := lineEnd + 1
+		if nextStart >= len(src) {
+			return false
+		}
+		nextEnd := nextStart
+		for nextEnd < len(src) && src[nextEnd] != '\n' {
+			nextEnd++
+		}
+		_, ok := isTableSeparatorLine(src, nextStart, nextEnd)
+		return ok
+	}
+
 	commit := func(byteEnd int) {
 		if inParagraph {
 			cur.ByteEnd = byteEnd
@@ -987,6 +1252,7 @@ func scanParagraphs(src string) []paragraphRange {
 		// non-`>` line ends the group.
 		if isBlockquoteLine(src, lineStart, lineEnd) {
 			clearActiveList()
+			emitTable()
 			if !inQuote {
 				commit(lineStart)
 				inQuote = true
@@ -1000,6 +1266,35 @@ func scanParagraphs(src string) []paragraphRange {
 			emitBlockquote()
 			// Fall through to handle the current line as a
 			// regular paragraph / heading / etc.
+		}
+		// Table line: a `|`-prefixed line that's part of a
+		// confirmed table (current line is a continuation
+		// of an in-progress table OR a `|`-line followed by
+		// a separator). Phase 3 round 8.
+		if isTableRowLine(src, lineStart, lineEnd) {
+			if inTable {
+				// Continuation row.
+				tableEndByte = lineEnd
+				return
+			}
+			// Confirm via lookahead: is the NEXT line a
+			// separator? If so, this is the table header.
+			if nextLineSep(lineEnd) {
+				clearActiveList()
+				commit(lineStart)
+				inTable = true
+				tableStartByte = lineStart
+				tableStartRune = lineRuneStart
+				tableEndByte = lineEnd
+				return
+			}
+			// Fall through: `|`-line not followed by a
+			// separator → plain text.
+		}
+		if inTable {
+			emitTable()
+			// Fall through to handle this non-table line
+			// normally.
 		}
 		// Open a new fenced block when this line is a fence.
 		if lang, openLen, ok := parseOpenFence(src, lineStart, lineEnd); ok {
@@ -1144,6 +1439,10 @@ func scanParagraphs(src string) []paragraphRange {
 	if inQuote {
 		emitBlockquote()
 	}
+	// Open table at EOF: emit it.
+	if inTable {
+		emitTable()
+	}
 	return out
 }
 
@@ -1156,6 +1455,109 @@ func isBlockquoteLine(src string, start, end int) bool {
 		return false
 	}
 	return src[start] == '>'
+}
+
+// isTableRowLine reports whether [start, end) looks like
+// a GFM table row — starts with `|`. The caller must
+// peek at the NEXT line via isTableSeparatorLine to
+// confirm a real table; on its own a `|`-line could be
+// stylized plain text. Phase 3 round 8.
+func isTableRowLine(src string, start, end int) bool {
+	if start >= end {
+		return false
+	}
+	return src[start] == '|'
+}
+
+// isTableSeparatorLine reports whether [start, end) is a
+// GFM table separator row — every cell consists only of
+// `-` runs with optional leading/trailing `:` for
+// alignment. Returns the per-column alignment list when
+// it is a separator; nil otherwise.
+//
+// Examples:
+//
+//	|---|---|         → ok, [left, left]
+//	|:---|---:|:--:|  → ok, [left, right, center]
+//	| --- |  ---  |   → ok, [left, left] (extra spaces OK)
+//	| a | b |         → not a separator
+//
+// Phase 3 round 8.
+func isTableSeparatorLine(src string, start, end int) ([]string, bool) {
+	if start >= end || src[start] != '|' {
+		return nil, false
+	}
+	// Strip leading + trailing `|`.
+	i := start + 1
+	for end > i && src[end-1] == ' ' {
+		end--
+	}
+	if end > i && src[end-1] == '|' {
+		end--
+	}
+	// Walk cells separated by `|`.
+	var aligns []string
+	cellStart := i
+	for i <= end {
+		if i == end || src[i] == '|' {
+			align, ok := tableSeparatorCellAlign(src, cellStart, i)
+			if !ok {
+				return nil, false
+			}
+			aligns = append(aligns, align)
+			cellStart = i + 1
+		}
+		i++
+	}
+	if len(aligns) == 0 {
+		return nil, false
+	}
+	return aligns, true
+}
+
+// tableSeparatorCellAlign reports whether [start, end)
+// is one separator-cell — `-`+ optionally bracketed by
+// `:` — and returns the alignment ("left", "right",
+// "center"). The separator cell may have leading or
+// trailing whitespace. Phase 3 round 8.
+func tableSeparatorCellAlign(src string, start, end int) (string, bool) {
+	// Trim leading/trailing whitespace.
+	for start < end && (src[start] == ' ' || src[start] == '\t') {
+		start++
+	}
+	for end > start && (src[end-1] == ' ' || src[end-1] == '\t') {
+		end--
+	}
+	if start >= end {
+		return "", false
+	}
+	leftColon := src[start] == ':'
+	rightColon := src[end-1] == ':'
+	dashStart := start
+	if leftColon {
+		dashStart++
+	}
+	dashEnd := end
+	if rightColon && dashEnd > dashStart {
+		dashEnd--
+	}
+	// Must have at least one dash, and only dashes between.
+	if dashStart >= dashEnd {
+		return "", false
+	}
+	for i := dashStart; i < dashEnd; i++ {
+		if src[i] != '-' {
+			return "", false
+		}
+	}
+	switch {
+	case leftColon && rightColon:
+		return "center", true
+	case rightColon:
+		return "right", true
+	default:
+		return "left", true
+	}
 }
 
 // isListLine reports whether [start, end) opens a list
