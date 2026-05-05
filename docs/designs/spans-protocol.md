@@ -247,8 +247,8 @@ Fields:
 
 - **`<kind>`** (required on `begin region`): namespaced
   layout-mode discriminator. v1 valid values: `code`,
-  `blockquote`, `listitem`. Future rounds add `table`
-  (round 8). Unknown kinds are an error.
+  `blockquote`, `listitem`, `table`, `tablerow`,
+  `tablecell`. Unknown kinds are an error.
 - **`<param>=<value>`** (optional on `begin region`):
   zero or more space-separated key=value parameters
   carrying region attributes. v1 recognized params:
@@ -265,6 +265,14 @@ Fields:
   - For `listitem` regions, exactly one of `marker=`
     or `number=` is required. Producers that emit
     neither produce a wire-format error.
+  - `header=true` on `tablerow` regions: marks the
+    header row. The bridge sets `Style.TableHeader=
+    true` on the row's runes; the renderer typically
+    draws header text bold.
+  - `align=left|right|center` on `tablecell` regions:
+    cell alignment derived from the GFM separator
+    row's `:` markers. Maps to `Style.TableAlign`.
+    Default is `left`.
   - Malformed params (no `=` or empty value) are silently
     ignored (forward-compat).
 - **`end region`** takes no kind / params.
@@ -454,6 +462,47 @@ starting a new paragraph. Producers MUST indent
 continuation lines to the content column or deeper; lazy
 continuation (no indent) is not supported.
 
+GFM table (round 8 — three new region kinds composing
+to express a table block, header row, and per-cell
+alignment):
+```
+begin region table
+begin region tablerow header=true
+begin region tablecell align=left
+s 1 6 - family=code                                   ; " H1 "
+end region
+begin region tablecell align=center
+s 8 6 - family=code                                   ; " H2 "
+end region
+end region
+begin region tablerow
+begin region tablecell align=left
+s 16 5 - family=code                                  ; "---"
+end region
+begin region tablecell align=center
+s 22 5 - family=code                                  ; ":-:"
+end region
+end region
+begin region tablerow
+begin region tablecell align=left
+s 30 5 - family=code                                  ; " a "
+end region
+begin region tablecell align=center
+s 36 5 - family=code                                  ; " b "
+end region
+end region
+end region
+```
+
+Header row carries `header=true`; cell alignment is
+parsed from the separator row's `:` markers (`---`
+left, `---:` right, `:--:` center). Cell content is
+emitted with `family=code` so columns render in a
+monospace font — source-aligned columns stay aligned
+visually. v1 doesn't compute column widths; round 8.x
+will (either via a frame-dimension 9P endpoint or
+layout-side two-pass measurement).
+
 ## Per-write ordering rules
 
 Within a single Twrite:
@@ -619,8 +668,17 @@ update this spec in lockstep:
   whitespace, not the wire. Lazy continuation (non-
   indented) is NOT supported; producers must indent
   continuation lines.
-- **Round 8 — tables**: region with cells; frame-dimension
-  introspection 9P file.
+- **Round 8 — tables**: ✓ v1 landed (May 2026). Adds
+  three new region kinds: `table` (the block; bridge
+  sets Block+Table), `tablerow` (with optional
+  `header=true` param → TableHeader), `tablecell`
+  (with `align=left|right|center` param → TableAlign).
+  Triple-nested by construction. Cell content uses
+  `family=code` overlay so the rendered cells are
+  monospace; source-aligned columns render aligned via
+  character-position. Round 8.x will add column-width-
+  aware alignment (likely via a frame-dimension 9P
+  endpoint or layout-side two-pass measurement).
 
 Each round's design will revise this spec; the rules in this
 document apply only to today's protocol surface.
