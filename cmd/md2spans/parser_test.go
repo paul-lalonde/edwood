@@ -1925,3 +1925,175 @@ func TestParseNestedListBlankLineTerminatesRun(t *testing.T) {
 		t.Fatalf("got %d events, want 4; events: %+v", len(events), events)
 	}
 }
+
+// --- List continuation tests (Phase 3 round 7.y) -----------------------
+
+// TestParseListContinuationSimple: `- a\n  cont` produces
+// ONE listitem region whose end span covers both lines.
+//
+// Source rune layout:
+//
+//	0..2   "- a"
+//	3      \n
+//	4..9   "  cont"
+//
+// Expected: begin@0, end@10 (one past the last rune).
+func TestParseListContinuationSimple(t *testing.T) {
+	src := "- a\n  cont"
+	got := Parse(src)
+	events := listitemEvents(got)
+	want := []listitemEvent{
+		{kind: "begin", offset: 0, marker: "-"},
+		{kind: "end", offset: 10},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d; events: %+v", len(events), len(want), events)
+	}
+	for i, w := range want {
+		if events[i] != w {
+			t.Errorf("event[%d] = %+v, want %+v", i, events[i], w)
+		}
+	}
+}
+
+// TestParseListContinuationMultiline: 3+ continuation
+// lines all join the item.
+func TestParseListContinuationMultiline(t *testing.T) {
+	src := "- a\n  cont1\n  cont2\n  cont3"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	if events[0].offset != 0 || events[1].offset != len([]rune(src)) {
+		t.Errorf("event offsets = (%d, %d), want (0, %d)",
+			events[0].offset, events[1].offset, len([]rune(src)))
+	}
+}
+
+// TestParseListContinuationFollowedByNewItem: `- a\n  cont
+// \n- b` produces TWO sibling items; first covers
+// `- a\n  cont`, second covers `- b`.
+func TestParseListContinuationFollowedByNewItem(t *testing.T) {
+	src := "- a\n  cont\n- b"
+	got := Parse(src)
+	events := listitemEvents(got)
+	want := []listitemEvent{
+		{kind: "begin", offset: 0, marker: "-"},
+		{kind: "end", offset: 10},
+		{kind: "begin", offset: 11, marker: "-"},
+		{kind: "end", offset: 14},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d; events: %+v", len(events), len(want), events)
+	}
+	for i, w := range want {
+		if events[i] != w {
+			t.Errorf("event[%d] = %+v, want %+v", i, events[i], w)
+		}
+	}
+}
+
+// TestParseListContinuationTerminatedByBlank: blank line
+// ends the list run; the item ends BEFORE the blank line.
+func TestParseListContinuationTerminatedByBlank(t *testing.T) {
+	src := "- a\n  cont\n\nplain"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	// End at rune 10 (just after `cont`, before \n\nplain).
+	if events[1].offset != 10 {
+		t.Errorf("end offset = %d, want 10", events[1].offset)
+	}
+}
+
+// TestParseListContinuationTerminatedByNonIndented: a
+// non-indented non-list line ends the item; the line
+// becomes a fresh paragraph.
+func TestParseListContinuationTerminatedByNonIndented(t *testing.T) {
+	src := "- a\n  cont\nplain"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	if events[1].offset != 10 {
+		t.Errorf("end offset = %d, want 10", events[1].offset)
+	}
+}
+
+// TestParseListLazyContinuationNotSupported: in v1.2,
+// `- a\nbar` (no indent on bar) is NOT continuation —
+// the item ends at `- a` and `bar` is a new paragraph.
+func TestParseListLazyContinuationNotSupported(t *testing.T) {
+	src := "- a\nbar"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (lazy NOT supported); events: %+v", len(events), events)
+	}
+	// End offset = 3 (just after `- a`, before `\nbar`).
+	if events[1].offset != 3 {
+		t.Errorf("end offset = %d, want 3 (item ends at `- a`)", events[1].offset)
+	}
+}
+
+// TestParseListContinuationOrderedNeedsDeeperIndent:
+// `1. a\n  not enough` requires 3+ leading spaces (content
+// column for `1. ` is 3); only 2 → not a continuation.
+func TestParseListContinuationOrderedNeedsDeeperIndent(t *testing.T) {
+	src := "1. a\n  not enough"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	// End at rune 4 (just after `1. a`, before \n).
+	if events[1].offset != 4 {
+		t.Errorf("end offset = %d, want 4 (item ends at `1. a`; following line is not a continuation)", events[1].offset)
+	}
+}
+
+// TestParseListContinuationOrderedDeeperIndentWorks:
+// `1. a\n   yes` (3 spaces) IS a continuation.
+func TestParseListContinuationOrderedDeeperIndentWorks(t *testing.T) {
+	src := "1. a\n   yes"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	if events[1].offset != len([]rune(src)) {
+		t.Errorf("end offset = %d, want %d (continuation extends to EOF)", events[1].offset, len([]rune(src)))
+	}
+}
+
+// TestParseListContinuationDeeperIndentStillJoins: a
+// continuation may be MORE indented than the content
+// column; still a continuation.
+func TestParseListContinuationDeeperIndentStillJoins(t *testing.T) {
+	src := "- a\n      deeply"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2; events: %+v", len(events), events)
+	}
+	if events[1].offset != len([]rune(src)) {
+		t.Errorf("end offset = %d, want %d", events[1].offset, len([]rune(src)))
+	}
+}
+
+// TestParseListContinuationListLineIsSubItemNotContinuation:
+// an indented list-marker line is a sub-list item, NOT a
+// continuation. `- a\n  - b` produces 2 items (sibling
+// regions per round 7.x), not 1.
+func TestParseListContinuationListLineIsSubItemNotContinuation(t *testing.T) {
+	src := "- a\n  - b"
+	got := Parse(src)
+	events := listitemEvents(got)
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4 (two sibling items, not one continuation); events: %+v", len(events), events)
+	}
+}

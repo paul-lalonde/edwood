@@ -896,6 +896,33 @@ func scanParagraphs(src string) []paragraphRange {
 	bqStartRune := 0
 	bqEndByte := 0
 
+	// activeListIdx: index into `out` of the active list
+	// item paragraphRange (-1 when no item is active).
+	// activeContentCol: the byte-column at which the active
+	// item's content starts (for `- foo` it's 2; for
+	// `1. foo` it's 3; for `  - foo` it's 4). A subsequent
+	// line whose leading whitespace count is >=
+	// activeContentCol AND that isn't itself a list marker
+	// is treated as a continuation — its bytes are folded
+	// into the active item's ByteEnd. Phase 3 round 7.y.
+	activeListIdx := -1
+	activeContentCol := 0
+	clearActiveList := func() {
+		activeListIdx = -1
+		activeContentCol = 0
+	}
+	// leadingWhitespaceCount returns the number of leading
+	// space-or-tab bytes on [start, end). Tab = 1 column
+	// (matches the simplified tab semantics from round 7.x's
+	// isListLine).
+	leadingWhitespaceCount := func(start, end int) int {
+		n := 0
+		for start+n < end && (src[start+n] == ' ' || src[start+n] == '\t') {
+			n++
+		}
+		return n
+	}
+
 	commit := func(byteEnd int) {
 		if inParagraph {
 			cur.ByteEnd = byteEnd
@@ -959,6 +986,7 @@ func scanParagraphs(src string) []paragraphRange {
 		// level just bounds the group. A blank line or a
 		// non-`>` line ends the group.
 		if isBlockquoteLine(src, lineStart, lineEnd) {
+			clearActiveList()
 			if !inQuote {
 				commit(lineStart)
 				inQuote = true
@@ -975,6 +1003,7 @@ func scanParagraphs(src string) []paragraphRange {
 		}
 		// Open a new fenced block when this line is a fence.
 		if lang, openLen, ok := parseOpenFence(src, lineStart, lineEnd); ok {
+			clearActiveList()
 			commit(lineStart)
 			inFence = true
 			// Body starts just after the opener's terminating
@@ -1001,6 +1030,7 @@ func scanParagraphs(src string) []paragraphRange {
 			}
 		}
 		if blank {
+			clearActiveList()
 			commit(lineStart)
 			return
 		}
@@ -1008,6 +1038,7 @@ func scanParagraphs(src string) []paragraphRange {
 		// own one-line paragraph. Trailing newline (if any) is
 		// not part of the heading paragraph's bounds.
 		if level := detectHeadingLevel(src, lineStart, lineEnd); level > 0 {
+			clearActiveList()
 			commit(lineStart)
 			out = append(out, paragraphRange{
 				ByteStart:    lineStart,
@@ -1020,6 +1051,7 @@ func scanParagraphs(src string) []paragraphRange {
 		// HRule line: same handling as a heading — own
 		// one-line paragraph, ends any prior plain paragraph.
 		if detectHRule(src, lineStart, lineEnd) > 0 {
+			clearActiveList()
 			commit(lineStart)
 			out = append(out, paragraphRange{
 				ByteStart: lineStart,
@@ -1045,7 +1077,33 @@ func scanParagraphs(src string) []paragraphRange {
 				ListContentRuneStart: contentRune,
 				ListDepth:            depth,
 			})
+			// Mark this item as the active one for
+			// continuation-line detection. The content
+			// column equals contentByte - lineStart (the
+			// number of bytes preceding the content on
+			// the marker line: leading whitespace +
+			// marker + space).
+			activeListIdx = len(out) - 1
+			activeContentCol = contentByte - lineStart
 			return
+		}
+		// Continuation line (Phase 3 round 7.y): a non-
+		// list, non-blank line indented to at least the
+		// active item's content column belongs to that
+		// item. Extend the active item's ByteEnd to cover
+		// this line. Lazy continuation (a non-indented
+		// line continuing an item) is NOT supported in
+		// v1.2.
+		if activeListIdx >= 0 {
+			indent := leadingWhitespaceCount(lineStart, lineEnd)
+			if indent >= activeContentCol {
+				out[activeListIdx].ByteEnd = lineEnd
+				return
+			}
+			// Not enough indent → not a continuation.
+			// Fall through; clear active state so this
+			// line starts a fresh paragraph.
+			clearActiveList()
 		}
 		if !inParagraph {
 			cur = paragraphRange{
