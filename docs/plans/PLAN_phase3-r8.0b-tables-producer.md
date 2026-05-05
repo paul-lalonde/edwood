@@ -38,38 +38,30 @@ those land in 8.0c after smoke confirms.
 | [x] Design | Inherits from base design doc. | base doc § "md2spans changes" / "parseTableParagraph" | — |
 | [x] Tests | n/a (planning) | — | — |
 | [x] Iterate | This plan | — | — |
-| [ ] Commit | — | — | `Add Phase 3 round 8.0b plan: tables producer` |
+| [x] Commit | — | — | `Split round 8 plan into three sub-rounds (8.0a / 8.0b / 8.0c)` |
 
-## Phase 3.8.0b.1: Detect table blocks (scanner with lookahead)
+## Phase 3.8.0b.1+2: Detection + emission (combined)
 
-The first scanner case requiring lookahead: a `|` line
-is a table-row line ONLY if the next line is a
-separator. scanParagraphs needs to peek.
-
-| Stage | Description | Read | Notes |
-|-------|-------------|------|-------|
-| [ ] Design | scanParagraphs gains: when current line starts with `\|` AND looks like a table row, peek at the NEXT line; if it's a separator, accumulate the table block (header + separator + body rows until a non-table line); emit a single paragraphRange{IsTable: true, ...}. Implementation: switch from "process one line at a time" model to "scan ahead when a `\|` line appears." | base doc § "Detection" / "Risks: Lookahead" | First scanner case with lookahead. |
-| [ ] Tests | At this row, tests verify shape via Parse output: a table source produces SOME paragraphRange identifiable as a table; non-table `\|`-lines stay as plain paragraphs. Detection-only tests (parseTableParagraph still emits placeholder spans). | `cmd/md2spans/parser_test.go` | Intermediate — full nesting tests come in row 2. |
-| [ ] Iterate | isTableRowLine + isTableSeparatorLine helpers; lookahead in scanParagraphs (or pre-process lines). | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: detect GFM table blocks (header + separator + body)` |
-
-## Phase 3.8.0b.2: parseTableParagraph emits the nested region tree
+Detection without emission produces no testable output;
+combining them gives one tested red→green cycle. Per
+the round-7 precedent (where rows 3 + 4 of round 7
+were similarly combined).
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | parseTableParagraph walks the table block, emits `begin region table`, then for each row `begin region tablerow [header=true]`, then for each cell `begin region tablecell [align=L|R|C]` + cell content (parseInlineSpans with family=code overlay) + `end region`. The separator row IS emitted as a row but its cells contain only `---` content (visual divider). | base doc § "parseTableParagraph" | — |
-| [ ] Tests | Simple 2×2 table → 1 table region + 3 tablerow regions + 6 tablecell regions. Alignment `\|---\|:--:\|---:\|` produces `align=left,center,right`. Empty cells. Cell with bold (bold span has family=code overlay). Table inside blockquote. Not-a-table negative cases. | `cmd/md2spans/parser_test.go` | — |
-| [ ] Iterate | parseTableParagraph + cell-walking + alignment-from-separator + family=code overlay merge for content spans. | `cmd/md2spans/parser.go` | — |
-| [ ] Commit | — | — | `md2spans: emit nested table region directives with cell alignment` |
+| [x] Design | scanParagraphs gains inTable / tableStart* state + nextLineSep lookahead helper. Detection: a column-0 `\|`-line whose successor is a separator confirms the table; subsequent `\|`-lines extend; any non-`\|` line emits and falls through. parseTableParagraph emits the nested begin/end tree (table → tablerow [header=true on row 0] → tablecell [align=L\|R\|C from separator]); cell content uses family=code overlay via emitTableCellContent (parseInlineSpans + gap-fill family=code). | base doc § "Detection" + "parseTableParagraph" | — |
+| [x] Tests | TestParseTableSimple (1 table + 3 tablerow + 6 tablecell), TestParseTableAlignment (`:---\|:--:\|---:` → left,center,right), TestParseTableNotATable / TestParseTableLeadingPipeAlone (negative cases), TestParseTableEmptyCells, TestParseTableInsideBlockquote. | `cmd/md2spans/parser_test.go` | — |
+| [x] Iterate | isTableRowLine + isTableSeparatorLine + tableSeparatorCellAlign helpers; scanParagraphs state + lookahead; parseTableParagraph + emitTableCellContent. | `cmd/md2spans/parser.go` | — |
+| [x] Commit | — | — | `md2spans: detect and emit GFM table blocks` |
 
 ## Phase 3.8.0b.3: Merge prep
 
 | Stage | Description | Read | Notes |
 |-------|-------------|------|-------|
-| [ ] Design | n/a (validation) | — | — |
-| [ ] Tests | All packages green | `go test ./...` | — |
-| [ ] Iterate | No user-driven smoke at this sub-round; end-to-end smoke is round 8.0c. Internal sanity: build binaries, run a quick mental test that a sample table parses without crashing. | — | — |
-| [ ] Commit | — | — | n/a |
+| [x] Design | n/a (validation) | — | — |
+| [x] Tests | All packages green | `go test ./...` | Green. |
+| [x] Iterate | No user-driven smoke at this sub-round; end-to-end smoke is round 8.0c. | — | — |
+| [x] Commit | — | — | n/a |
 
 ---
 
@@ -86,4 +78,5 @@ prior rounds. Mitigations are unit tests at each layer.
 
 ## Status
 
-Plan drafted. Awaiting 8.0a merge before any code here.
+All rows complete. Ready to merge to master (no smoke
+at this sub-round; smoke is 8.0c's purpose).
