@@ -103,6 +103,88 @@ func appendSpanBoxes(boxes []Box, span Span) []Box {
 	return boxes
 }
 
+// measureTableColumns walks the table-region boxes
+// starting at boxes[startIdx] (which must have
+// Style.Table=true) and computes the per-column max
+// content width in pixels. Returns the width slice and
+// the index of the first box AFTER the table region
+// (= len(boxes) if the table runs to EOF, or the index
+// of the first box with !Style.Table otherwise).
+//
+// Per-row, cells are bounded by `|` boxes (the bar
+// rune ends up in its own one-rune box because the
+// surrounding spaces are word-break points). Each
+// cell's content width = sum of boxWidth for the
+// boxes BETWEEN the bounding `|`s (excluding `|` and
+// excluding any '\n' / break boxes).
+//
+// `getFontFor` resolves a per-style font (used because
+// header cells render bold and have slightly different
+// metrics); pass nil to default to the supplied
+// `defaultFont` for every box.
+//
+// Phase 3 round 8.x.
+func measureTableColumns(boxes []Box, startIdx int, defaultFont draw.Font, getFontFor func(Style) draw.Font) ([]int, int) {
+	fontFor := func(s Style) draw.Font {
+		if getFontFor != nil {
+			return getFontFor(s)
+		}
+		return defaultFont
+	}
+	var widths []int
+	i := startIdx
+	for i < len(boxes) && boxes[i].Style.Table {
+		// Process one row: walk until \n or end-of-table.
+		col := 0
+		cellWidth := 0
+		inCell := false
+		for i < len(boxes) && boxes[i].Style.Table {
+			b := &boxes[i]
+			if b.IsNewline() {
+				// End of row: finalize the current cell
+				// (the closing `|` already finalized the
+				// last cell on its own; this branch
+				// covers an unclosed row, defensive).
+				if inCell && cellWidth > 0 {
+					widths = growMax(widths, col, cellWidth)
+				}
+				i++
+				break
+			}
+			// Detect cell boundary `|` box.
+			if string(b.Text) == "|" {
+				if inCell {
+					widths = growMax(widths, col, cellWidth)
+					col++
+				}
+				cellWidth = 0
+				inCell = true
+				i++
+				continue
+			}
+			// Accumulate the box's width into the
+			// current cell.
+			if inCell {
+				cellWidth += boxWidth(b, fontFor(b.Style))
+			}
+			i++
+		}
+	}
+	return widths, i
+}
+
+// growMax extends widths to length col+1 (zero-filled)
+// and updates widths[col] to max(widths[col], w).
+func growMax(widths []int, col, w int) []int {
+	for len(widths) <= col {
+		widths = append(widths, 0)
+	}
+	if w > widths[col] {
+		widths[col] = w
+	}
+	return widths
+}
+
 // boxWidth calculates the width of a box in pixels using font metrics.
 // For text boxes, it measures the text width using the font.
 // For newline and tab boxes, it returns 0 (tabs are handled separately by tabBoxWidth).

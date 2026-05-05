@@ -635,6 +635,111 @@ func TestLayoutListIndent(t *testing.T) {
 	})
 }
 
+// --- Round 8.x: table column-width measurement ---
+
+// TestMeasureTableColumns_BasicTwoColumn: a two-column
+// table with non-uniform cell content widths produces
+// per-column max widths.
+//
+// Source (synthesized as boxes):
+//
+//	| H1   | H2     |
+//	|------|--------|
+//	| a    | longer |
+//
+// Per-column widths (in pixels, font is 10×14):
+//   col 0: max(" H1   ", "------", " a    ") = 6 chars × 10 = 60
+//   col 1: max(" H2     ", "--------", " longer ") = 8 chars × 10 = 80
+func TestMeasureTableColumns_BasicTwoColumn(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	rows := []string{
+		"| H1   | H2     |\n",
+		"|------|--------|\n",
+		"| a    | longer |\n",
+	}
+	var content Content
+	for _, row := range rows {
+		content = append(content, Span{Text: row, Style: tableStyle})
+	}
+	boxes := contentToBoxes(content)
+
+	widths, endIdx := measureTableColumns(boxes, 0, font, nil)
+	if endIdx != len(boxes) {
+		t.Errorf("endIdx = %d, want %d (whole input is the table)", endIdx, len(boxes))
+	}
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2; widths: %v", len(widths), widths)
+	}
+	// Column 0: ` H1   `, `------`, ` a    ` → all 6 chars (60px).
+	if widths[0] != 60 {
+		t.Errorf("col 0 width = %d, want 60", widths[0])
+	}
+	// Column 1: ` H2     `, `--------`, ` longer ` → all 8 chars (80px).
+	if widths[1] != 80 {
+		t.Errorf("col 1 width = %d, want 80", widths[1])
+	}
+}
+
+// TestMeasureTableColumns_RaggedSourceWidthsTakeMax:
+// non-uniform source widths still produce a single max
+// per column. This is the round 8.x pivot from round
+// 8.0c — v1's source-aligned-only rendering becomes
+// auto-aligned when measurement picks the max.
+func TestMeasureTableColumns_RaggedSourceWidthsTakeMax(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	rows := []string{
+		"| a | b |\n",        // both cells: ` a ` / ` b ` = 3 chars each (30px)
+		"|---|---|\n",        // both cells: `---` = 3 chars (30px)
+		"| longer | xx |\n",  // col 0: ` longer ` = 8 chars (80px); col 1: ` xx ` = 4 chars (40px)
+	}
+	var content Content
+	for _, row := range rows {
+		content = append(content, Span{Text: row, Style: tableStyle})
+	}
+	boxes := contentToBoxes(content)
+
+	widths, _ := measureTableColumns(boxes, 0, font, nil)
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2; widths: %v", len(widths), widths)
+	}
+	if widths[0] != 80 {
+		t.Errorf("col 0 width = %d, want 80 (` longer ` is widest)", widths[0])
+	}
+	if widths[1] != 40 {
+		t.Errorf("col 1 width = %d, want 40 (` xx ` is widest)", widths[1])
+	}
+}
+
+// TestMeasureTableColumns_StopsAtNonTableBox: if the
+// next box after the table run isn't `Style.Table`,
+// the function returns at that boundary.
+func TestMeasureTableColumns_StopsAtNonTableBox(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	tableStyle := Style{Table: true, Block: true, Code: true, Scale: 1.0}
+	plainStyle := Style{Scale: 1.0}
+	content := Content{
+		Span{Text: "| a | b |\n", Style: tableStyle},
+		Span{Text: "|---|---|\n", Style: tableStyle},
+		Span{Text: "| 1 | 2 |\n", Style: tableStyle},
+		Span{Text: "after table", Style: plainStyle},
+	}
+	boxes := contentToBoxes(content)
+
+	widths, endIdx := measureTableColumns(boxes, 0, font, nil)
+	if len(widths) != 2 {
+		t.Fatalf("got %d columns, want 2", len(widths))
+	}
+	// endIdx should point at the first non-Table box.
+	if endIdx >= len(boxes) {
+		t.Fatalf("endIdx = %d, want < len(boxes) = %d", endIdx, len(boxes))
+	}
+	if boxes[endIdx].Style.Table {
+		t.Errorf("boxes[endIdx] should not have Style.Table; got Style=%+v", boxes[endIdx].Style)
+	}
+}
+
 // TestLayoutNestedListViaSourceWhitespace pins the
 // Phase 3 round 7.x nesting model: each list item is its
 // own region (no nesting in the wire), all items have
