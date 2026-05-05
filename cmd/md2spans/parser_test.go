@@ -2289,6 +2289,21 @@ func TestParseTable_AlignmentInWireFormat(t *testing.T) {
 	}
 }
 
+// TestParseTable_DumpWire is a diagnostic test that
+// prints the full wire format md2spans produces for the
+// user's mixed-alignment table. Used to verify what the
+// consumer side actually receives during smoke testing.
+func TestParseTable_DumpWire(t *testing.T) {
+	src := "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+	spans := Parse(src)
+	wire := FormatSpans(spans, len([]rune(src)))
+	t.Logf("source (%d bytes):\n%s", len(src), src)
+	t.Logf("wire (%d bytes):\n%s", len(wire), wire)
+	for i, s := range spans {
+		t.Logf("span[%d]: %+v", i, s)
+	}
+}
+
 // TestParseTable_BodyRowCellAlignmentParams pins that
 // body rows' tablecell regions carry the same align=
 // param as the separator row dictated. A round 8.x
