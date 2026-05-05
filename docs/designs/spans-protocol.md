@@ -438,6 +438,22 @@ rendered width (2 × char-width) is what visually indents
 the inner item one ListIndentWidth deeper than `- a` and
 `- c`.
 
+Multi-line list item via continuation (round 7.y — single
+listitem region spanning the marker line plus indented
+continuation lines):
+```
+begin region listitem marker=-
+s 0 10 -                                              ; "- first\n  cont"
+end region
+```
+
+The `  ` indent on the continuation line satisfies
+content-column ≥ 2 (the column where `first` starts after
+`- `), so the line folds into the item rather than
+starting a new paragraph. Producers MUST indent
+continuation lines to the content column or deeper; lazy
+continuation (no indent) is not supported.
+
 ## Per-write ordering rules
 
 Within a single Twrite:
@@ -588,16 +604,21 @@ update this spec in lockstep:
   First nested region kind in production use; validates
   round-5 region machinery's claims about kind-vocabulary
   extension and ancestor-walk composition. See above.
-- **Round 7 — lists (per-item regions)**: ✓ v1 landed
+- **Round 7 — lists (per-item regions)**: ✓ landed
   (May 2026). Adds `listitem` to v1 region kinds. Carries
   per-region payload `marker=X` (unordered) or `number=N`
   (ordered) — the first kind with required per-instance
   params. Round 7 v1 covered column-0 single-line items;
   round 7.x added leading-whitespace nesting (2 spaces or
-  1 tab per level — matches the in-tree path). Items at
-  any depth are emitted as SIBLING regions; depth is
-  conveyed via source leading whitespace, not the wire.
-  Multi-line continuation deferred to round 7.y.
+  1 tab per level — matches the in-tree path); round 7.y
+  added indented-continuation lines (a non-list, non-blank
+  line indented to the active item's content column joins
+  the item, extending its region across multiple body
+  lines). Items at any depth are emitted as SIBLING
+  regions; depth is conveyed via source leading
+  whitespace, not the wire. Lazy continuation (non-
+  indented) is NOT supported; producers must indent
+  continuation lines.
 - **Round 8 — tables**: region with cells; frame-dimension
   introspection 9P file.
 
