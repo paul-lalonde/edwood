@@ -605,9 +605,16 @@ func xfidspanswrite(x *Xfid, w *Window) {
 	}
 
 	if isClear {
+		// Clear the stores but leave styled mode and the user's
+		// styledSuppressed choice alone. md2spans-style producers
+		// send `c\n` before every re-render; if `c` also exited
+		// styled mode, every keystroke would flicker plain ↔
+		// styled as the clear and the subsequent chunk Twrite
+		// arrive in sequence. The follow-on chunks repopulate
+		// the stores; styled rendering picks them up without a
+		// mode transition. (Plain mode is reached via the Plain
+		// builtin, which calls exitStyledMode directly.)
 		w.clearSpansAndRegions()
-		w.exitStyledMode()
-		w.styledSuppressed = false // spans are gone; reset suppression
 		fc.Count = x.fcall.Count
 		x.respond(&fc, nil)
 		return

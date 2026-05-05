@@ -2540,9 +2540,30 @@ func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*R
 			w.regionStore = NewRegionStore()
 		}
 		for _, r := range regions {
-			w.regionStore.Add(r)
+			if err := tryAddRegion(w.regionStore, r); err != nil {
+				// A producer bug landed a partially-overlapping
+				// region. Log to +Errors and skip it so the
+				// editor stays usable; the next re-render from
+				// the producer typically clears and replaces
+				// state, recovering on its own.
+				warning(nil, "spans: %v\n", err)
+			}
 		}
 	}
+}
+
+// tryAddRegion calls regionStore.Add and converts any panic
+// (the only error condition; partial overlap with an existing
+// region) into a returned error. Used by applyParsedSpans so
+// that a producer bug doesn't take down the whole session.
+func tryAddRegion(s *RegionStore, r *Region) (err error) {
+	defer func() {
+		if x := recover(); x != nil {
+			err = fmt.Errorf("%v", x)
+		}
+	}()
+	s.Add(r)
+	return nil
 }
 
 // clearSpansAndRegions empties both the spanStore and the
