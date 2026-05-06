@@ -120,9 +120,12 @@ type Style struct {
     Bold, Italic, Code, Link bool
     Scale float64
     Image bool
+    // + ~15 more fields added during Phase 3:
+    //   Table*, Blockquote*, List*, HRule,
+    //   ImageBelow, FixedBox, ParaBreak, …
 }
 type Span struct {
-    Text string
+    Text  string
     Style Style
 }
 type Content []Span
@@ -328,7 +331,7 @@ S<q0> <q1> 0 0
 ---
 ---
 
-[Slide-](:/^# Slide 13: The edcolor Tool) | [Slide+](:/^# Slide 15: Related Work & Architecture Comparison) | [Index](:/^# Index)
+[Slide-](:/^# Slide 13: The edcolor Tool) | [Slide+](:/^# Slide 15: Externalizing Markdown via Spans) | [Index](:/^# Index)
 
 # Slide 14: edcolor Color Scheme
 
@@ -355,9 +358,48 @@ Chunked writes stay within 9P message limits (4000 bytes per chunk)
 ---
 ---
 
-[Slide-](:/^# Slide 14: edcolor Color Scheme) | [Slide+](:/^# Slide 16: Conclusion & Future Work) | [Index](:/^# Index)
+[Slide-](:/^# Slide 14: edcolor Color Scheme) | [Slide+](:/^# Slide 16: Related Work & Architecture Comparison) | [Index](:/^# Index)
 
-# Slide 15: Related Work & Architecture Comparison
+# Slide 15: Externalizing Markdown via Spans
+
+## What it took to make `md2spans` whole
+
+### One conceptual leap: regions
+
+Per-rune `s` directives are flat. Markdown is hierarchical — cells inside rows inside tables, lists inside blockquotes. Add nestable, parameterized region pairs:
+
+```
+begin region tablecell align=center
+s 42 5 - family=code
+end region
+```
+
+**Kinds added:** `code`, `blockquote`, `listitem`,
+`table`, `tablerow`, `tablecell`
+**Per-kind params:** `align=`, `marker=`, `number=`, `header=`, `depth=`
+
+### One mechanical addition: the `b` directive
+
+Replaced elements (images, fixed rectangles) need explicit pixel dimensions:
+
+```
+b 12 35 800 600 - placement=below image:edwood.png
+```
+
+`placement=below`: source `![alt](url ...)` stays visible **as text**; the image paints below the line. Rendered runes still equal source runes — no source-map needed.
+
+### What it unlocks
+
+- `.md` files auto-launch `md2spans` (file-hook, like `edcolor` does for `.go`)
+- Headings, nested blockquotes, nested lists, tables with column-width alignment, inline + below-line images — all expressible via the wire protocol
+- The internal `markdown/` package shrinks toward deletion
+
+---
+---
+
+[Slide-](:/^# Slide 15: Externalizing Markdown via Spans) | [Slide+](:/^# Slide 17: Future Work: B3spans) | [Index](:/^# Index)
+
+# Slide 16: Related Work & Architecture Comparison
 
 ## Where Does edwood Fit?
 
@@ -380,9 +422,36 @@ Chunked writes stay within 9P message limits (4000 bytes per chunk)
 ---
 ---
 
-[Slide-](:/^# Slide 15: Related Work & Architecture Comparison) | [Index](:/^# Index)
+[Slide-](:/^# Slide 16: Related Work & Architecture Comparison) | [Slide+](:/^# Slide 18: Conclusion) | [Index](:/^# Index)
 
-# Slide 16: Conclusion & Future Work
+# Slide 17: Future Work: B3spans
+
+## Externalize the B3-click expansion heuristic
+
+### Today
+edwood has a fixed in-tree heuristic for what B3 expands to: filename → word → line.
+
+### Tomorrow
+An external tool publishes a `b3spans` file marking ranges with custom expansion behaviors.
+
+- `md2spans` marks **table cells** → B3 selects the whole cell
+- `md2spans` marks **blockquote** ranges → B3 selects the whole quote
+- Language tools could mark identifiers → jump-to-definition
+
+### Hybrid for performance
+Only ranges explicitly marked in `b3spans` route through the external tool. Unmarked B3 clicks stay on the fast in-tree path. The same architecture pattern that worked for span coloring should work for span semantics.
+
+### Smaller directions
+- Expose canvas / framebuffer for helper tools
+- Add scope-name field for editor-based theming (vs. concrete colors)
+- Extend `edcolor` to additional languages
+
+---
+---
+
+[Slide-](:/^# Slide 17: Future Work: B3spans) | [Index](:/^# Index)
+
+# Slide 18: Conclusion
 
 ## Bringing Rich Text to Acme
 
@@ -396,23 +465,8 @@ Chunked writes stay within 9P message limits (4000 bytes per chunk)
 ### The Philosophy Preserved
 Just as external programs read `event` and write `ctl`, they now write `spans` to control presentation.
 
-### Future Direction: B3spans
-Externalize the B3-click expansion heuristic the same way `spans` externalized colors.
-
-- Today: edwood has a fixed heuristic for what B3 expands to (filename → word → line)
-- Tomorrow: an external tool publishes a `b3spans` file marking ranges with custom expansion behaviors
-  - md2spans marks **table cells** so B3 selects the whole cell
-  - md2spans marks **blockquote** ranges so B3 selects the whole quote
-  - Potentially: language tools mark identifiers for jump-to-definition
-- **Hybrid for performance:** only marked ranges route through the external tool; unmarked B3 clicks stay on the fast in-tree path
-
-### Other Directions
-- Expose canvas/framebuffer for helper tools
-- Add scope-name field for editor-based theming
-- Extend `edcolor` to additional languages
-
 ### Implementation Notes
-- 53,000 lines of tests, 17,000 lines of implementation
+- ~70,000 lines of tests, ~27,000 lines of implementation — added since forking from `rjkroege/edwood` (2.6× tests-to-impl)
 - "The tests capture interaction decisions; the code has little intrinsic value."
 - Available at author's edwood fork
 
@@ -439,5 +493,7 @@ Externalize the B3-click expansion heuristic the same way `spans` externalized c
 12. [Slide 12: The S Selection Event](:/^# Slide 12: The S Selection Event)
 13. [Slide 13: The edcolor Tool](:/^# Slide 13: The edcolor Tool)
 14. [Slide 14: edcolor Color Scheme](:/^# Slide 14: edcolor Color Scheme)
-15. [Slide 15: Related Work & Architecture Comparison](:/^# Slide 15: Related Work & Architecture Comparison)
-16. [Slide 16: Conclusion & Future Work](:/^# Slide 16: Conclusion & Future Work)
+15. [Slide 15: Externalizing Markdown via Spans](:/^# Slide 15: Externalizing Markdown via Spans)
+16. [Slide 16: Related Work & Architecture Comparison](:/^# Slide 16: Related Work & Architecture Comparison)
+17. [Slide 17: Future Work: B3spans](:/^# Slide 17: Future Work: B3spans)
+18. [Slide 18: Conclusion](:/^# Slide 18: Conclusion)
