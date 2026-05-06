@@ -2468,6 +2468,17 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 			if !isCurrentMode() || w.richBody == nil {
 				return
 			}
+			// Invalidate the layout cache before redrawing.
+			// The cached layout was built when this image's
+			// ImageData had Width=Height=0 (still loading);
+			// the line therefore got no extra height and no
+			// ImageBelow ghost line was inserted. A bare
+			// Render reuses the cached layout, so the now-
+			// loaded image never paints. Flipping
+			// layoutDirty makes the next paint run a fresh
+			// layout pass that picks up the loaded
+			// dimensions and inserts the ghost.
+			w.richBody.Frame().InvalidateLayout()
 			w.richBody.Render(w.body.all)
 			if w.display != nil {
 				w.display.Flush()

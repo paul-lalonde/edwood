@@ -37,6 +37,19 @@ type Frame interface {
 	// Content
 	SetContent(c Content)
 
+	// InvalidateLayout marks the cached layout as stale so the
+	// next paint runs a fresh layout pass. SetContent and
+	// SetRect (with a width change) already do this; call
+	// InvalidateLayout when something OUTSIDE the content/rect
+	// changes layout-relevant state — most notably when an
+	// async image load completes and a previously-zero-sized
+	// image now has dimensions that should expand its
+	// containing line and insert an ImageBelow ghost line.
+	// Without this, the layout cache holds the pre-load
+	// dimensions and Redraw paints the now-loaded image to a
+	// line that has no room for it.
+	InvalidateLayout()
+
 	// Geometry
 	Rect() image.Rectangle
 	SetRect(r image.Rectangle)   // Update the frame's rectangle
@@ -326,6 +339,12 @@ func (f *frameImpl) Clear() {
 // SetContent sets the content to display.
 func (f *frameImpl) SetContent(c Content) {
 	f.content = c
+	f.layoutDirty = true
+}
+
+// InvalidateLayout marks the layout cache as stale. See the
+// Frame interface godoc for when callers should use this.
+func (f *frameImpl) InvalidateLayout() {
 	f.layoutDirty = true
 }
 
