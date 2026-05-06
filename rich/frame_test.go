@@ -4648,6 +4648,40 @@ func TestLayoutCacheInvalidateOnContentChange(t *testing.T) {
 	}
 }
 
+// TestInvalidateLayoutForcesRelayout verifies that calling
+// InvalidateLayout drops the layout cache so the next paint
+// runs a fresh pass. This is the seam the onImageLoaded
+// callback uses: when an async image load completes, the
+// cached layout was computed with zero-sized image data and
+// must be discarded so the load's now-known dimensions
+// expand the line and insert an ImageBelow ghost.
+func TestInvalidateLayoutForcesRelayout(t *testing.T) {
+	fi := newTestFrame(t, 200, 300, Plain("hello world"))
+
+	if got := fi.ensureBaseLayout(); got == nil {
+		t.Fatal("first ensureBaseLayout returned nil")
+	}
+	cached1 := cachedFirstLine(fi)
+	if cached1 == nil {
+		t.Fatal("cache empty after first ensureBaseLayout")
+	}
+
+	fi.InvalidateLayout()
+
+	if !fi.layoutDirty {
+		t.Error("layoutDirty should be true after InvalidateLayout")
+	}
+
+	if got := fi.ensureBaseLayout(); got == nil {
+		t.Fatal("second ensureBaseLayout returned nil")
+	}
+	cached2 := cachedFirstLine(fi)
+
+	if cached1 != nil && cached2 != nil && cached1 == cached2 {
+		t.Error("ensureBaseLayout should recompute after InvalidateLayout (cache pointer should differ)")
+	}
+}
+
 // TestLayoutCacheInvalidateOnResize verifies that SetRect with a different
 // width invalidates the cache.
 func TestLayoutCacheInvalidateOnResize(t *testing.T) {
