@@ -2345,3 +2345,77 @@ func TestScrollClickB3ThenB1RoundTripPastTallImage(t *testing.T) {
 		t.Errorf("After holding B1 back: origin=%d offset=%d, want 0/0", rt.Origin(), rt.GetOriginYOffset())
 	}
 }
+
+// TestPushBackPastGhost pins the encoding fix that lets
+// (origin, yOffset) state distinguish "top of ImageBelow
+// ghost" from "top of post-ghost text line" when both
+// share the same start rune. Without the push-back, a
+// scroll lands at (sharedStart, 0) for either position
+// and the read-back is ambiguous.
+func TestPushBackPastGhost(t *testing.T) {
+	// Layout shape:
+	//   line 0: host  (lineStart=0,  height=14)
+	//   line 1: ghost (lineStart=39, height=1290)   ← shares 39 with line 2
+	//   line 2: text2 (lineStart=39, height=14)
+	//   line 3: text3 (lineStart=49, height=14)
+	lineStarts := []int{0, 39, 39, 49}
+	lineHeights := []int{14, 1290, 14, 14}
+
+	tests := []struct {
+		name       string
+		inLine     int
+		inOff      int
+		wantLine   int
+		wantOffset int
+	}{
+		{"top of host (no push-back)", 0, 0, 0, 0},
+		{"top of ghost (no push-back; previous line's start differs)", 1, 0, 1, 0},
+		{"top of text2 (push back to ghost full height)", 2, 0, 1, 1290},
+		// Non-zero offset on a shared-lineStart line: push back to
+		// (ghostLine, ghostHeight + offset) so the cumulative pixel
+		// position survives the round-trip even when snapOffset
+		// would otherwise clobber the offset to 0 on a short line.
+		// This was the wheel-bounce repro: scrolling past the image
+		// landed at (text2, 13), then snap to (text2, 0), then
+		// findLineForOrigin read back as ghost — collapsing pixelY.
+		{"non-zero offset on post-ghost line (push with offset)", 2, 13, 1, 1303},
+		{"top of text3 (no push-back; lineStarts differ)", 3, 0, 3, 0},
+		{"non-zero offset on text3 (no push-back; lineStarts differ)", 3, 5, 3, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLine, gotOffset := pushBackPastGhost(tt.inLine, tt.inOff, lineStarts, lineHeights)
+			if gotLine != tt.wantLine || gotOffset != tt.wantOffset {
+				t.Errorf("pushBackPastGhost(%d, %d) = (%d, %d), want (%d, %d)",
+					tt.inLine, tt.inOff, gotLine, gotOffset, tt.wantLine, tt.wantOffset)
+			}
+		})
+	}
+}
+
+// TestFindLineForOriginPrefersEarliest pins the read-back
+// fix: when multiple lines share the same start rune
+// (host + ghost), findLineForOrigin must return the
+// EARLIEST so the ghost remains addressable as the
+// origin line.
+func TestFindLineForOriginPrefersEarliest(t *testing.T) {
+	lineStarts := []int{0, 39, 39, 49}
+	tests := []struct {
+		origin int
+		want   int
+	}{
+		{0, 0},
+		{38, 0},
+		{39, 1}, // shared start: prefer earliest (ghost)
+		{45, 1}, // still in shared-start zone (origin is between starts)
+		{48, 1},
+		{49, 3},
+		{100, 3}, // past content
+	}
+	for _, tt := range tests {
+		got := findLineForOrigin(tt.origin, lineStarts)
+		if got != tt.want {
+			t.Errorf("findLineForOrigin(%d) = %d, want %d", tt.origin, got, tt.want)
+		}
+	}
+}

@@ -175,6 +175,15 @@ func (m *richScrollModel) scrollByClickY(button, clickY int) int {
 	} else {
 		newLine, newOffset = lineAtDocY(targetTopDocY, lineYs, lineHeights)
 	}
+	// Push back past ImageBelow ghosts: a click that lands at
+	// (postGhostLine, 0) shares its lineStart with the ghost
+	// and would round-trip via findLineForOrigin to the
+	// ghost's currentTopDocY. The next click would then
+	// compute the same target → no advance ("stall"). Re-
+	// encode as (ghost, ghost.Height) so the state stays
+	// distinguishable; layoutFromOrigin's clamp advances back
+	// to the post-ghost line at render time.
+	newLine, newOffset = pushBackPastGhost(newLine, newOffset, lineStarts, lineHeights)
 	newOffset = snapOffset(newLine, newOffset, fontH, lineHeights)
 
 	newOrigin := lineStarts[newLine]

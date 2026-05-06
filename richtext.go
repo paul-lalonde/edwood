@@ -583,17 +583,54 @@ func lineOffsetToPixel(lineIdx, offset int, lineHeights []int) int {
 	return total + offset
 }
 
-// findLineForOrigin returns the line index corresponding to the given rune origin.
+// findLineForOrigin returns the line index corresponding to the given rune
+// origin. Prefers the EARLIEST line whose start equals origin — required
+// for ImageBelow ghost lines (Phase 3 round 9), which share their start
+// rune with the line that follows them. Returning the latest match would
+// silently skip the ghost during scroll-state read-back, leaving the
+// pixel ↔ rune round-trip lossy.
 func findLineForOrigin(origin int, lineStarts []int) int {
 	line := 0
 	for i, start := range lineStarts {
-		if origin >= start {
-			line = i
-		} else {
+		if start > origin {
 			break
+		}
+		// Prefer the first match: only update when we have a strictly
+		// later start than the previously-recorded line's start. This
+		// stops at the FIRST line whose start <= origin and stays there
+		// across subsequent lines that share the same start.
+		if i == 0 || start > lineStarts[line] {
+			line = i
 		}
 	}
 	return line
+}
+
+// pushBackPastGhost re-encodes a (lineIdx, offset) result that lands on a
+// line sharing its start rune with the previous line — i.e., immediately
+// after an ImageBelow ghost. We re-express it as
+// (lineIdx-1, lineHeights[lineIdx-1] + offset) so the cumulative pixel
+// position is preserved AND the (origin, yOffset) state is distinguishable
+// from "inside the ghost" (which has yOffset < ghost.Height).
+// layoutFromOrigin's clamp loop then advances back to the post-ghost line
+// with yOffset = offset at render time.
+//
+// We push back for ANY offset (not only offset==0): if the offset is
+// non-zero on a short line, snapOffset will round it to 0 in the caller,
+// giving (sharedStart, 0) which round-trips via findLineForOrigin to "top
+// of ghost" — wrong. Encoding via the ghost preserves the pixel position
+// and dodges the snap (the ghost's height is much greater than 2*fontH).
+func pushBackPastGhost(lineIdx, offset int, lineStarts, lineHeights []int) (int, int) {
+	if lineIdx == 0 {
+		return lineIdx, offset
+	}
+	if lineIdx >= len(lineStarts) || lineIdx-1 >= len(lineHeights) {
+		return lineIdx, offset
+	}
+	if lineStarts[lineIdx] != lineStarts[lineIdx-1] {
+		return lineIdx, offset
+	}
+	return lineIdx - 1, lineHeights[lineIdx-1] + offset
 }
 
 // snapOffset snaps the pixel offset to 0 for short lines (height <= 2*fontH),
@@ -664,6 +701,7 @@ func (rt *RichText) ScrollToPixelY(pixelY int) int {
 	}
 
 	newLine, newOffset := pixelToLineOffset(pixelY, lineHeights)
+	newLine, newOffset = pushBackPastGhost(newLine, newOffset, lineStarts, lineHeights)
 
 	// Snap to line boundary for short lines
 	fontH := rt.frame.DefaultFontHeight()
@@ -743,6 +781,7 @@ func (rt *RichText) ScrollWheel(up bool) int {
 	}
 
 	newLine, newOffset := pixelToLineOffset(newPixelY, lineHeights)
+	newLine, newOffset = pushBackPastGhost(newLine, newOffset, lineStarts, lineHeights)
 
 	// Snap to line boundary on short lines (preserves line-based feel for text)
 	fontH := rt.frame.DefaultFontHeight()

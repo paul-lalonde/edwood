@@ -411,6 +411,24 @@ type Line struct {
 	Y            int             // Y position of the line (top)
 	Height       int             // Height of this line (max font height of boxes)
 	ContentWidth int             // Actual pixel width of content (may exceed frameWidth for non-wrapping blocks; 0 for normal text)
+
+	// IsImageBelowGhost marks a synthetic line that exists
+	// solely to host an ImageBelow image as its own block-level
+	// region for horizontal scrolling. The ghost has no Boxes
+	// (no source runes); the actual image is painted from
+	// ImageBelowBoxes (copied from the host's ImageBelow boxes
+	// at insertion time), anchored at this ghost's Y.
+	// ContentWidth is the image's natural width so the
+	// BlockImage region builder fires a scrollbar when the
+	// image exceeds the frame width.
+	IsImageBelowGhost bool
+
+	// ImageBelowBoxes holds copies of the host line's
+	// ImageBelow boxes so the painter can render the image
+	// even when the host line is no longer in the visible-line
+	// subset (e.g., scrolled off the top with the ghost still
+	// on-screen). Only populated when IsImageBelowGhost is true.
+	ImageBelowBoxes []PositionedBox
 }
 
 // PositionedBox is a Box with its computed screen position.
@@ -513,6 +531,13 @@ type SlideRegion struct {
 // findSlideRegions scans layout lines for consecutive HRule pairs.
 // Returns regions where the first line has HRule=true (without SlideBreak)
 // and a subsequent line has HRule=true && SlideBreak=true.
+//
+// Phase 3 round 9 invariant: ImageBelow ghost lines never appear between
+// HRule lines in a slide pair. Ghosts are inserted only immediately after
+// their host line (which has the ImageBelow image boxes), and an HRule
+// line never has ImageBelow boxes — so a ghost cannot interrupt slide
+// detection. The newline-only-line skip below already passes over ghosts
+// (their `len(Boxes)==0`, not 1) without confusing the scan.
 func findSlideRegions(lines []Line) []SlideRegion {
 	var regions []SlideRegion
 
@@ -589,10 +614,15 @@ func adjustLayoutForSlides(lines []Line, regions []SlideRegion, frameHeight int)
 }
 
 // blockLeftIndent returns the X position of the first block-styled box on the
-// given line, which is the left indent of the block content area. ImageBelow
-// boxes (Phase 3 round 4) are NOT block-level — they flow inline alongside
-// text — so they don't establish a block left indent.
+// given line, which is the left indent of the block content area.
+//
+// Ghost lines hosting ImageBelow images return 0 — the image paints at the
+// frame's left edge, so the scrollbar should span the full frame width
+// without a text-indent gutter.
 func blockLeftIndent(line *Line) int {
+	if line.IsImageBelowGhost {
+		return 0
+	}
 	for _, pb := range line.Boxes {
 		if pb.Box.Style.Block || pb.Box.Style.Table || (pb.Box.IsImage() && !pb.Box.Style.ImageBelow) {
 			return pb.X
@@ -722,7 +752,15 @@ func findBlockRegions(lines []Line) []BlockRegion {
 // normal text. A line is considered a block element if any of its boxes
 // (including newlines) have a block style. This ensures blank lines within
 // code blocks are included in block regions.
+//
+// Ghost lines (IsImageBelowGhost) are BlockImage by construction even
+// though they carry no boxes — they exist precisely to give a wide
+// ImageBelow image its own scrollable region without disturbing the
+// preceding source-marker line.
 func lineBlockKind(line *Line) (BlockKind, bool) {
+	if line.IsImageBelowGhost {
+		return BlockImage, true
+	}
 	for _, pb := range line.Boxes {
 		// Don't skip newlines - blank lines in code blocks only have a newline
 		// box but should still be considered part of the code block region.
@@ -732,9 +770,9 @@ func lineBlockKind(line *Line) (BlockKind, bool) {
 		if pb.Box.Style.Table {
 			return BlockTable, true
 		}
-		// ImageBelow boxes (Phase 3 round 4) are not block-level —
-		// they flow inline; only inline-replacing images participate
-		// in block-region scrolling.
+		// ImageBelow boxes are not block-level on their host line —
+		// they flow inline; the ghost line that follows handles their
+		// horizontal-scroll region.
 		if pb.Box.IsImage() && !pb.Box.Style.ImageBelow {
 			return BlockImage, true
 		}
@@ -1081,7 +1119,65 @@ func layout(boxes []Box, font draw.Font, frameWidth, maxtab int, fontHeightFn Fo
 		}
 	}
 
+	lines = insertImageBelowGhosts(lines, frameWidth)
+
 	return lines
+}
+
+// insertImageBelowGhosts walks layout lines and, for each line
+// that paints one or more ImageBelow images below its text,
+// adjusts the line's Height to drop the image portion and
+// inserts a ghost Line right after that hosts the image as its
+// own BlockImage region. The ghost's ContentWidth is the
+// widest image's natural width — a wide image now drives a
+// horizontal scrollbar that scrolls only the image, leaving
+// the source-marker text on the preceding line undisturbed.
+//
+// Phase 3 round 9.
+func insertImageBelowGhosts(lines []Line, frameWidth int) []Line {
+	out := make([]Line, 0, len(lines))
+	for i := range lines {
+		out = append(out, lines[i])
+
+		var imgsHeight, maxImgWidth int
+		var belowBoxes []PositionedBox
+		for _, pb := range lines[i].Boxes {
+			if !pb.Box.Style.Image || !pb.Box.Style.ImageBelow {
+				continue
+			}
+			w, h := imageBoxDimensions(&pb.Box, frameWidth)
+			imgsHeight += h
+			if w > maxImgWidth {
+				maxImgWidth = w
+			}
+			belowBoxes = append(belowBoxes, pb)
+		}
+		if imgsHeight == 0 {
+			continue
+		}
+
+		srcIdx := len(out) - 1
+		// The host line's Height previously included the
+		// ImageBelow image heights so subsequent lines start
+		// past the painted image. Now the ghost owns the image
+		// portion; reduce the host to just text height so the
+		// host + ghost together still occupy the same vertical
+		// space (preserving subsequent line Y positions).
+		textHeight := out[srcIdx].Height - imgsHeight
+		if textHeight < 0 {
+			textHeight = 0
+		}
+		out[srcIdx].Height = textHeight
+
+		out = append(out, Line{
+			Y:                 out[srcIdx].Y + textHeight,
+			Height:            imgsHeight,
+			ContentWidth:      maxImgWidth,
+			IsImageBelowGhost: true,
+			ImageBelowBoxes:   belowBoxes,
+		})
+	}
+	return out
 }
 
 // splitBoxAcrossLines splits a text box that's too wide to fit on a single line.

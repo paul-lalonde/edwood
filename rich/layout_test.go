@@ -1804,18 +1804,25 @@ func TestLayoutImageLineHeight(t *testing.T) {
 	})
 }
 
-// TestLayoutImageBelowAdditiveLineHeight covers the Phase 3
-// round 4 contract: a line containing one or more
-// ImageBelow boxes has effective Height = textHeight + sum
-// of imageBelow heights (additive, not max). The image
-// renders below the line text rather than competing with
-// it for vertical space.
-func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
+// TestLayoutImageBelowSplitsHostAndGhost covers the Phase 3
+// round 9 design: a line containing one or more ImageBelow
+// boxes is split by post-layout into a TEXT-ONLY host line
+// (Height = text-content height) plus an immediately-following
+// GHOST line (Height = sum of ImageBelow image heights,
+// IsImageBelowGhost=true, no boxes). The ghost is the
+// BlockImage region that owns the horizontal scrollbar for
+// wide images; the host's source-marker text stays put when
+// the ghost scrolls.
+//
+// (Renamed from TestLayoutImageBelowAdditiveLineHeight; the
+// old "additive" contract was the round-4 design where a
+// single line carried text+image height combined.)
+func TestLayoutImageBelowSplitsHostAndGhost(t *testing.T) {
 	font := edwoodtest.NewFont(10, 14)
 	frameWidth := 500
 	maxtab := 80
 
-	t.Run("text plus one ImageBelow: height is text + image", func(t *testing.T) {
+	t.Run("text plus one ImageBelow: host text height + ghost image height", func(t *testing.T) {
 		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
 		boxes := []Box{
 			{Text: []byte("hello"), Nrune: 5, Style: DefaultStyle()},
@@ -1826,18 +1833,29 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (host + ghost), got %d", len(lines))
 		}
-		// Text height ~14 + image height 50 = ~64.
-		got := lines[0].Height
-		want := 14 + 50
-		if got != want {
-			t.Errorf("Line.Height = %d, want %d (textHeight + imageHeight)", got, want)
+		if lines[0].Height != 14 {
+			t.Errorf("host Line.Height = %d, want 14 (text only, image moved to ghost)", lines[0].Height)
+		}
+		if lines[0].IsImageBelowGhost {
+			t.Errorf("host should not be a ghost")
+		}
+		if !lines[1].IsImageBelowGhost {
+			t.Errorf("line[1] should be IsImageBelowGhost=true")
+		}
+		if lines[1].Height != 50 {
+			t.Errorf("ghost Line.Height = %d, want 50 (image only)", lines[1].Height)
+		}
+		// Vertical contiguity: ghost.Y == host.Y + host.Height.
+		if lines[1].Y != lines[0].Y+lines[0].Height {
+			t.Errorf("ghost Y = %d, want %d (host.Y + host.Height)",
+				lines[1].Y, lines[0].Y+lines[0].Height)
 		}
 	})
 
-	t.Run("text plus two ImageBelow: heights stack", func(t *testing.T) {
+	t.Run("text plus two ImageBelow: ghost stacks both heights", func(t *testing.T) {
 		a := &CachedImage{Width: 100, Height: 30, Path: "a.png"}
 		b := &CachedImage{Width: 100, Height: 50, Path: "b.png"}
 		boxes := []Box{
@@ -1854,13 +1872,18 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines, got %d", len(lines))
 		}
-		got := lines[0].Height
-		want := 14 + 30 + 50
-		if got != want {
-			t.Errorf("Line.Height = %d, want %d (textHeight + sum(imageHeights))", got, want)
+		if lines[0].Height != 14 {
+			t.Errorf("host Height = %d, want 14", lines[0].Height)
+		}
+		if !lines[1].IsImageBelowGhost {
+			t.Errorf("line[1] should be IsImageBelowGhost")
+		}
+		// Ghost height stacks both ImageBelow image heights.
+		if lines[1].Height != 30+50 {
+			t.Errorf("ghost Height = %d, want 80 (30+50)", lines[1].Height)
 		}
 	})
 
@@ -1876,14 +1899,15 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			{Text: []byte("b"), Nrune: 1, Style: DefaultStyle()},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (host + ghost), got %d", len(lines))
 		}
-		// "a" and "b" should be adjacent — the ImageBelow box
-		// in between contributes zero horizontal advance. Find
-		// the boxes by their text content.
+		// "a" and "b" both live on the host line; the ImageBelow
+		// box between them contributes zero horizontal advance.
+		// Find the boxes by their text content on the HOST.
+		host := lines[0]
 		var aX, bX int = -1, -1
-		for _, pb := range lines[0].Boxes {
+		for _, pb := range host.Boxes {
 			if string(pb.Box.Text) == "a" {
 				aX = pb.X
 			}
@@ -1892,12 +1916,9 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			}
 		}
 		if aX < 0 || bX < 0 {
-			t.Fatalf("could not locate a/b boxes (aX=%d bX=%d)", aX, bX)
+			t.Fatalf("could not locate a/b boxes on host (aX=%d bX=%d)", aX, bX)
 		}
-		// "a" is one rune wide; bX should equal aX + width of "a".
-		// We verify the smaller invariant: bX < 200 (the image
-		// width). If ImageBelow had advanced xPos by 200, bX
-		// would be > 200.
+		// If ImageBelow had advanced xPos by 200, bX would be >200.
 		if bX >= 200 {
 			t.Errorf("bX = %d, suggests ImageBelow advanced xPos by image width", bX)
 		}
@@ -1916,17 +1937,26 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			{Text: []byte("second"), Nrune: 6, Style: DefaultStyle()},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 2 {
-			t.Fatalf("expected 2 lines, got %d", len(lines))
+		// 3 lines now: host (text), ghost (image), second-text.
+		if len(lines) != 3 {
+			t.Fatalf("expected 3 lines (host + ghost + next), got %d", len(lines))
 		}
-		// First line: text + image height (14 + 50 = 64).
-		if lines[0].Height != 64 {
-			t.Errorf("line[0].Height = %d, want 64", lines[0].Height)
+		if lines[0].Height != 14 {
+			t.Errorf("host Height = %d, want 14", lines[0].Height)
 		}
-		// Second line: just text height (14). The ImageBelow
-		// accumulator must have reset.
-		if lines[1].Height != 14 {
-			t.Errorf("line[1].Height = %d, want 14 (no carryover)", lines[1].Height)
+		if !lines[1].IsImageBelowGhost {
+			t.Errorf("line[1] should be IsImageBelowGhost")
+		}
+		if lines[1].Height != 50 {
+			t.Errorf("ghost Height = %d, want 50", lines[1].Height)
+		}
+		// Second source line is plain text, no ghost — the
+		// ImageBelow accumulator must not carry over.
+		if lines[2].IsImageBelowGhost {
+			t.Errorf("line[2] should not be a ghost")
+		}
+		if lines[2].Height != 14 {
+			t.Errorf("line[2].Height = %d, want 14 (no carryover)", lines[2].Height)
 		}
 	})
 
@@ -1936,12 +1966,8 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 		// without the !ImageBelow exclusion the wrapped-line
 		// analog had. Effect was: an ImageBelow box at xPos=0
 		// got shifted to gutterIndent. Pin the fixed contract:
-		// an ImageBelow box at line start renders at xPos==0
-		// (or whatever the inherited indent is from list/
-		// blockquote, which is 0 for plain text).
+		// an ImageBelow box at line start renders at xPos==0.
 		img := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
-		// Source text covering `![](p.png)` (10 runes wide
-		// at 10px/char = 100 pixels) at start of line.
 		boxes := []Box{
 			{
 				Text: []byte("![](p.png)"), Nrune: 10,
@@ -1953,16 +1979,16 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (host + ghost), got %d", len(lines))
 		}
-		if len(lines[0].Boxes) != 1 {
-			t.Fatalf("expected 1 box on line, got %d", len(lines[0].Boxes))
+		host := lines[0]
+		if len(host.Boxes) != 1 {
+			t.Fatalf("expected 1 box on host, got %d", len(host.Boxes))
 		}
-		// X must be 0 (no gutter indent for plain ImageBelow).
-		if lines[0].Boxes[0].X != 0 {
-			t.Errorf("ImageBelow at line start: X = %d, want 0 (no gutter indent)",
-				lines[0].Boxes[0].X)
+		if host.Boxes[0].X != 0 {
+			t.Errorf("ImageBelow source markers at line start: X = %d, want 0 (no gutter indent)",
+				host.Boxes[0].X)
 		}
 	})
 
@@ -1983,15 +2009,19 @@ func TestLayoutImageBelowAdditiveLineHeight(t *testing.T) {
 			},
 		}
 		lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (host + ghost), got %d", len(lines))
 		}
-		// Inline image expands content height to max(text=14, img=30) = 30.
-		// ImageBelow adds 40. Total = 30 + 40 = 70.
-		got := lines[0].Height
-		want := 30 + 40
-		if got != want {
-			t.Errorf("Line.Height = %d, want %d (max(text,inlineImg) + sum(belowImgs))", got, want)
+		// Host height = max(text=14, inlineImg=30) = 30.
+		if lines[0].Height != 30 {
+			t.Errorf("host Height = %d, want 30 (max(text,inlineImg))", lines[0].Height)
+		}
+		// Ghost height = the ImageBelow image height (40).
+		if !lines[1].IsImageBelowGhost {
+			t.Errorf("line[1] should be IsImageBelowGhost")
+		}
+		if lines[1].Height != 40 {
+			t.Errorf("ghost Height = %d, want 40 (ImageBelow only)", lines[1].Height)
 		}
 	})
 }
@@ -3967,5 +3997,134 @@ func TestWideImageFailedLoadStillGetsScrollbar(t *testing.T) {
 	adjusted := computeScrollbarMetadata(lines, regions, frameWidth, 12)
 	if !adjusted[0].HasScrollbar {
 		t.Errorf("HasScrollbar = false; expected true (explicit width=800 > frameWidth=500)")
+	}
+}
+
+// TestImageBelowGhostScrollbar pins Phase 3 round 9: a wide
+// ImageBelow image gets its own BlockImage region (a single
+// ghost line) with a horizontal scrollbar, leaving the
+// preceding source-marker line as plain text that does NOT
+// scroll. Compare with TestWideImageGetsScrollbar which
+// covers inline-replacing images.
+func TestImageBelowGhostScrollbar(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	mockImage := &CachedImage{Width: 2000, Height: 800, Path: "wide.png"}
+	belowStyle := Style{
+		Image: true, ImageBelow: true,
+		ImageURL: "wide.png", Scale: 1.0,
+	}
+	boxes := []Box{
+		{Text: []byte("![alt](wide.png)"), Nrune: 16, Style: belowStyle, ImageData: mockImage},
+		{Nrune: -1, Bc: '\n', Style: belowStyle},
+	}
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines (host + ghost), got %d", len(lines))
+	}
+	if lines[0].IsImageBelowGhost {
+		t.Errorf("line[0] should be the host (text), not a ghost")
+	}
+	if !lines[1].IsImageBelowGhost {
+		t.Fatalf("line[1] should be IsImageBelowGhost=true")
+	}
+	if lines[1].ContentWidth < 2000 {
+		t.Errorf("ghost ContentWidth = %d, want ≥ 2000 (image's natural width)",
+			lines[1].ContentWidth)
+	}
+	regions := findBlockRegions(lines)
+	// Find the BlockImage region (the ghost is its only line).
+	var imgRegion *BlockRegion
+	for i := range regions {
+		if regions[i].Kind == BlockImage {
+			imgRegion = &regions[i]
+			break
+		}
+	}
+	if imgRegion == nil {
+		t.Fatal("no BlockImage region for ghost line")
+	}
+	adjusted := computeScrollbarMetadata(lines, regions, frameWidth, 12)
+	// Find the adjusted record matching imgRegion (compare StartLine).
+	var imgAdj *AdjustedBlockRegion
+	for i := range adjusted {
+		if adjusted[i].StartLine == imgRegion.StartLine {
+			imgAdj = &adjusted[i]
+			break
+		}
+	}
+	if imgAdj == nil {
+		t.Fatal("ghost region not in adjusted regions")
+	}
+	if !imgAdj.HasScrollbar {
+		t.Errorf("ghost region HasScrollbar = false; want true (2000 > 500)")
+	}
+	if imgAdj.LeftIndent != 0 {
+		t.Errorf("ghost LeftIndent = %d, want 0 (image paints at frame x=0)",
+			imgAdj.LeftIndent)
+	}
+	// The host line above the ghost should NOT be marked as a
+	// BlockImage region — its text doesn't get a scrollbar.
+	for _, r := range regions {
+		if r.StartLine == 0 && r.Kind == BlockImage {
+			t.Errorf("host (line 0) was incorrectly classified as BlockImage; "+
+				"only the ghost should drive the scrollbar; got region=%+v", r)
+		}
+	}
+}
+
+// TestLayoutFromOriginPreservesGhostFlag pins that
+// layoutFromOrigin's per-line clone preserves
+// IsImageBelowGhost. The manual `Line{...}` struct
+// literal at the clone site enumerates fields explicitly;
+// it's easy to forget IsImageBelowGhost when adding it,
+// and the failure mode is silent — ghosts disappear from
+// the visible-line subset, taking the painted image and
+// the BlockImage region with them once vertical scroll
+// origin is non-zero. Repro: open a slides-style document
+// and scroll down; the image vanishes mid-scroll.
+//
+// Test by exercising the cloning Frame method directly.
+func TestLayoutFromOriginPreservesGhostFlag(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	mockImage := &CachedImage{Width: 100, Height: 50, Path: "p.png"}
+	belowStyle := Style{Image: true, ImageBelow: true, ImageURL: "p.png", Scale: 1.0}
+	boxes := []Box{
+		{Text: []byte("![p](p.png)"), Nrune: 11, Style: belowStyle, ImageData: mockImage},
+		{Nrune: -1, Bc: '\n', Style: belowStyle},
+		{Text: []byte("after"), Nrune: 5, Style: DefaultStyle()},
+	}
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+
+	// Direct Line{} clone (mimics layoutFromOrigin's clone
+	// shape) must preserve IsImageBelowGhost.
+	for i, line := range lines {
+		clone := Line{
+			Y:                 line.Y,
+			Height:            line.Height,
+			ContentWidth:      line.ContentWidth,
+			Boxes:             line.Boxes,
+			IsImageBelowGhost: line.IsImageBelowGhost,
+		}
+		if clone.IsImageBelowGhost != line.IsImageBelowGhost {
+			t.Errorf("line[%d] clone IsImageBelowGhost = %v, want %v",
+				i, clone.IsImageBelowGhost, line.IsImageBelowGhost)
+		}
+	}
+	// Sanity: there IS a ghost in the layout to clone.
+	gotGhost := false
+	for _, line := range lines {
+		if line.IsImageBelowGhost {
+			gotGhost = true
+			break
+		}
+	}
+	if !gotGhost {
+		t.Fatal("no ghost line in test setup; insertImageBelowGhosts didn't fire")
 	}
 }

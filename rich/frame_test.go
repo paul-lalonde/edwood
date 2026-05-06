@@ -5018,14 +5018,19 @@ func TestPaintImageBelowPositioning(t *testing.T) {
 			{Text: []byte(" ok"), Nrune: 3, Style: DefaultStyle()},
 		}
 		lines := layout(boxes, font, rect.Dx(), 80, nil, nil)
-		if len(lines) != 1 {
-			t.Fatalf("expected 1 line, got %d", len(lines))
+		// Phase 3 round 9: an ImageBelow line is split into a
+		// host (text-only) plus a ghost (image-only). All the
+		// source-text boxes ("see ", "![alt](p.png)", " ok")
+		// stay on the host.
+		if len(lines) != 2 {
+			t.Fatalf("expected 2 lines (host + ghost), got %d", len(lines))
 		}
+		host := lines[0]
 		// Verify the ImageBelow box advances xPos by its
 		// text width — i.e., the " ok" box starts AFTER the
 		// source markdown's pixel width, not at xPos==0.
 		var seeX, imgX, okX int = -1, -1, -1
-		for _, pb := range lines[0].Boxes {
+		for _, pb := range host.Boxes {
 			switch string(pb.Box.Text) {
 			case "see ":
 				seeX = pb.X

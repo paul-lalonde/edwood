@@ -1485,18 +1485,24 @@ func (f *frameImpl) paintPhaseText(c *paintCtx) {
 // Images within a scrollable block region are shifted by -hOffset;
 // fixed boxes are not (they're full-width markers).
 //
-// ImageBelow boxes (Phase 3 round 4) are routed to a separate
-// helper that paints them stacked below the line's text rather
-// than at the line's top.
+// ImageBelow images (Phase 3 round 4) paint into ghost lines
+// (Phase 3 round 9): the ghost is the BlockImage region that
+// owns the horizontal scrollbar, and carries copies of the
+// host's ImageBelow boxes in line.ImageBelowBoxes. Painting
+// from the ghost's own data means the image renders correctly
+// even when the host line has scrolled off the top of the
+// viewport (visibleLines may not include the host).
 func (f *frameImpl) paintPhaseImagesAndFixedBoxes(c *paintCtx) {
 	for lineIdx, line := range c.lines {
 		if line.Y >= c.frameHeight {
 			break
 		}
 		hOff := f.hOffsetForLine(c, lineIdx)
-		// Two passes per line: first inline-replacing images and
-		// fixed boxes (existing behavior), then ImageBelow boxes
-		// which paint below the line's text.
+		if line.IsImageBelowGhost {
+			f.paintImageBelowGhost(c, line, hOff)
+			continue
+		}
+		// Non-ghost: inline-replacing images and fixed boxes.
 		for _, pb := range line.Boxes {
 			if pb.Box.IsFixedBox() && !pb.Box.Style.Image {
 				pt := image.Point{X: c.offset.X + pb.X, Y: c.offset.Y + line.Y}
@@ -1507,55 +1513,27 @@ func (f *frameImpl) paintPhaseImagesAndFixedBoxes(c *paintCtx) {
 				f.paintImageBox(c, line, pb, hOff)
 			}
 		}
-		f.paintLineImagesBelow(c, line)
 	}
 }
 
-// paintLineImagesBelow paints any ImageBelow-styled boxes on the
-// given line, stacked top-to-bottom in box-emission order. Each
-// is anchored at the line's left edge (X = c.offset.X) and at
-// Y = line.Y + textHeight + sum(prior_below_image_heights), so
-// the source `s` text on the same line stays visible above it.
-// Phase 3 round 4.
-func (f *frameImpl) paintLineImagesBelow(c *paintCtx, line Line) {
-	textHeight := lineTextHeight(line, c.frameWidth)
+// paintImageBelowGhost paints the ImageBelow images that the
+// ghost line carries (copied from its host at insertion time),
+// stacked top-to-bottom in box-emission order. The image's
+// left edge anchors at frame x = -hOff so the ghost's
+// horizontal scrollbar moves the image; the host's source-
+// marker text renders independently in paintPhaseText at its
+// natural xPos and is not shifted by the ghost's scroll.
+func (f *frameImpl) paintImageBelowGhost(c *paintCtx, ghost Line, hOff int) {
 	cumulativeBelow := 0
-	for _, pb := range line.Boxes {
-		if !pb.Box.Style.Image || !pb.Box.Style.ImageBelow {
-			continue
-		}
+	for _, pb := range ghost.ImageBelowBoxes {
 		_, imgHeight := imageBoxDimensions(&pb.Box, c.frameWidth)
-		// Place the image at the line's left edge; the box's pb.X
-		// (the rune-anchor's X within the line) only determines
-		// stacking order, not horizontal position.
 		shifted := pb
-		shifted.X = 0
-		// Synthesize a Line whose Y is at the image's draw row so
-		// drawImageTo/paintImageBox compute the right destination
-		// without needing a separate code path.
-		anchored := line
-		anchored.Y = line.Y + textHeight + cumulativeBelow
+		shifted.X = -hOff
+		anchored := ghost
+		anchored.Y = ghost.Y + cumulativeBelow
 		f.paintImageBox(c, anchored, shifted, 0)
 		cumulativeBelow += imgHeight
 	}
-}
-
-// lineTextHeight returns the line's text-only height: total
-// Height minus the sum of any ImageBelow heights on the line.
-// Inline-replacing images contribute to text height via
-// max(text, image) per the existing rule.
-func lineTextHeight(line Line, frameWidth int) int {
-	belowSum := 0
-	for _, pb := range line.Boxes {
-		if pb.Box.Style.Image && pb.Box.Style.ImageBelow {
-			_, h := imageBoxDimensions(&pb.Box, frameWidth)
-			belowSum += h
-		}
-	}
-	if line.Height-belowSum < 0 {
-		return 0
-	}
-	return line.Height - belowSum
 }
 
 // paintImageBox draws one image-styled box: a loading placeholder, an
@@ -1754,6 +1732,17 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 			}
 		}
 
+		// Zero-rune line (e.g. an ImageBelow ghost) at exactly
+		// origin: prefer it. The post-ghost text line shares the
+		// same lineStartRune, so without this preference the
+		// loop's other conditions would silently advance past the
+		// ghost — losing the ability to put the ghost (and its
+		// painted image) at the viewport top.
+		if lineStartRune == runeCount && f.origin == lineStartRune {
+			startLineIdx = lineIdx
+			originY = line.Y
+			break
+		}
 		// Check if origin is within or at the start of this line
 		if f.origin >= lineStartRune && f.origin < runeCount {
 			startLineIdx = lineIdx
@@ -1805,10 +1794,12 @@ func (f *frameImpl) layoutFromOrigin() ([]Line, int) {
 	for i := startLineIdx; i < len(allLines); i++ {
 		line := allLines[i]
 		adjustedLine := Line{
-			Y:            line.Y - originY - yOffset,
-			Height:       line.Height,
-			ContentWidth: line.ContentWidth,
-			Boxes:        line.Boxes,
+			Y:                 line.Y - originY - yOffset,
+			Height:            line.Height,
+			ContentWidth:      line.ContentWidth,
+			Boxes:             line.Boxes,
+			IsImageBelowGhost: line.IsImageBelowGhost,
+			ImageBelowBoxes:   line.ImageBelowBoxes,
 		}
 		visibleLines = append(visibleLines, adjustedLine)
 	}
