@@ -3898,3 +3898,74 @@ func TestLayoutBlockquoteMultiLine(t *testing.T) {
 		}
 	}
 }
+
+// TestWideImageGetsScrollbar pins the contract that an
+// inline-replacing image whose layout width exceeds the
+// frame width is recognized as a horizontally-scrollable
+// block region. Repro: user reports `![Edwood](edwood.png
+// "width=800px")` does not get a scrollbar in a window
+// narrower than 800px.
+func TestWideImageGetsScrollbar(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	// Image with explicit ImageWidth wider than the frame.
+	// ImageData represents a successfully-loaded image (so
+	// IsImage() returns true).
+	mockImage := &CachedImage{Width: 2168, Height: 1290, Path: "edwood.png"}
+	imgStyle := Style{Image: true, ImageURL: "edwood.png", ImageWidth: 800, Scale: 1.0}
+	boxes := []Box{
+		{Style: imgStyle, ImageData: mockImage},
+		{Nrune: -1, Bc: '\n', Style: imgStyle},
+	}
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+	regions := findBlockRegions(lines)
+	if len(regions) == 0 {
+		t.Fatal("no block region for image")
+	}
+	r := regions[0]
+	if r.Kind != BlockImage {
+		t.Errorf("region kind = %d, want BlockImage", r.Kind)
+	}
+	if r.MaxContentWidth <= frameWidth {
+		t.Errorf("MaxContentWidth = %d, want > frameWidth (%d)", r.MaxContentWidth, frameWidth)
+	}
+
+	adjusted := computeScrollbarMetadata(lines, regions, frameWidth, 12)
+	if !adjusted[0].HasScrollbar {
+		t.Errorf("HasScrollbar = false; want true (MaxContentWidth=%d > frameWidth=%d)",
+			r.MaxContentWidth, frameWidth)
+	}
+}
+
+// TestWideImageFailedLoadStillGetsScrollbar covers the
+// degenerate case where the image FAILED to load (ImageData
+// has Err set, dimensions are zero) but the source had an
+// explicit width=Npx attribute. The placeholder is drawn
+// with the alt text but the layout reserves
+// Style.ImageWidth pixels — so the scrollbar should still
+// fire when that explicit width exceeds the frame width.
+func TestWideImageFailedLoadStillGetsScrollbar(t *testing.T) {
+	font := edwoodtest.NewFont(10, 14)
+	frameWidth := 500
+	maxtab := 80
+
+	failedImage := &CachedImage{Width: 0, Height: 0, Path: "edwood.png", Err: fmt.Errorf("unknown format")}
+	imgStyle := Style{Image: true, ImageURL: "edwood.png", ImageWidth: 800, Scale: 1.0}
+	boxes := []Box{
+		{Text: []byte("[Image: alt]"), Nrune: 12, Style: imgStyle, ImageData: failedImage},
+		{Nrune: -1, Bc: '\n', Style: imgStyle},
+	}
+	lines := layout(boxes, font, frameWidth, maxtab, nil, nil)
+	regions := findBlockRegions(lines)
+	if len(regions) == 0 {
+		t.Fatal("no block region for failed-load image")
+	}
+	r := regions[0]
+	t.Logf("region: kind=%d MaxContentWidth=%d frameWidth=%d", r.Kind, r.MaxContentWidth, frameWidth)
+	adjusted := computeScrollbarMetadata(lines, regions, frameWidth, 12)
+	if !adjusted[0].HasScrollbar {
+		t.Errorf("HasScrollbar = false; expected true (explicit width=800 > frameWidth=500)")
+	}
+}

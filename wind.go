@@ -3138,10 +3138,22 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 	rt := w.richBody
 
-	// Scroll wheel (buttons 4 and 5).
+	// Scroll wheel (buttons 4 and 5). When the cursor is over a
+	// horizontally-scrollable block region (table, code block,
+	// inline-replacing image), redirect vertical scroll to
+	// horizontal scrolling — same dispatch pattern as the
+	// preview path.
 	if m.Buttons&8 != 0 || m.Buttons&16 != 0 {
-		up := m.Buttons&8 != 0
-		rt.ScrollWheel(up)
+		if regionIndex, ok := rt.Frame().PointInBlockRegion(m.Point); ok {
+			delta := 40 // pixels per scroll tick
+			if m.Buttons&8 != 0 {
+				delta = -delta
+			}
+			rt.Frame().HScrollWheel(delta, regionIndex)
+		} else {
+			up := m.Buttons&8 != 0
+			rt.ScrollWheel(up)
+		}
 		w.Draw()
 		if w.display != nil {
 			w.display.Flush()
@@ -3166,6 +3178,25 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			if w.display != nil {
 				w.display.Flush()
 			}
+			return true
+		}
+	}
+
+	// Horizontal scrollbar clicks for overflowing block regions
+	// (tables, code blocks, wide images). Uses the same latching
+	// helper as preview mode — the helper's logic is independent
+	// of preview vs. styled mode.
+	if regionIndex, ok := rt.Frame().HScrollBarAt(m.Point); ok {
+		button := 0
+		if m.Buttons&1 != 0 {
+			button = 1
+		} else if m.Buttons&2 != 0 {
+			button = 2
+		} else if m.Buttons&4 != 0 {
+			button = 3
+		}
+		if button != 0 && mc != nil {
+			w.previewHScrollLatch(rt, mc, button, regionIndex)
 			return true
 		}
 	}
