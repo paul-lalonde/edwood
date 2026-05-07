@@ -234,6 +234,60 @@ func TestGetDirNames(t *testing.T) {
 	}
 }
 
+// TestLogInsertEventSuppression verifies that the suppressEventLog
+// flag short-circuits logInsert / logInsertDelete before they reach
+// Window.Eventf. The scenario it guards against: a directory window
+// with an open event file (nopen[QWevent] > 0) but no current owner
+// — Window.Eventf panics in that state, and Columnate's cosmetic
+// re-layout would otherwise hit it on every resize. See the fix in
+// Text.Columnate that sets suppressEventLog around its InsertAt
+// loop.
+func TestLogInsertEventSuppression(t *testing.T) {
+	txt := emptyText()
+	txt.what = Body
+	// Set up the panic-trigger conditions: event file is open,
+	// no owner is set. Without the suppression gate, both
+	// logInsert and logInsertDelete would call Eventf which
+	// would panic.
+	txt.w.nopen[QWevent] = 1
+	txt.w.owner = 0
+	txt.suppressEventLog = true
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("logInsert/logInsertDelete panicked despite suppressEventLog=true: %v", r)
+		}
+	}()
+	txt.logInsert(file.OffsetTuple{}, []byte("hello"), 5)
+	txt.logInsertDelete(0, 5)
+}
+
+// TestColumnateRestoresSuppressionFlag verifies that Columnate
+// restores the prior suppressEventLog value after running, so a
+// caller that invokes Columnate during its own non-suppressed
+// scope sees the flag back at false on return.
+func TestColumnateRestoresSuppressionFlag(t *testing.T) {
+	txt := emptyText()
+	txt.what = Body
+	txt.fr = &MockFrame{}
+	txt.suppressEventLog = false
+
+	// Empty names slice — Columnate's InsertAt loop is a no-op
+	// but the prelude/defer still run, which is what we're
+	// testing.
+	defer func() {
+		_ = recover() // tolerate the getfont/font-related panic; we only care about the flag
+	}()
+	func() {
+		defer func() { _ = recover() }()
+		txt.Columnate(nil, nil)
+	}()
+
+	if txt.suppressEventLog {
+		t.Errorf("suppressEventLog still true after Columnate; want false")
+	}
+}
+
 func TestGetDirNamesNil(t *testing.T) {
 	_, err := getDirNames(nil)
 	if err == nil {

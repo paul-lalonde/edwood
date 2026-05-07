@@ -85,6 +85,17 @@ type Text struct {
 
 	nofill bool // When true, updates to the Text shouldn't update the frame.
 
+	// suppressEventLog gates logInsert / logInsertDelete from
+	// posting to the window's event file. Set during cosmetic
+	// buffer rewrites (Columnate's directory re-layout) where
+	// the buffer mutates but no logical edit occurred — the
+	// directory's content hasn't changed, only its
+	// columnization. Without this, an agent that opens the
+	// event file (e.g. dirthumb watching a directory window)
+	// triggers a panic in Eventf at resize time because there
+	// is no owner to attribute the synthetic insert events to.
+	suppressEventLog bool
+
 	lk sync.Mutex
 }
 
@@ -224,6 +235,17 @@ func (t *Text) Close() {
 }
 
 func (t *Text) Columnate(names []string, widths []int) {
+	// The InsertAt calls below are cosmetic re-layout, not
+	// user edits — the directory's content is unchanged.
+	// Suppress event-file logging so external agents
+	// (dirthumb, debuggers, log watchers) don't see synthetic
+	// "I" events on every resize, and so Eventf doesn't panic
+	// for lack of a window owner when no agent initiated the
+	// rebuild.
+	prev := t.suppressEventLog
+	t.suppressEventLog = true
+	defer func() { t.suppressEventLog = prev }()
+
 	var colw, mint, maxt, ncol, nrow int
 	q1 := 0
 	Lnl := []rune("\n")
@@ -504,6 +526,9 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 // that makes its state dependency obvious
 func (t *Text) logInsert(oq0 file.OffsetTuple, b []byte, nr int) {
 	q0 := oq0.R
+	if t.suppressEventLog {
+		return
+	}
 	if t.w != nil {
 		c := 'i'
 		if t.what == Body {
@@ -675,6 +700,9 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 
 // TODO(rjk): Fold this into logInsert is a nice way.
 func (t *Text) logInsertDelete(q0, q1 int) {
+	if t.suppressEventLog {
+		return
+	}
 	if t.w != nil {
 		c := 'd'
 		if t.what == Body {
