@@ -158,7 +158,7 @@ func TestScanDirectoryColumnar(t *testing.T) {
 			Length:       5,
 			BoxWidth:     0,
 			BoxPlacement: "below",
-			BoxPayload:   "image:/x/a.png width=100",
+			BoxPayload:   "image:/x/a.png width=200",
 		},
 		{
 			Kind:         SpanBox,
@@ -166,7 +166,7 @@ func TestScanDirectoryColumnar(t *testing.T) {
 			Length:       5,
 			BoxWidth:     0,
 			BoxPlacement: "below",
-			BoxPayload:   "image:/x/b.jpg width=100",
+			BoxPayload:   "image:/x/b.jpg width=200",
 		},
 		{
 			Kind:         SpanBox,
@@ -174,7 +174,7 @@ func TestScanDirectoryColumnar(t *testing.T) {
 			Length:       5,
 			BoxWidth:     0,
 			BoxPlacement: "below",
-			BoxPayload:   "image:/x/c.gif width=100",
+			BoxPayload:   "image:/x/c.gif width=200",
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -194,8 +194,8 @@ func TestScanDirectoryEscapedSpace(t *testing.T) {
 	if mid.Length != 12 {
 		t.Errorf("escaped-space token length = %d, want 12", mid.Length)
 	}
-	if mid.BoxPayload != "image:/x/foo bar.jpg width=100" {
-		t.Errorf("payload = %q, want image:/x/foo bar.jpg width=100", mid.BoxPayload)
+	if mid.BoxPayload != "image:/x/foo bar.jpg width=200" {
+		t.Errorf("payload = %q, want image:/x/foo bar.jpg width=200", mid.BoxPayload)
 	}
 	if mid.Offset != 6 {
 		t.Errorf("offset = %d, want 6", mid.Offset)
@@ -207,7 +207,7 @@ func TestScanDirectorySkipsDirectories(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d spans, want 1", len(got))
 	}
-	if got[0].BoxPayload != "image:/x/image.png width=100" {
+	if got[0].BoxPayload != "image:/x/image.png width=200" {
 		t.Errorf("payload = %q", got[0].BoxPayload)
 	}
 }

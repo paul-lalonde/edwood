@@ -19,8 +19,8 @@ var imageExts = map[string]bool{
 }
 
 // defaultThumbWidth is the pixel width used for thumbnail
-// boxes. Matches the user's example `width=100px`. Height
-// is left to scale proportionally from the natural image.
+// boxes. Height scales proportionally from the natural
+// image.
 //
 // dirthumb encodes the width in the payload (`width=N`)
 // and leaves the wire WIDTH/HEIGHT slots at 0, mirroring
@@ -28,7 +28,7 @@ var imageExts = map[string]bool{
 // applyImagePayload reads `width=N` from the payload and
 // sets ImageWidth, which drives proportional height
 // scaling in imageBoxDimensions.
-const defaultThumbWidth = 100
+const defaultThumbWidth = 200
 
 // scanDirectory tokenizes the body as a columnar directory
 // listing (whitespace-separated, with `\<rune>` as an

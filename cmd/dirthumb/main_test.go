@@ -110,8 +110,8 @@ func TestRenderOnceEndToEnd(t *testing.T) {
 	got := buf.String()
 	wantSubstrings := []string{
 		"c\n",
-		"b 0 5 0 0 - - placement=below image:/dir/a.png width=100\n",
-		"b 13 5 0 0 - - placement=below image:/dir/b.jpg width=100\n",
+		"b 0 5 0 0 - - placement=below image:/dir/a.png width=200\n",
+		"b 13 5 0 0 - - placement=below image:/dir/b.jpg width=200\n",
 	}
 	for _, s := range wantSubstrings {
 		if !strings.Contains(got, s) {
