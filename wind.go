@@ -16,6 +16,7 @@ import (
 	"github.com/rjkroege/edwood/frame"
 	"github.com/rjkroege/edwood/internal/ui"
 	"github.com/rjkroege/edwood/rich"
+	"github.com/rjkroege/edwood/spans"
 	"github.com/rjkroege/edwood/util"
 )
 
@@ -80,8 +81,8 @@ type Window struct {
 	richClickPos  int
 	richClickMsec uint32
 
-	spanStore        *SpanStore   // styled text runs (nil when no spans)
-	regionStore      *RegionStore // sidecar region tree (nil when no regions); Phase 3 round 5
+	spanStore        *spans.Store   // styled text runs (nil when no spans)
+	regionStore      *spans.RegionStore // sidecar region tree (nil when no regions); Phase 3 round 5
 	styledMode       bool         // true when showing span-styled text via rich.Frame
 	styledSuppressed bool         // true when user explicitly chose Plain; suppresses auto-enable
 
@@ -1009,7 +1010,7 @@ func (w *Window) initStyledMode() {
 	// Scaled fonts for headings. Without these, fontForStyle in
 	// rich.Frame falls through to the base font for any Scale > 1,
 	// so spans-protocol scale=N directives (Phase 3 round 1) would
-	// render at body size despite the StyleAttrs.Scale field being
+	// render at body size despite the spans.StyleAttrs.Scale field being
 	// plumbed through styleAttrsToRichStyle correctly.
 	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
 	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
@@ -1019,7 +1020,7 @@ func (w *Window) initStyledMode() {
 	// fontForStyle returns the base font for any span with
 	// Code=true, so spans-protocol family=code directives
 	// (Phase 3 round 2) would render in the proportional body
-	// font despite StyleAttrs.Family="code" being plumbed
+	// font despite spans.StyleAttrs.Family="code" being plumbed
 	// through styleAttrsToRichStyle correctly.
 	codeFont := tryLoadCodeFont(display, fontPath)
 
@@ -1165,9 +1166,9 @@ func (w *Window) renderStyledFromBody() {
 // first write that contains regions; existing regions are
 // preserved across writes (the protocol's `c` directive is
 // the explicit reset). Phase 3 round 5.
-func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*Region, bufLen int) {
+func (w *Window) applyParsedSpans(regionStart int, runs []spans.StyleRun, regions []*spans.Region, bufLen int) {
 	if w.spanStore == nil {
-		w.spanStore = NewSpanStore()
+		w.spanStore = spans.NewStore()
 		w.spanStore.Insert(0, bufLen)
 	} else if w.spanStore.TotalLen() != bufLen {
 		w.spanStore.Clear()
@@ -1177,7 +1178,7 @@ func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*R
 
 	if len(regions) > 0 {
 		if w.regionStore == nil {
-			w.regionStore = NewRegionStore()
+			w.regionStore = spans.NewRegionStore()
 		}
 		for _, r := range regions {
 			if err := tryAddRegion(w.regionStore, r); err != nil {
@@ -1196,7 +1197,7 @@ func (w *Window) applyParsedSpans(regionStart int, runs []StyleRun, regions []*R
 // (the only error condition; partial overlap with an existing
 // region) into a returned error. Used by applyParsedSpans so
 // that a producer bug doesn't take down the whole session.
-func tryAddRegion(s *RegionStore, r *Region) (err error) {
+func tryAddRegion(s *spans.RegionStore, r *spans.Region) (err error) {
 	defer func() {
 		if x := recover(); x != nil {
 			err = fmt.Errorf("%v", x)
@@ -1317,7 +1318,7 @@ func (w *Window) buildStyledContent() rich.Content {
 
 	var content []rich.Span
 	offset := 0
-	w.spanStore.ForEachRun(func(run StyleRun) {
+	w.spanStore.ForEachRun(func(run spans.StyleRun) {
 		if run.Len == 0 {
 			return
 		}
@@ -1339,10 +1340,10 @@ func (w *Window) buildStyledContent() rich.Content {
 }
 
 // styleSubRun produces one rich.Span for the [subStart, subEnd)
-// portion of a parent StyleRun. The base style comes from the
+// portion of a parent spans.StyleRun. The base style comes from the
 // run; region flags come from the regionStore's deepest enclosing
 // region at subStart. Phase 3 round 6 (split-at-boundaries).
-func (w *Window) styleSubRun(run StyleRun, subStart, subEnd int) rich.Span {
+func (w *Window) styleSubRun(run spans.StyleRun, subStart, subEnd int) rich.Span {
 	buf := make([]rune, subEnd-subStart)
 	w.body.file.Read(subStart, buf)
 	text := string(buf)
@@ -1373,12 +1374,12 @@ func (w *Window) styleSubRun(run StyleRun, subStart, subEnd int) rich.Span {
 // the function's per-run flag application is uniform over
 // the run. buildStyledContent satisfies this by splitting
 // each spanStore run at region boundaries via
-// RegionStore.BoundariesIn before calling here. (Earlier
+// spans.RegionStore.BoundariesIn before calling here. (Earlier
 // rounds asked producers to emit boundary-aligned runs;
 // round 6 moved that responsibility to the bridge so
 // default-styled runs that span a blockquote boundary still
 // render correctly.)
-func applyEnclosingRegions(s *rich.Style, deepest *Region) {
+func applyEnclosingRegions(s *rich.Style, deepest *spans.Region) {
 	if deepest == nil {
 		return
 	}
@@ -1410,12 +1411,12 @@ func applyEnclosingRegions(s *rich.Style, deepest *Region) {
 // future per-kind apply functions can walk the chain
 // directly (e.g., round 7's listitem will need the
 // nearest-of-kind ancestor, not every ancestor).
-func ancestorsOuterFirst(deepest *Region) []*Region {
-	var inner []*Region
+func ancestorsOuterFirst(deepest *spans.Region) []*spans.Region {
+	var inner []*spans.Region
 	for r := deepest; r != nil; r = r.Parent {
 		inner = append(inner, r)
 	}
-	out := make([]*Region, len(inner))
+	out := make([]*spans.Region, len(inner))
 	for i, r := range inner {
 		out[len(inner)-1-i] = r
 	}
@@ -1428,7 +1429,7 @@ func ancestorsOuterFirst(deepest *Region) []*Region {
 // disallows code-inside-code via the protocol's begin/end
 // nesting rules, but the apply remains idempotent for
 // safety. Phase 3 round 5.
-func applyCodeRegion(s *rich.Style, _ *Region) {
+func applyCodeRegion(s *rich.Style, _ *spans.Region) {
 	s.Block = true
 	s.Code = true
 	s.Bg = rich.InlineCodeBg
@@ -1440,7 +1441,7 @@ func applyCodeRegion(s *rich.Style, _ *Region) {
 // counter by one, so nested `>>` produces depth=2, etc.
 // The outermost-first walk order in applyEnclosingRegions
 // makes this compose naturally. Phase 3 round 6.
-func applyBlockquoteRegion(s *rich.Style, _ *Region) {
+func applyBlockquoteRegion(s *rich.Style, _ *spans.Region) {
 	s.Blockquote = true
 	s.BlockquoteDepth++
 }
@@ -1454,7 +1455,7 @@ func applyBlockquoteRegion(s *rich.Style, _ *Region) {
 // in the outermost-first walk gives nearest-of-kind
 // semantics — the innermost listitem's marker/number wins
 // when ancestors disagree. Phase 3 round 7.
-func applyListitemRegion(s *rich.Style, r *Region) {
+func applyListitemRegion(s *rich.Style, r *spans.Region) {
 	s.ListItem = true
 	s.ListIndent++
 	if number, ok := r.Params["number"]; ok && number != "" {
@@ -1502,7 +1503,7 @@ func parseListNumber(s string) int {
 //     when cell content does.
 //
 // Phase 3 round 8.
-func applyTableRegion(s *rich.Style, _ *Region) {
+func applyTableRegion(s *rich.Style, _ *spans.Region) {
 	s.Table = true
 	s.Block = true
 	s.Code = true
@@ -1515,7 +1516,7 @@ func applyTableRegion(s *rich.Style, _ *Region) {
 // `Style.TableHeader=true`, which the existing layout
 // uses to render bold + a separator line. Phase 3
 // round 8.
-func applyTableRowRegion(s *rich.Style, r *Region) {
+func applyTableRowRegion(s *rich.Style, r *spans.Region) {
 	if r.Params["header"] == "true" {
 		s.TableHeader = true
 	}
@@ -1529,7 +1530,7 @@ func applyTableRowRegion(s *rich.Style, r *Region) {
 // don't nest in v1, so per-call overwrite is moot, but
 // the pattern is consistent with listitem's marker/
 // number payload. Phase 3 round 8.
-func applyTableCellRegion(s *rich.Style, r *Region) {
+func applyTableCellRegion(s *rich.Style, r *spans.Region) {
 	switch r.Params["align"] {
 	case "right":
 		s.TableAlign = rich.AlignRight
@@ -1540,9 +1541,9 @@ func applyTableCellRegion(s *rich.Style, r *Region) {
 	}
 }
 
-// styleAttrsToRichStyle maps StyleAttrs (from span protocol) to rich.Style (for rendering).
+// styleAttrsToRichStyle maps spans.StyleAttrs (from span protocol) to rich.Style (for rendering).
 //
-// Scale: StyleAttrs.Scale==0 is the "unset" sentinel and maps
+// Scale: spans.StyleAttrs.Scale==0 is the "unset" sentinel and maps
 // to rich.Style.Scale=1.0 (body baseline). A positive Scale is
 // passed through directly. Per the spans-protocol round 1 design,
 // the parser rejects negative / zero / non-finite Scale values,
@@ -1561,7 +1562,7 @@ func applyTableCellRegion(s *rich.Style, r *Region) {
 // line across the frame on the same row. Added in Phase 3 round
 // 3; the original "suppress text" behavior was reverted in the
 // round-3 follow-up.
-func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
+func styleAttrsToRichStyle(sa spans.StyleAttrs) rich.Style {
 	s := rich.Style{
 		Scale: 1.0,
 	}
@@ -1579,10 +1580,10 @@ func styleAttrsToRichStyle(sa StyleAttrs) rich.Style {
 	return s
 }
 
-// boxStyleToRichStyle maps a box StyleAttrs (IsBox=true) to rich.Style for rendering.
+// boxStyleToRichStyle maps a box spans.StyleAttrs (IsBox=true) to rich.Style for rendering.
 // Boxes without an image: payload are fixed-dimension colored rectangles.
 // Boxes with an image: payload also enter the image rendering pipeline.
-func boxStyleToRichStyle(sa StyleAttrs, altText string) rich.Style {
+func boxStyleToRichStyle(sa spans.StyleAttrs, altText string) rich.Style {
 	s := rich.Style{
 		Scale:       1.0,
 		FixedBox:    true,

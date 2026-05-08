@@ -1,4 +1,4 @@
-package main
+package spans
 
 import (
 	"image/color"
@@ -16,11 +16,11 @@ var (
 
 // --- helpers ---
 
-// buildStore creates a SpanStore pre-loaded with the given runs.
+// buildStore creates a Store pre-loaded with the given runs.
 // It uses RegionUpdate on an appropriately-sized default store so that
 // the gap buffer internals are exercised from the start.
-func buildStore(runs []StyleRun) *SpanStore {
-	s := NewSpanStore()
+func buildStore(runs []StyleRun) *Store {
+	s := NewStore()
 	total := 0
 	for _, r := range runs {
 		total += r.Len
@@ -39,7 +39,7 @@ func buildStore(runs []StyleRun) *SpanStore {
 }
 
 // expectRuns asserts that s.Runs() matches expected in order.
-func expectRuns(t *testing.T, label string, s *SpanStore, expected []StyleRun) {
+func expectRuns(t *testing.T, label string, s *Store, expected []StyleRun) {
 	t.Helper()
 	got := s.Runs()
 	if len(got) != len(expected) {
@@ -55,7 +55,7 @@ func expectRuns(t *testing.T, label string, s *SpanStore, expected []StyleRun) {
 }
 
 // expectTotalLen asserts TotalLen.
-func expectTotalLen(t *testing.T, label string, s *SpanStore, want int) {
+func expectTotalLen(t *testing.T, label string, s *Store, want int) {
 	t.Helper()
 	if got := s.TotalLen(); got != want {
 		t.Errorf("%s: TotalLen = %d, want %d", label, got, want)
@@ -63,7 +63,7 @@ func expectTotalLen(t *testing.T, label string, s *SpanStore, want int) {
 }
 
 // expectNumRuns asserts NumRuns.
-func expectNumRuns(t *testing.T, label string, s *SpanStore, want int) {
+func expectNumRuns(t *testing.T, label string, s *Store, want int) {
 	t.Helper()
 	if got := s.NumRuns(); got != want {
 		t.Errorf("%s: NumRuns = %d, want %d", label, got, want)
@@ -74,10 +74,10 @@ func expectNumRuns(t *testing.T, label string, s *SpanStore, want int) {
 // Empty Store (tests 1–4)
 // =========================================================================
 
-func TestSpanStore_EmptyStore(t *testing.T) {
-	s := NewSpanStore()
+func TestStore_EmptyStore(t *testing.T) {
+	s := NewStore()
 
-	// Test 1: NewSpanStore has TotalLen 0, NumRuns 0
+	// Test 1: NewStore has TotalLen 0, NumRuns 0
 	expectTotalLen(t, "#1", s, 0)
 	expectNumRuns(t, "#1", s, 0)
 
@@ -104,15 +104,15 @@ func TestSpanStore_EmptyStore(t *testing.T) {
 // Insert (tests 5–11)
 // =========================================================================
 
-func TestSpanStore_InsertIntoEmpty(t *testing.T) {
+func TestStore_InsertIntoEmpty(t *testing.T) {
 	// Test 5: Insert into empty → [{5,default}], TotalLen=5
-	s := NewSpanStore()
+	s := NewStore()
 	s.Insert(0, 5)
 	expectRuns(t, "#5", s, []StyleRun{{Len: 5, Style: styleDefault}})
 	expectTotalLen(t, "#5", s, 5)
 }
 
-func TestSpanStore_InsertAtStart(t *testing.T) {
+func TestStore_InsertAtStart(t *testing.T) {
 	// Test 6: [{5,A}] → Insert(0,3) → [{8,A}], TotalLen=8
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}})
 	s.Insert(0, 3)
@@ -120,7 +120,7 @@ func TestSpanStore_InsertAtStart(t *testing.T) {
 	expectTotalLen(t, "#6", s, 8)
 }
 
-func TestSpanStore_InsertAtEnd(t *testing.T) {
+func TestStore_InsertAtEnd(t *testing.T) {
 	// Test 7: [{5,A}] → Insert(5,3) → [{8,A}], TotalLen=8
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}})
 	s.Insert(5, 3)
@@ -128,7 +128,7 @@ func TestSpanStore_InsertAtEnd(t *testing.T) {
 	expectTotalLen(t, "#7", s, 8)
 }
 
-func TestSpanStore_InsertMidRun(t *testing.T) {
+func TestStore_InsertMidRun(t *testing.T) {
 	// Test 8: [{10,A}] → Insert(5,3) → [{13,A}], TotalLen=13
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.Insert(5, 3)
@@ -136,7 +136,7 @@ func TestSpanStore_InsertMidRun(t *testing.T) {
 	expectTotalLen(t, "#8", s, 13)
 }
 
-func TestSpanStore_InsertAtRunBoundary(t *testing.T) {
+func TestStore_InsertAtRunBoundary(t *testing.T) {
 	// Test 9: [{5,A},{5,B}] → Insert(5,3) → [{8,A},{5,B}], TotalLen=13
 	// Insert at boundary extends the preceding run.
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
@@ -145,7 +145,7 @@ func TestSpanStore_InsertAtRunBoundary(t *testing.T) {
 	expectTotalLen(t, "#9", s, 13)
 }
 
-func TestSpanStore_InsertAtStartMultiRun(t *testing.T) {
+func TestStore_InsertAtStartMultiRun(t *testing.T) {
 	// Test 10: [{5,A},{5,B}] → Insert(0,3) → [{8,A},{5,B}], TotalLen=13
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Insert(0, 3)
@@ -153,7 +153,7 @@ func TestSpanStore_InsertAtStartMultiRun(t *testing.T) {
 	expectTotalLen(t, "#10", s, 13)
 }
 
-func TestSpanStore_InsertInSecondRun(t *testing.T) {
+func TestStore_InsertInSecondRun(t *testing.T) {
 	// Test 11: [{5,A},{5,B}] → Insert(7,2) → [{5,A},{7,B}], TotalLen=12
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Insert(7, 2)
@@ -165,7 +165,7 @@ func TestSpanStore_InsertInSecondRun(t *testing.T) {
 // Delete (tests 12–21)
 // =========================================================================
 
-func TestSpanStore_DeleteWithinOneRun(t *testing.T) {
+func TestStore_DeleteWithinOneRun(t *testing.T) {
 	// Test 12: [{10,A}] → Delete(3,4) → [{6,A}], TotalLen=6
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.Delete(3, 4)
@@ -173,7 +173,7 @@ func TestSpanStore_DeleteWithinOneRun(t *testing.T) {
 	expectTotalLen(t, "#12", s, 6)
 }
 
-func TestSpanStore_DeleteEntireSingleRun(t *testing.T) {
+func TestStore_DeleteEntireSingleRun(t *testing.T) {
 	// Test 13: [{10,A}] → Delete(0,10) → [], TotalLen=0
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.Delete(0, 10)
@@ -181,7 +181,7 @@ func TestSpanStore_DeleteEntireSingleRun(t *testing.T) {
 	expectTotalLen(t, "#13", s, 0)
 }
 
-func TestSpanStore_DeleteFromStart(t *testing.T) {
+func TestStore_DeleteFromStart(t *testing.T) {
 	// Test 14: [{5,A},{5,B}] → Delete(0,3) → [{2,A},{5,B}], TotalLen=7
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Delete(0, 3)
@@ -189,7 +189,7 @@ func TestSpanStore_DeleteFromStart(t *testing.T) {
 	expectTotalLen(t, "#14", s, 7)
 }
 
-func TestSpanStore_DeleteFromEnd(t *testing.T) {
+func TestStore_DeleteFromEnd(t *testing.T) {
 	// Test 15: [{5,A},{5,B}] → Delete(7,3) → [{5,A},{2,B}], TotalLen=7
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Delete(7, 3)
@@ -197,7 +197,7 @@ func TestSpanStore_DeleteFromEnd(t *testing.T) {
 	expectTotalLen(t, "#15", s, 7)
 }
 
-func TestSpanStore_DeleteExactRun(t *testing.T) {
+func TestStore_DeleteExactRun(t *testing.T) {
 	// Test 16: [{5,A},{5,B},{5,C}] → Delete(5,5) → [{5,A},{5,C}], TotalLen=10
 	s := buildStore([]StyleRun{
 		{Len: 5, Style: styleA},
@@ -209,7 +209,7 @@ func TestSpanStore_DeleteExactRun(t *testing.T) {
 	expectTotalLen(t, "#16", s, 10)
 }
 
-func TestSpanStore_DeleteSpanningTwoRuns(t *testing.T) {
+func TestStore_DeleteSpanningTwoRuns(t *testing.T) {
 	// Test 17: [{5,A},{5,B}] → Delete(3,4) → [{3,A},{3,B}], TotalLen=6
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Delete(3, 4)
@@ -217,7 +217,7 @@ func TestSpanStore_DeleteSpanningTwoRuns(t *testing.T) {
 	expectTotalLen(t, "#17", s, 6)
 }
 
-func TestSpanStore_DeleteMiddleMerge(t *testing.T) {
+func TestStore_DeleteMiddleMerge(t *testing.T) {
 	// Test 18: [{5,A},{5,B},{5,A}] → Delete(5,5) → [{10,A}], TotalLen=10
 	// Deleting the middle B run merges the two A runs.
 	s := buildStore([]StyleRun{
@@ -230,7 +230,7 @@ func TestSpanStore_DeleteMiddleMerge(t *testing.T) {
 	expectTotalLen(t, "#18", s, 10)
 }
 
-func TestSpanStore_DeleteEntireStore(t *testing.T) {
+func TestStore_DeleteEntireStore(t *testing.T) {
 	// Test 19: [{5,A},{5,B}] → Delete(0,10) → [], TotalLen=0
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Delete(0, 10)
@@ -238,7 +238,7 @@ func TestSpanStore_DeleteEntireStore(t *testing.T) {
 	expectTotalLen(t, "#19", s, 0)
 }
 
-func TestSpanStore_DeleteShrinksRunToZero(t *testing.T) {
+func TestStore_DeleteShrinksRunToZero(t *testing.T) {
 	// Test 20: [{3,A},{2,B},{5,C}] → Delete(3,2) → [{3,A},{5,C}], TotalLen=8
 	s := buildStore([]StyleRun{
 		{Len: 3, Style: styleA},
@@ -250,7 +250,7 @@ func TestSpanStore_DeleteShrinksRunToZero(t *testing.T) {
 	expectTotalLen(t, "#20", s, 8)
 }
 
-func TestSpanStore_DeleteSpanningMultiplePartialEdges(t *testing.T) {
+func TestStore_DeleteSpanningMultiplePartialEdges(t *testing.T) {
 	// Test 21: [{5,A},{5,B},{5,C},{5,D}] → Delete(3,14) → [{3,A},{3,D}], TotalLen=6
 	s := buildStore([]StyleRun{
 		{Len: 5, Style: styleA},
@@ -267,7 +267,7 @@ func TestSpanStore_DeleteSpanningMultiplePartialEdges(t *testing.T) {
 // RegionUpdate (tests 22–31)
 // =========================================================================
 
-func TestSpanStore_ReplaceEntireStore(t *testing.T) {
+func TestStore_ReplaceEntireStore(t *testing.T) {
 	// Test 22: [{10,A}] → RU(0, [{10,B}]) → [{10,B}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(0, []StyleRun{{Len: 10, Style: styleB}})
@@ -275,7 +275,7 @@ func TestSpanStore_ReplaceEntireStore(t *testing.T) {
 	expectTotalLen(t, "#22", s, 10)
 }
 
-func TestSpanStore_ReplaceAtStart(t *testing.T) {
+func TestStore_ReplaceAtStart(t *testing.T) {
 	// Test 23: [{10,A}] → RU(0, [{5,B}]) → [{5,B},{5,A}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(0, []StyleRun{{Len: 5, Style: styleB}})
@@ -283,7 +283,7 @@ func TestSpanStore_ReplaceAtStart(t *testing.T) {
 	expectTotalLen(t, "#23", s, 10)
 }
 
-func TestSpanStore_ReplaceAtEnd(t *testing.T) {
+func TestStore_ReplaceAtEnd(t *testing.T) {
 	// Test 24: [{10,A}] → RU(5, [{5,B}]) → [{5,A},{5,B}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(5, []StyleRun{{Len: 5, Style: styleB}})
@@ -291,7 +291,7 @@ func TestSpanStore_ReplaceAtEnd(t *testing.T) {
 	expectTotalLen(t, "#24", s, 10)
 }
 
-func TestSpanStore_ReplaceMiddle(t *testing.T) {
+func TestStore_ReplaceMiddle(t *testing.T) {
 	// Test 25: [{10,A}] → RU(3, [{4,B}]) → [{3,A},{4,B},{3,A}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(3, []StyleRun{{Len: 4, Style: styleB}})
@@ -303,7 +303,7 @@ func TestSpanStore_ReplaceMiddle(t *testing.T) {
 	expectTotalLen(t, "#25", s, 10)
 }
 
-func TestSpanStore_ReplaceSpanningRuns(t *testing.T) {
+func TestStore_ReplaceSpanningRuns(t *testing.T) {
 	// Test 26: [{5,A},{5,B}] → RU(3, [{4,C}]) → [{3,A},{4,C},{3,B}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.RegionUpdate(3, []StyleRun{{Len: 4, Style: styleC}})
@@ -315,7 +315,7 @@ func TestSpanStore_ReplaceSpanningRuns(t *testing.T) {
 	expectTotalLen(t, "#26", s, 10)
 }
 
-func TestSpanStore_ReplaceWithMergeLeft(t *testing.T) {
+func TestStore_ReplaceWithMergeLeft(t *testing.T) {
 	// Test 27: [{5,A},{5,B}] → RU(5, [{5,A}]) → [{10,A}], TotalLen=10
 	// The new run has the same style as the preceding run → merge.
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
@@ -324,7 +324,7 @@ func TestSpanStore_ReplaceWithMergeLeft(t *testing.T) {
 	expectTotalLen(t, "#27", s, 10)
 }
 
-func TestSpanStore_ReplaceWithMergeRight(t *testing.T) {
+func TestStore_ReplaceWithMergeRight(t *testing.T) {
 	// Test 28: [{5,A},{5,B}] → RU(0, [{5,B}]) → [{10,B}], TotalLen=10
 	// The new run has the same style as the following run → merge.
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
@@ -333,7 +333,7 @@ func TestSpanStore_ReplaceWithMergeRight(t *testing.T) {
 	expectTotalLen(t, "#28", s, 10)
 }
 
-func TestSpanStore_ReplaceWithMultiRuns(t *testing.T) {
+func TestStore_ReplaceWithMultiRuns(t *testing.T) {
 	// Test 29: [{10,A}] → RU(0, [{3,B},{4,C},{3,D}]) → [{3,B},{4,C},{3,D}], TotalLen=10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(0, []StyleRun{
@@ -349,7 +349,7 @@ func TestSpanStore_ReplaceWithMultiRuns(t *testing.T) {
 	expectTotalLen(t, "#29", s, 10)
 }
 
-func TestSpanStore_ReplaceAlignedBoundaries(t *testing.T) {
+func TestStore_ReplaceAlignedBoundaries(t *testing.T) {
 	// Test 30: [{5,A},{5,B},{5,C}] → RU(5, [{5,D}]) → [{5,A},{5,D},{5,C}], TotalLen=15
 	s := buildStore([]StyleRun{
 		{Len: 5, Style: styleA},
@@ -365,7 +365,7 @@ func TestSpanStore_ReplaceAlignedBoundaries(t *testing.T) {
 	expectTotalLen(t, "#30", s, 15)
 }
 
-func TestSpanStore_ReplaceAtStartMergeRight(t *testing.T) {
+func TestStore_ReplaceAtStartMergeRight(t *testing.T) {
 	// Test 31: [{5,A},{5,B}] → RU(0, [{5,B}]) → [{10,B}], TotalLen=10
 	// Same as test 28 but listed separately in the matrix.
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
@@ -378,7 +378,7 @@ func TestSpanStore_ReplaceAtStartMergeRight(t *testing.T) {
 // ForEachRun (tests 32–34)
 // =========================================================================
 
-func TestSpanStore_ForEachRunSingle(t *testing.T) {
+func TestStore_ForEachRunSingle(t *testing.T) {
 	// Test 32: Single run — fn called once with {10,A}.
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	var collected []StyleRun
@@ -391,7 +391,7 @@ func TestSpanStore_ForEachRunSingle(t *testing.T) {
 	}
 }
 
-func TestSpanStore_ForEachRunMultiple(t *testing.T) {
+func TestStore_ForEachRunMultiple(t *testing.T) {
 	// Test 33: Multiple runs — fn called 3 times in order.
 	s := buildStore([]StyleRun{
 		{Len: 5, Style: styleA},
@@ -415,7 +415,7 @@ func TestSpanStore_ForEachRunMultiple(t *testing.T) {
 	}
 }
 
-func TestSpanStore_ForEachRunAfterGapMove(t *testing.T) {
+func TestStore_ForEachRunAfterGapMove(t *testing.T) {
 	// Test 34: After gap move — build then Insert at distant position,
 	// iteration still correct.
 	s := buildStore([]StyleRun{
@@ -447,7 +447,7 @@ func TestSpanStore_ForEachRunAfterGapMove(t *testing.T) {
 // Clear (tests 35–36)
 // =========================================================================
 
-func TestSpanStore_ClearNonEmpty(t *testing.T) {
+func TestStore_ClearNonEmpty(t *testing.T) {
 	// Test 35: Clear non-empty → TotalLen=0, NumRuns=0
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}, {Len: 5, Style: styleB}})
 	s.Clear()
@@ -455,7 +455,7 @@ func TestSpanStore_ClearNonEmpty(t *testing.T) {
 	expectNumRuns(t, "#35", s, 0)
 }
 
-func TestSpanStore_ClearThenInsert(t *testing.T) {
+func TestStore_ClearThenInsert(t *testing.T) {
 	// Test 36: [{5,A}] → Clear → Insert(0,3) → [{3,default}], TotalLen=3
 	s := buildStore([]StyleRun{{Len: 5, Style: styleA}})
 	s.Clear()
@@ -468,7 +468,7 @@ func TestSpanStore_ClearThenInsert(t *testing.T) {
 // Zero-Length Spans (test 37)
 // =========================================================================
 
-func TestSpanStore_ZeroLengthInRegionUpdate(t *testing.T) {
+func TestStore_ZeroLengthInRegionUpdate(t *testing.T) {
 	// Test 37: Zero-length runs in RegionUpdate should be dropped.
 	// [{10,A}] → RU(5, [{0,B},{5,A}]) → the 0-length B run is dropped,
 	// leaving [{10,A}] since the 5,A merges with the preceding 5,A.
@@ -483,16 +483,16 @@ func TestSpanStore_ZeroLengthInRegionUpdate(t *testing.T) {
 // TotalLen Consistency (tests 38–41)
 // =========================================================================
 
-func TestSpanStore_TotalLenAfterInsertSequence(t *testing.T) {
+func TestStore_TotalLenAfterInsertSequence(t *testing.T) {
 	// Test 38: Insert 5, Insert 3, Insert 2 → TotalLen == 10
-	s := NewSpanStore()
+	s := NewStore()
 	s.Insert(0, 5)
 	s.Insert(2, 3)
 	s.Insert(6, 2)
 	expectTotalLen(t, "#38", s, 10)
 }
 
-func TestSpanStore_TotalLenAfterDeleteSequence(t *testing.T) {
+func TestStore_TotalLenAfterDeleteSequence(t *testing.T) {
 	// Test 39: [{10,A}] → Delete(0,3) → Delete(0,2) → TotalLen == 5
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.Delete(0, 3)
@@ -501,16 +501,16 @@ func TestSpanStore_TotalLenAfterDeleteSequence(t *testing.T) {
 	expectTotalLen(t, "#39b", s, 5)
 }
 
-func TestSpanStore_TotalLenAfterRegionUpdate(t *testing.T) {
+func TestStore_TotalLenAfterRegionUpdate(t *testing.T) {
 	// Test 40: [{10,A}] → RU(0,[{5,B},{5,C}]) → TotalLen == 10
 	s := buildStore([]StyleRun{{Len: 10, Style: styleA}})
 	s.RegionUpdate(0, []StyleRun{{Len: 5, Style: styleB}, {Len: 5, Style: styleC}})
 	expectTotalLen(t, "#40", s, 10)
 }
 
-func TestSpanStore_TotalLenAfterMixedOps(t *testing.T) {
+func TestStore_TotalLenAfterMixedOps(t *testing.T) {
 	// Test 41: Insert, RegionUpdate, Delete, Insert → TotalLen consistent.
-	s := NewSpanStore()
+	s := NewStore()
 	s.Insert(0, 20)                                                                // 20
 	s.RegionUpdate(0, []StyleRun{{Len: 10, Style: styleA}, {Len: 10, Style: styleB}}) // still 20
 	expectTotalLen(t, "#41a", s, 20)
@@ -680,7 +680,7 @@ func TestDeleteRemovesFullBox(t *testing.T) {
 func TestMergeAdjacentNeverMergesBoxWithText(t *testing.T) {
 	// Two adjacent runs: one default text, one box — should never merge
 	// even though they'd otherwise be "default" style.
-	s := NewSpanStore()
+	s := NewStore()
 	s.Insert(0, 10)
 	s.RegionUpdate(0, []StyleRun{
 		{Len: 5, Style: styleDefault},

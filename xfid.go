@@ -13,6 +13,7 @@ import (
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/ninep"
 	"github.com/rjkroege/edwood/runes"
+	"github.com/rjkroege/edwood/spans"
 	"github.com/rjkroege/edwood/util"
 )
 
@@ -568,25 +569,7 @@ func xfidspanswrite(x *Xfid, w *Window) {
 
 	bufLen := w.body.Nc()
 
-	// Detect whether data uses the new prefixed format (lines starting
-	// with "c", "s", or "b") or the legacy unprefixed format.
-	var runs []StyleRun
-	var regionStart int
-	var isClear bool
-	var err error
-
-	var regions []*Region
-	if isPrefixedFormat(data) {
-		runs, regionStart, regions, isClear, err = parseSpanMessage(data, bufLen)
-	} else {
-		// Legacy format: handle "clear" command and unprefixed span defs.
-		if data == "clear" {
-			isClear = true
-		} else {
-			runs, regionStart, err = parseSpanDefs(data, bufLen)
-		}
-	}
-
+	runs, regionStart, regions, isClear, err := spans.Parse(data, bufLen)
 	if err != nil {
 		x.respond(&fc, err)
 		return

@@ -1,4 +1,4 @@
-package main
+package spans
 
 import "image/color"
 
@@ -103,8 +103,8 @@ type StyleRun struct {
 	Style StyleAttrs
 }
 
-// SpanStore manages styled runs for a window's body text using a gap buffer.
-type SpanStore struct {
+// Store manages styled runs for a window's body text using a gap buffer.
+type Store struct {
 	runs     []StyleRun // storage array with gap
 	gap0     int        // start of gap (first unused index)
 	gap1     int        // end of gap (first used index after gap)
@@ -113,10 +113,10 @@ type SpanStore struct {
 
 const minGapCapacity = 32
 
-// NewSpanStore creates an empty SpanStore.
-func NewSpanStore() *SpanStore {
+// NewStore creates an empty Store.
+func NewStore() *Store {
 	runs := make([]StyleRun, minGapCapacity)
-	return &SpanStore{
+	return &Store{
 		runs: runs,
 		gap0: 0,
 		gap1: len(runs),
@@ -124,24 +124,24 @@ func NewSpanStore() *SpanStore {
 }
 
 // TotalLen returns the total number of runes covered by all runs.
-func (s *SpanStore) TotalLen() int {
+func (s *Store) TotalLen() int {
 	return s.totalLen
 }
 
 // NumRuns returns the number of active runs (excluding the gap).
-func (s *SpanStore) NumRuns() int {
+func (s *Store) NumRuns() int {
 	return s.gap0 + (len(s.runs) - s.gap1)
 }
 
 // Clear removes all runs and resets TotalLen to 0.
-func (s *SpanStore) Clear() {
+func (s *Store) Clear() {
 	s.gap0 = 0
 	s.gap1 = len(s.runs)
 	s.totalLen = 0
 }
 
 // ForEachRun calls fn for each run in order.
-func (s *SpanStore) ForEachRun(fn func(StyleRun)) {
+func (s *Store) ForEachRun(fn func(StyleRun)) {
 	for i := 0; i < s.gap0; i++ {
 		fn(s.runs[i])
 	}
@@ -151,7 +151,7 @@ func (s *SpanStore) ForEachRun(fn func(StyleRun)) {
 }
 
 // Runs returns all runs as a new slice.
-func (s *SpanStore) Runs() []StyleRun {
+func (s *Store) Runs() []StyleRun {
 	n := s.NumRuns()
 	if n == 0 {
 		return nil
@@ -164,7 +164,7 @@ func (s *SpanStore) Runs() []StyleRun {
 }
 
 // physicalIndex converts a logical index to a physical index in the runs slice.
-func (s *SpanStore) physicalIndex(logical int) int {
+func (s *Store) physicalIndex(logical int) int {
 	if logical < s.gap0 {
 		return logical
 	}
@@ -172,17 +172,17 @@ func (s *SpanStore) physicalIndex(logical int) int {
 }
 
 // getRun returns the run at the given logical index.
-func (s *SpanStore) getRun(logical int) StyleRun {
+func (s *Store) getRun(logical int) StyleRun {
 	return s.runs[s.physicalIndex(logical)]
 }
 
 // setRun sets the run at the given logical index.
-func (s *SpanStore) setRun(logical int, r StyleRun) {
+func (s *Store) setRun(logical int, r StyleRun) {
 	s.runs[s.physicalIndex(logical)] = r
 }
 
 // moveGapTo repositions the gap so that gap0 == logicalIdx.
-func (s *SpanStore) moveGapTo(logicalIdx int) {
+func (s *Store) moveGapTo(logicalIdx int) {
 	if logicalIdx == s.gap0 {
 		return
 	}
@@ -202,12 +202,12 @@ func (s *SpanStore) moveGapTo(logicalIdx int) {
 }
 
 // gapSize returns the number of unused slots in the gap.
-func (s *SpanStore) gapSize() int {
+func (s *Store) gapSize() int {
 	return s.gap1 - s.gap0
 }
 
 // growGap ensures there are at least needed free slots in the gap.
-func (s *SpanStore) growGap(needed int) {
+func (s *Store) growGap(needed int) {
 	if s.gapSize() >= needed {
 		return
 	}
@@ -237,7 +237,7 @@ func (s *SpanStore) growGap(needed int) {
 // findRunAt locates which run contains rune position pos.
 // Returns (logicalIndex, offsetWithinRun).
 // When pos == TotalLen, returns (NumRuns(), 0).
-func (s *SpanStore) findRunAt(pos int) (int, int) {
+func (s *Store) findRunAt(pos int) (int, int) {
 	n := s.NumRuns()
 	accum := 0
 	for i := 0; i < n; i++ {
@@ -252,7 +252,7 @@ func (s *SpanStore) findRunAt(pos int) (int, int) {
 
 // invalidateBoxIfNeeded resets a box run to a default text run.
 // If the run at logicalIdx is not a box, this is a no-op.
-func (s *SpanStore) invalidateBoxIfNeeded(logicalIdx int) {
+func (s *Store) invalidateBoxIfNeeded(logicalIdx int) {
 	if logicalIdx < 0 || logicalIdx >= s.NumRuns() {
 		return
 	}
@@ -265,7 +265,7 @@ func (s *SpanStore) invalidateBoxIfNeeded(logicalIdx int) {
 }
 
 // Insert adjusts runs when text is inserted at rune position pos.
-func (s *SpanStore) Insert(pos, length int) {
+func (s *Store) Insert(pos, length int) {
 	if length <= 0 {
 		return
 	}
@@ -320,7 +320,7 @@ func (s *SpanStore) Insert(pos, length int) {
 }
 
 // Delete adjusts runs when runes in [pos, pos+length) are deleted.
-func (s *SpanStore) Delete(pos, length int) {
+func (s *Store) Delete(pos, length int) {
 	// Clamp.
 	if pos+length > s.totalLen {
 		length = s.totalLen - pos
@@ -400,7 +400,7 @@ func (s *SpanStore) Delete(pos, length int) {
 }
 
 // mergeAdjacent scans all runs and merges any adjacent runs with equal styles.
-func (s *SpanStore) mergeAdjacent() {
+func (s *Store) mergeAdjacent() {
 	n := s.NumRuns()
 	if n < 2 {
 		return
@@ -423,7 +423,7 @@ func (s *SpanStore) mergeAdjacent() {
 }
 
 // removeZeroLengthRuns removes any runs with Len == 0.
-func (s *SpanStore) removeZeroLengthRuns() {
+func (s *Store) removeZeroLengthRuns() {
 	i := 0
 	for i < s.NumRuns() {
 		r := s.getRun(i)
@@ -437,7 +437,7 @@ func (s *SpanStore) removeZeroLengthRuns() {
 }
 
 // RegionUpdate replaces style information in [offset, offset+sum(newRuns.Len)).
-func (s *SpanStore) RegionUpdate(offset int, newRuns []StyleRun) {
+func (s *Store) RegionUpdate(offset int, newRuns []StyleRun) {
 	// Compute new total length for the region.
 	newTotalLen := 0
 	for _, r := range newRuns {
@@ -520,7 +520,7 @@ func (s *SpanStore) RegionUpdate(offset int, newRuns []StyleRun) {
 }
 
 // recomputeTotalLen recalculates totalLen from the actual runs.
-func (s *SpanStore) recomputeTotalLen() {
+func (s *Store) recomputeTotalLen() {
 	total := 0
 	s.ForEachRun(func(r StyleRun) {
 		total += r.Len

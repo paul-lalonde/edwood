@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rjkroege/edwood/edwoodtest"
+	"github.com/rjkroege/edwood/spans"
 	"github.com/rjkroege/edwood/file"
 )
 
@@ -34,9 +35,9 @@ func TestPlaincmd_StyledToPlain(t *testing.T) {
 	w := makePlainTestWindow(t, "hello")
 
 	// Set up spans and enter styled mode.
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
 	})
 	w.initStyledMode()
 	if !w.IsStyledMode() {
@@ -63,9 +64,9 @@ func TestPlaincmd_PlainToStyledWithSpans(t *testing.T) {
 	w := makePlainTestWindow(t, "hello")
 
 	// Set up spans but stay in plain mode (simulating a previous toggle-off).
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: color.RGBA{B: 0xff, A: 0xff}}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: color.RGBA{B: 0xff, A: 0xff}}},
 	})
 
 	if w.IsStyledMode() {
@@ -92,7 +93,7 @@ func TestPlaincmd_NoopWhenNoSpans(t *testing.T) {
 	}
 
 	// With an empty span store (TotalLen == 0).
-	w.spanStore = NewSpanStore()
+	w.spanStore = spans.NewStore()
 	plaincmd(&w.body, nil, nil, false, false, "")
 
 	if w.IsStyledMode() {
@@ -108,10 +109,10 @@ func TestPlaincmd_SpansPreservedAfterToggle(t *testing.T) {
 	red := color.RGBA{R: 0xff, A: 0xff}
 
 	// Set up spans and enter styled mode.
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: red}},
-		{Len: 6, Style: StyleAttrs{}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: red}},
+		{Len: 6, Style: spans.StyleAttrs{}},
 	})
 	w.initStyledMode()
 	if !w.IsStyledMode() {
@@ -142,7 +143,7 @@ func TestPlaincmd_SpansPreservedAfterToggle(t *testing.T) {
 	if runs[0].Len != 5 {
 		t.Errorf("run[0].Len = %d, want 5", runs[0].Len)
 	}
-	if !runs[0].Style.Equal(StyleAttrs{Fg: red}) {
+	if !runs[0].Style.Equal(spans.StyleAttrs{Fg: red}) {
 		t.Error("run[0] style should be red fg")
 	}
 }
@@ -155,9 +156,9 @@ func TestPlaincmd_ReRenderAfterToggleBack(t *testing.T) {
 	red := color.RGBA{R: 0xff, A: 0xff}
 
 	// Set up spans and enter styled mode.
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: red}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: red}},
 	})
 	w.initStyledMode()
 	if !w.IsStyledMode() {

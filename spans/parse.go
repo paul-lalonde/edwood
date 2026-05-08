@@ -3,13 +3,14 @@
 // implementation here MUST match it. Producers are
 // cmd/edcolor and cmd/md2spans.
 
-package main
+package spans
 
 import (
 	"fmt"
 	"image/color"
 	"strconv"
 	"strings"
+
 )
 
 // parseColor parses a color string: "-" for default (nil), or "#rrggbb" for an explicit color.
@@ -33,6 +34,34 @@ func parseColor(s string) (color.Color, error) {
 		return nil, fmt.Errorf("bad color value: %q", s)
 	}
 	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 0xff}, nil
+}
+
+// Parse parses one spans-file Twrite payload. It auto-detects
+// the wire format (prefixed `c/s/b` lines + region directives,
+// or the legacy unprefixed format) and returns:
+//
+//   - runs: styled rune runs in offset order, contiguous.
+//   - regionStart: rune offset where the runs begin (the
+//     consumer-side Store offsets new content from here).
+//   - regions: flat list of structural regions parsed from
+//     `begin region` / `end region` pairs (RegionStore
+//     arranges them into a tree).
+//   - isClear: true if the payload is the single `c` (clear)
+//     directive.
+//   - err: non-nil on malformed input.
+//
+// The legacy format predates the prefixed message format and
+// is retained for backward compatibility with older producers.
+// New producers should emit the prefixed format.
+func Parse(data string, bufLen int) (runs []StyleRun, regionStart int, regions []*Region, isClear bool, err error) {
+	if isPrefixedFormat(data) {
+		return parseSpanMessage(data, bufLen)
+	}
+	if data == "clear" {
+		return nil, 0, nil, true, nil
+	}
+	runs, regionStart, err = parseSpanDefs(data, bufLen)
+	return runs, regionStart, nil, false, err
 }
 
 // parseSpanMessage parses a spans file write using the prefixed message format.

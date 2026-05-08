@@ -12,6 +12,7 @@ import (
 	"github.com/rjkroege/edwood/edwoodtest"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/rich"
+	"github.com/rjkroege/edwood/spans"
 )
 
 // =========================================================================
@@ -19,8 +20,8 @@ import (
 // =========================================================================
 
 func TestStyleAttrsToRichStyle_Default(t *testing.T) {
-	// Zero-value StyleAttrs should map to rich.DefaultStyle().
-	sa := StyleAttrs{}
+	// Zero-value spans.StyleAttrs should map to rich.DefaultStyle().
+	sa := spans.StyleAttrs{}
 	got := styleAttrsToRichStyle(sa)
 	want := rich.DefaultStyle()
 
@@ -45,7 +46,7 @@ func TestStyleAttrsToRichStyle_ColorsAndFlags(t *testing.T) {
 	red := color.RGBA{R: 0xff, A: 0xff}
 	green := color.RGBA{G: 0xff, A: 0xff}
 
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		Fg:     red,
 		Bg:     green,
 		Bold:   true,
@@ -85,7 +86,7 @@ func TestStyleAttrsToRichStyle_ColorsAndFlags(t *testing.T) {
 
 func TestStyleAttrsToRichStyle_FgOnly(t *testing.T) {
 	blue := color.RGBA{B: 0xff, A: 0xff}
-	sa := StyleAttrs{Fg: blue}
+	sa := spans.StyleAttrs{Fg: blue}
 	got := styleAttrsToRichStyle(sa)
 
 	if got.Fg == nil {
@@ -108,7 +109,7 @@ func TestStyleAttrsToRichStyle_FgOnly(t *testing.T) {
 func TestStyleAttrsToRichStyle_HiddenNotMapped(t *testing.T) {
 	// Hidden is reserved and should not affect the rich.Style output
 	// beyond what the zero-value already provides.
-	sa := StyleAttrs{Hidden: true}
+	sa := spans.StyleAttrs{Hidden: true}
 	got := styleAttrsToRichStyle(sa)
 	want := rich.DefaultStyle()
 
@@ -127,7 +128,7 @@ func TestStyleAttrsToRichStyle_HiddenNotMapped(t *testing.T) {
 // buildStyledContent tests
 // =========================================================================
 
-// makeStyledWindow creates a headless window with body text and a SpanStore
+// makeStyledWindow creates a headless window with body text and a spans.Store
 // for testing buildStyledContent. Does not require a display.
 func makeStyledWindow(t *testing.T, bodyText string) *Window {
 	t.Helper()
@@ -150,9 +151,9 @@ func TestBuildStyledContent_SingleRun(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 
 	red := color.RGBA{R: 0xff, A: 0xff}
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: red}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: red}},
 	})
 	// Ensure store has correct total length.
 	if w.spanStore.TotalLen() != 5 {
@@ -183,11 +184,11 @@ func TestBuildStyledContent_MultipleRuns(t *testing.T) {
 	red := color.RGBA{R: 0xff, A: 0xff}
 	blue := color.RGBA{B: 0xff, A: 0xff}
 
-	w.spanStore = NewSpanStore()
+	w.spanStore = spans.NewStore()
 	// "hello" (5 runes) in red, " world" (6 runes) in blue
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: red}},
-		{Len: 6, Style: StyleAttrs{Fg: blue}},
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: red}},
+		{Len: 6, Style: spans.StyleAttrs{Fg: blue}},
 	})
 
 	content := w.buildStyledContent()
@@ -243,8 +244,8 @@ func TestBuildStyledContent_EmptySpanStore(t *testing.T) {
 func TestBuildStyledContent_SpanStoreZeroLen(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 
-	// SpanStore exists but has zero total length (cleared).
-	w.spanStore = NewSpanStore()
+	// spans.Store exists but has zero total length (cleared).
+	w.spanStore = spans.NewStore()
 	content := w.buildStyledContent()
 	if len(content) != 1 {
 		t.Fatalf("got %d spans, want 1", len(content))
@@ -257,11 +258,11 @@ func TestBuildStyledContent_SpanStoreZeroLen(t *testing.T) {
 func TestBuildStyledContent_MixedStyles(t *testing.T) {
 	w := makeStyledWindow(t, "abcdef")
 
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 2, Style: StyleAttrs{Bold: true}},                                                    // "ab" bold
-		{Len: 2, Style: StyleAttrs{Italic: true}},                                                  // "cd" italic
-		{Len: 2, Style: StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}, Bg: color.RGBA{A: 0xff}}}, // "ef" red on black
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 2, Style: spans.StyleAttrs{Bold: true}},                                                    // "ab" bold
+		{Len: 2, Style: spans.StyleAttrs{Italic: true}},                                                  // "cd" italic
+		{Len: 2, Style: spans.StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}, Bg: color.RGBA{A: 0xff}}}, // "ef" red on black
 	})
 
 	content := w.buildStyledContent()
@@ -288,10 +289,10 @@ func TestBuildStyledContent_Unicode(t *testing.T) {
 	red := color.RGBA{R: 0xff, A: 0xff}
 	blue := color.RGBA{B: 0xff, A: 0xff}
 
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: red}},  // "hello"
-		{Len: 2, Style: StyleAttrs{Fg: blue}}, // "世界"
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Fg: red}},  // "hello"
+		{Len: 2, Style: spans.StyleAttrs{Fg: blue}}, // "世界"
 	})
 
 	content := w.buildStyledContent()
@@ -477,7 +478,7 @@ func TestClearRevertsToPlainMode(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 
 	// Enter styled mode and set up spans.
-	w.spanStore = NewSpanStore()
+	w.spanStore = spans.NewStore()
 	w.spanStore.Insert(0, 5)
 	w.initStyledMode()
 
@@ -526,7 +527,7 @@ func TestRenderStyledFromBodyPreservesSelection(t *testing.T) {
 	// initStyledMode creates a fresh richBody (no prior
 	// rich-frame state), then renderStyledFromBody pushes
 	// content + origin + selection.
-	w.spanStore = NewSpanStore()
+	w.spanStore = spans.NewStore()
 	w.spanStore.Insert(0, 16)
 	w.initStyledMode()
 	if !w.styledMode || w.richBody == nil {
@@ -610,7 +611,7 @@ func TestStyledShowSendsSelectionEvent(t *testing.T) {
 // =========================================================================
 
 func TestBoxStyleToRichStyleImagePayload(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:      true,
 		BoxWidth:   200,
 		BoxHeight:  150,
@@ -647,7 +648,7 @@ func TestBoxStyleToRichStyleImagePayload(t *testing.T) {
 }
 
 func TestBoxStyleToRichStyleNoPayload(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:     true,
 		BoxWidth:  100,
 		BoxHeight: 50,
@@ -675,7 +676,7 @@ func TestBoxStyleToRichStyleNoPayload(t *testing.T) {
 }
 
 func TestBoxStyleToRichStyleNonImagePayload(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:      true,
 		BoxWidth:   300,
 		BoxHeight:  200,
@@ -695,7 +696,7 @@ func TestBoxStyleToRichStyleNonImagePayload(t *testing.T) {
 // image span, source URL is parsed from the first payload
 // token, alt text passes through.
 func TestBoxStyleToRichStyleImageBelow(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxWidth:     0,
 		BoxHeight:    0,
@@ -722,7 +723,7 @@ func TestBoxStyleToRichStyleImageBelow(t *testing.T) {
 // BoxPlacement="replace" is treated the same as "" — no
 // ImageBelow.
 func TestBoxStyleToRichStyleImageBelowReplaceExplicit(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxWidth:     100,
 		BoxHeight:    50,
@@ -738,7 +739,7 @@ func TestBoxStyleToRichStyleImageBelowReplaceExplicit(t *testing.T) {
 // TestBoxStyleToRichStyleImageBelowAbsent: empty
 // BoxPlacement → Style.ImageBelow=false (default).
 func TestBoxStyleToRichStyleImageBelowAbsent(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:      true,
 		BoxWidth:   100,
 		BoxHeight:  50,
@@ -755,7 +756,7 @@ func TestBoxStyleToRichStyleImageBelowAbsent(t *testing.T) {
 // `width=N` token follows the URL and is parsed by the
 // consumer, not by the wire-format parser.
 func TestBoxStyleToRichStylePayloadWidthParam(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxPayload:   "image:./pic.png width=200",
 		BoxPlacement: "below",
@@ -773,7 +774,7 @@ func TestBoxStyleToRichStylePayloadWidthParam(t *testing.T) {
 // unknown payload param is silently ignored (forward-compat
 // for future params on older renderers).
 func TestBoxStyleToRichStylePayloadUnknownParamIgnored(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxPayload:   "image:./pic.png alignment=center caption=hello",
 		BoxPlacement: "below",
@@ -790,7 +791,7 @@ func TestBoxStyleToRichStylePayloadUnknownParamIgnored(t *testing.T) {
 // recognized, but the parser must handle param ordering
 // and multiple-token payloads cleanly).
 func TestBoxStyleToRichStylePayloadMultipleParams(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxPayload:   "image:./p.png width=300 unknown=foo",
 		BoxPlacement: "below",
@@ -810,7 +811,7 @@ func TestBoxStyleToRichStylePayloadMultipleParams(t *testing.T) {
 // param wins (treats wire BoxWidth as a legacy hint that
 // payload params override).
 func TestBoxStyleToRichStylePayloadWidthOverride(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxWidth:     100, // wire-format hint (legacy mode)
 		BoxHeight:    80,
@@ -828,7 +829,7 @@ func TestBoxStyleToRichStylePayloadWidthOverride(t *testing.T) {
 // non-numeric width=X is silently ignored (treated like an
 // unknown param).
 func TestBoxStyleToRichStylePayloadInvalidWidth(t *testing.T) {
-	sa := StyleAttrs{
+	sa := spans.StyleAttrs{
 		IsBox:        true,
 		BoxPayload:   "image:./p.png width=abc",
 		BoxPlacement: "below",
@@ -863,7 +864,7 @@ func TestBoxStyleToRichStylePayloadMalformedFirstToken(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sa := StyleAttrs{
+			sa := spans.StyleAttrs{
 				IsBox:        true,
 				BoxWidth:     100,
 				BoxHeight:    50,
@@ -908,8 +909,8 @@ func TestWindow_RegionStoreInitiallyNil(t *testing.T) {
 // are added.
 func TestWindow_ApplyParsedSpansPopulatesRegionStore(t *testing.T) {
 	w := makeStyledWindow(t, "hello world test!")
-	r := &Region{Start: 6, End: 11, Kind: "code"}
-	w.applyParsedSpans(0, []StyleRun{{Len: 17, Style: StyleAttrs{}}}, []*Region{r}, 17)
+	r := &spans.Region{Start: 6, End: 11, Kind: "code"}
+	w.applyParsedSpans(0, []spans.StyleRun{{Len: 17, Style: spans.StyleAttrs{}}}, []*spans.Region{r}, 17)
 
 	if w.regionStore == nil {
 		t.Fatal("regionStore nil after applyParsedSpans with regions")
@@ -923,7 +924,7 @@ func TestWindow_ApplyParsedSpansPopulatesRegionStore(t *testing.T) {
 // with no regions doesn't disturb regionStore.
 func TestWindow_ApplyParsedSpansNoRegions(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
-	w.applyParsedSpans(0, []StyleRun{{Len: 5, Style: StyleAttrs{}}}, nil, 5)
+	w.applyParsedSpans(0, []spans.StyleRun{{Len: 5, Style: spans.StyleAttrs{}}}, nil, 5)
 
 	if w.regionStore != nil {
 		if got := w.regionStore.EnclosingAt(2); got != nil {
@@ -937,8 +938,8 @@ func TestWindow_ApplyParsedSpansNoRegions(t *testing.T) {
 // directive.
 func TestWindow_ClearSpansAndRegions(t *testing.T) {
 	w := makeStyledWindow(t, "hello world")
-	r := &Region{Start: 0, End: 5, Kind: "code"}
-	w.applyParsedSpans(0, []StyleRun{{Len: 11, Style: StyleAttrs{}}}, []*Region{r}, 11)
+	r := &spans.Region{Start: 0, End: 5, Kind: "code"}
+	w.applyParsedSpans(0, []spans.StyleRun{{Len: 11, Style: spans.StyleAttrs{}}}, []*spans.Region{r}, 11)
 
 	w.clearSpansAndRegions()
 
@@ -956,22 +957,22 @@ func TestWindow_ClearSpansAndRegions(t *testing.T) {
 // buildStyledContent with boxes tests
 // =========================================================================
 
-// --- Region expansion in buildStyledContent (Phase 3 round 5) ---------
+// --- spans.Region expansion in buildStyledContent (Phase 3 round 5) ---------
 
-// TestBuildStyledContent_RunInsideCodeRegion: a StyleRun
+// TestBuildStyledContent_RunInsideCodeRegion: a spans.StyleRun
 // fully inside a code region produces a span with Block,
 // Code, and Bg set. Pin the bridge's per-run logic.
 func TestBuildStyledContent_RunInsideCodeRegion(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij") // 10 runes
 
 	// Three styled runs covering [0, 10): [0,3)=default,
-	// [3,7)=family-code, [7,10)=default. Region [3, 7) wraps
+	// [3,7)=family-code, [7,10)=default. spans.Region [3, 7) wraps
 	// the middle run.
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 3, Style: StyleAttrs{}},
-		{Len: 4, Style: StyleAttrs{Family: "code"}},
-		{Len: 3, Style: StyleAttrs{}},
-	}, []*Region{{Start: 3, End: 7, Kind: "code"}}, 10)
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 3, Style: spans.StyleAttrs{}},
+		{Len: 4, Style: spans.StyleAttrs{Family: "code"}},
+		{Len: 3, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{{Start: 3, End: 7, Kind: "code"}}, 10)
 
 	content := w.buildStyledContent()
 	if len(content) != 3 {
@@ -1002,9 +1003,9 @@ func TestBuildStyledContent_RunInsideCodeRegion(t *testing.T) {
 // (no-op for region expansion).
 func TestBuildStyledContent_NoRegionStore(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Bold: true}},
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 5, Style: spans.StyleAttrs{Bold: true}},
 	})
 	// regionStore stays nil.
 
@@ -1026,8 +1027,8 @@ func TestBuildStyledContent_NoRegionStore(t *testing.T) {
 func TestBuildStyledContent_EmptyRegionDoesNotAffectRuns(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
 	w.applyParsedSpans(0,
-		[]StyleRun{{Len: 5, Style: StyleAttrs{}}},
-		[]*Region{{Start: 3, End: 3, Kind: "code"}}, 5)
+		[]spans.StyleRun{{Len: 5, Style: spans.StyleAttrs{}}},
+		[]*spans.Region{{Start: 3, End: 3, Kind: "code"}}, 5)
 
 	content := w.buildStyledContent()
 	for _, sp := range content {
@@ -1040,15 +1041,15 @@ func TestBuildStyledContent_EmptyRegionDoesNotAffectRuns(t *testing.T) {
 // --- Blockquote region expansion (Phase 3 round 6) -----------------
 
 // TestBuildStyledContent_RunInsideBlockquoteRegion: a
-// StyleRun inside a blockquote region produces a span
+// spans.StyleRun inside a blockquote region produces a span
 // with Style.Blockquote=true and BlockquoteDepth=1.
 func TestBuildStyledContent_RunInsideBlockquoteRegion(t *testing.T) {
 	w := makeStyledWindow(t, "before quote after") // 18 runes
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 7, Style: StyleAttrs{}},
-		{Len: 5, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-	}, []*Region{{Start: 7, End: 12, Kind: "blockquote"}}, 18)
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 7, Style: spans.StyleAttrs{}},
+		{Len: 5, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{{Start: 7, End: 12, Kind: "blockquote"}}, 18)
 
 	content := w.buildStyledContent()
 	if len(content) != 3 {
@@ -1070,11 +1071,11 @@ func TestBuildStyledContent_RunInsideBlockquoteRegion(t *testing.T) {
 // 6's depth counting.
 func TestBuildStyledContent_NestedBlockquoteRegions(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij") // 10 runes
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 3, Style: StyleAttrs{}},
-		{Len: 4, Style: StyleAttrs{}},
-		{Len: 3, Style: StyleAttrs{}},
-	}, []*Region{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 3, Style: spans.StyleAttrs{}},
+		{Len: 4, Style: spans.StyleAttrs{}},
+		{Len: 3, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{
 		{Start: 0, End: 10, Kind: "blockquote"}, // outer
 		{Start: 3, End: 7, Kind: "blockquote"},  // inner
 	}, 10)
@@ -1106,9 +1107,9 @@ func TestBuildStyledContent_NestedBlockquoteRegions(t *testing.T) {
 // counting goes past 2 cleanly.
 func TestBuildStyledContent_TripleNestedBlockquote(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 10, Style: StyleAttrs{}},
-	}, []*Region{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 10, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{
 		{Start: 0, End: 10, Kind: "blockquote"},
 		{Start: 2, End: 8, Kind: "blockquote"},
 		{Start: 4, End: 6, Kind: "blockquote"},
@@ -1120,12 +1121,12 @@ func TestBuildStyledContent_TripleNestedBlockquote(t *testing.T) {
 	// Here we model the post-fillGaps result by hand.
 	w.spanStore.Clear()
 	w.spanStore.Insert(0, 10)
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 2, Style: StyleAttrs{}}, // [0,2): outer only
-		{Len: 2, Style: StyleAttrs{}}, // [2,4): outer+mid
-		{Len: 2, Style: StyleAttrs{}}, // [4,6): all three
-		{Len: 2, Style: StyleAttrs{}}, // [6,8): outer+mid
-		{Len: 2, Style: StyleAttrs{}}, // [8,10): outer only
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 2, Style: spans.StyleAttrs{}}, // [0,2): outer only
+		{Len: 2, Style: spans.StyleAttrs{}}, // [2,4): outer+mid
+		{Len: 2, Style: spans.StyleAttrs{}}, // [4,6): all three
+		{Len: 2, Style: spans.StyleAttrs{}}, // [6,8): outer+mid
+		{Len: 2, Style: spans.StyleAttrs{}}, // [8,10): outer only
 	})
 
 	content := w.buildStyledContent()
@@ -1146,16 +1147,16 @@ func TestBuildStyledContent_TripleNestedBlockquote(t *testing.T) {
 func TestBuildStyledContentBoxRun(t *testing.T) {
 	w := makeStyledWindow(t, "hello world test!") // 17 runes
 
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 6, Style: StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
-		{Len: 5, Style: StyleAttrs{
+	w.spanStore = spans.NewStore()
+	w.spanStore.RegionUpdate(0, []spans.StyleRun{
+		{Len: 6, Style: spans.StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
+		{Len: 5, Style: spans.StyleAttrs{
 			IsBox:      true,
 			BoxWidth:   200,
 			BoxHeight:  100,
 			BoxPayload: "image:/tmp/test.png",
 		}},
-		{Len: 6, Style: StyleAttrs{Fg: color.RGBA{B: 0xff, A: 0xff}}},
+		{Len: 6, Style: spans.StyleAttrs{Fg: color.RGBA{B: 0xff, A: 0xff}}},
 	})
 
 	content := w.buildStyledContent()
@@ -1840,10 +1841,10 @@ func TestZeroxFontInheritance(t *testing.T) {
 
 // --- Scale mapping tests (Phase 3 round 1) -------------------------------
 
-// TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne: StyleAttrs.Scale=0
+// TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne: spans.StyleAttrs.Scale=0
 // (the unset sentinel) maps to rich.Style.Scale=1.0 (body baseline).
 func TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne(t *testing.T) {
-	sa := StyleAttrs{Scale: 0}
+	sa := spans.StyleAttrs{Scale: 0}
 	got := styleAttrsToRichStyle(sa)
 	if got.Scale != 1.0 {
 		t.Errorf("Scale = %v, want 1.0 (Scale=0 must map to 1.0 baseline)", got.Scale)
@@ -1856,7 +1857,7 @@ func TestStyleAttrsToRichStyle_ScaleUnsetMapsToOne(t *testing.T) {
 func TestStyleAttrsToRichStyle_ScalePassedThrough(t *testing.T) {
 	cases := []float64{0.5, 1.0, 1.25, 1.5, 2.0, 5.0}
 	for _, scale := range cases {
-		sa := StyleAttrs{Scale: scale}
+		sa := spans.StyleAttrs{Scale: scale}
 		got := styleAttrsToRichStyle(sa)
 		if got.Scale != scale {
 			t.Errorf("Scale=%v passed through as %v", scale, got.Scale)
@@ -1867,7 +1868,7 @@ func TestStyleAttrsToRichStyle_ScalePassedThrough(t *testing.T) {
 // TestBoxStyleToRichStyle_ScaleAlsoPassedThrough: the box-style
 // path also honors Scale (consistency with span path).
 func TestBoxStyleToRichStyle_ScaleAlsoPassedThrough(t *testing.T) {
-	sa := StyleAttrs{Scale: 1.5, IsBox: true, BoxWidth: 100, BoxHeight: 50}
+	sa := spans.StyleAttrs{Scale: 1.5, IsBox: true, BoxWidth: 100, BoxHeight: 50}
 	got := boxStyleToRichStyle(sa, "alt")
 	if got.Scale != 1.5 {
 		t.Errorf("box Scale = %v, want 1.5", got.Scale)
@@ -1879,7 +1880,7 @@ func TestBoxStyleToRichStyle_ScaleAlsoPassedThrough(t *testing.T) {
 // TestStyleAttrsToRichStyle_FamilyEmptyLeavesCodeFalse: the unset
 // Family ("") leaves rich.Style.Code at its zero value (false).
 func TestStyleAttrsToRichStyle_FamilyEmptyLeavesCodeFalse(t *testing.T) {
-	sa := StyleAttrs{Family: ""}
+	sa := spans.StyleAttrs{Family: ""}
 	got := styleAttrsToRichStyle(sa)
 	if got.Code {
 		t.Error("Code should be false for empty Family")
@@ -1889,7 +1890,7 @@ func TestStyleAttrsToRichStyle_FamilyEmptyLeavesCodeFalse(t *testing.T) {
 // TestStyleAttrsToRichStyle_FamilyCodeMapsToCodeTrue: Family="code"
 // maps to rich.Style.Code=true.
 func TestStyleAttrsToRichStyle_FamilyCodeMapsToCodeTrue(t *testing.T) {
-	sa := StyleAttrs{Family: "code"}
+	sa := spans.StyleAttrs{Family: "code"}
 	got := styleAttrsToRichStyle(sa)
 	if !got.Code {
 		t.Error("Code should be true for Family=\"code\"")
@@ -1900,7 +1901,7 @@ func TestStyleAttrsToRichStyle_FamilyCodeMapsToCodeTrue(t *testing.T) {
 // values (which shouldn't reach this layer because the parser
 // rejects them, but defensively...) leave Code=false.
 func TestStyleAttrsToRichStyle_FamilyUnknownIgnored(t *testing.T) {
-	sa := StyleAttrs{Family: "serif"}
+	sa := spans.StyleAttrs{Family: "serif"}
 	got := styleAttrsToRichStyle(sa)
 	if got.Code {
 		t.Error("Code should not be true for unknown Family")
@@ -1910,7 +1911,7 @@ func TestStyleAttrsToRichStyle_FamilyUnknownIgnored(t *testing.T) {
 // TestBoxStyleToRichStyle_FamilyAlsoMapped: the box-style path
 // also honors Family (consistency with span path).
 func TestBoxStyleToRichStyle_FamilyAlsoMapped(t *testing.T) {
-	sa := StyleAttrs{Family: "code", IsBox: true, BoxWidth: 100, BoxHeight: 50}
+	sa := spans.StyleAttrs{Family: "code", IsBox: true, BoxWidth: 100, BoxHeight: 50}
 	got := boxStyleToRichStyle(sa, "alt")
 	if !got.Code {
 		t.Error("box Code should be true for Family=\"code\"")
@@ -1922,45 +1923,45 @@ func TestBoxStyleToRichStyle_FamilyAlsoMapped(t *testing.T) {
 // TestStyleAttrsToRichStyle_HRulePassedThrough: HRule=true →
 // rich.Style.HRule=true.
 func TestStyleAttrsToRichStyle_HRulePassedThrough(t *testing.T) {
-	sa := StyleAttrs{HRule: true}
+	sa := spans.StyleAttrs{HRule: true}
 	got := styleAttrsToRichStyle(sa)
 	if !got.HRule {
-		t.Error("rich.Style.HRule should be true for StyleAttrs.HRule=true")
+		t.Error("rich.Style.HRule should be true for spans.StyleAttrs.HRule=true")
 	}
 }
 
 // TestStyleAttrsToRichStyle_HRuleFalsePassedThrough: HRule=false
 // → rich.Style.HRule=false.
 func TestStyleAttrsToRichStyle_HRuleFalsePassedThrough(t *testing.T) {
-	sa := StyleAttrs{HRule: false}
+	sa := spans.StyleAttrs{HRule: false}
 	got := styleAttrsToRichStyle(sa)
 	if got.HRule {
-		t.Error("rich.Style.HRule should be false for StyleAttrs.HRule=false")
+		t.Error("rich.Style.HRule should be false for spans.StyleAttrs.HRule=false")
 	}
 }
 
 // TestBoxStyleToRichStyle_HRuleAlsoMapped: box path honors HRule.
 func TestBoxStyleToRichStyle_HRuleAlsoMapped(t *testing.T) {
-	sa := StyleAttrs{HRule: true, IsBox: true, BoxWidth: 100, BoxHeight: 1}
+	sa := spans.StyleAttrs{HRule: true, IsBox: true, BoxWidth: 100, BoxHeight: 1}
 	got := boxStyleToRichStyle(sa, "alt")
 	if !got.HRule {
-		t.Error("box rich.Style.HRule should be true for StyleAttrs.HRule=true")
+		t.Error("box rich.Style.HRule should be true for spans.StyleAttrs.HRule=true")
 	}
 }
 
 // --- Listitem region expansion (Phase 3 round 7) -----------------
 
 // TestBuildStyledContent_RunInsideListitemRegionUnordered:
-// a StyleRun inside an unordered listitem region produces a
+// a spans.StyleRun inside an unordered listitem region produces a
 // span with Style.ListItem=true, ListIndent=1, and
 // ListOrdered=false.
 func TestBuildStyledContent_RunInsideListitemRegionUnordered(t *testing.T) {
 	w := makeStyledWindow(t, "before- foo \nafter") // 18 runes
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 6, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-	}, []*Region{{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 6, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{{
 		Start: 6, End: 12, Kind: "listitem",
 		Params: map[string]string{"marker": "-"},
 	}}, 18)
@@ -1985,11 +1986,11 @@ func TestBuildStyledContent_RunInsideListitemRegionUnordered(t *testing.T) {
 // `number=N` produces ListOrdered=true and ListNumber=N.
 func TestBuildStyledContent_RunInsideListitemRegionOrdered(t *testing.T) {
 	w := makeStyledWindow(t, "before3. foo \nafter") // 19 runes
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 6, Style: StyleAttrs{}},
-		{Len: 7, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-	}, []*Region{{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 6, Style: spans.StyleAttrs{}},
+		{Len: 7, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{{
 		Start: 6, End: 13, Kind: "listitem",
 		Params: map[string]string{"number": "3"},
 	}}, 19)
@@ -2016,11 +2017,11 @@ func TestBuildStyledContent_RunInsideListitemRegionOrdered(t *testing.T) {
 // apply to the inner runes.
 func TestBuildStyledContent_ListitemInsideBlockquote(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 2, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-		{Len: 2, Style: StyleAttrs{}},
-	}, []*Region{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 2, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+		{Len: 2, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{
 		{Start: 0, End: 10, Kind: "blockquote"},
 		{
 			Start: 2, End: 8, Kind: "listitem",
@@ -2050,18 +2051,18 @@ func TestBuildStyledContent_ListitemInsideBlockquote(t *testing.T) {
 // --- Table region expansion (Phase 3 round 8) -------------------
 
 // TestBuildStyledContent_RunInsideTableRegion: a
-// StyleRun inside a `table` region produces a span with
+// spans.StyleRun inside a `table` region produces a span with
 // Table=true, Block=true, and Code=true (the latter
 // forces monospace on every rune in the table —
 // including the `|` markers between cells, so columns
 // align character-by-character).
 func TestBuildStyledContent_RunInsideTableRegion(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 2, Style: StyleAttrs{}},
-		{Len: 6, Style: StyleAttrs{}},
-		{Len: 2, Style: StyleAttrs{}},
-	}, []*Region{{Start: 2, End: 8, Kind: "table"}}, 10)
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 2, Style: spans.StyleAttrs{}},
+		{Len: 6, Style: spans.StyleAttrs{}},
+		{Len: 2, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{{Start: 2, End: 8, Kind: "table"}}, 10)
 
 	content := w.buildStyledContent()
 	if len(content) != 3 {
@@ -2084,9 +2085,9 @@ func TestBuildStyledContent_RunInsideTableRegion(t *testing.T) {
 // TableHeader=true on the row's runes.
 func TestBuildStyledContent_RunInsideTableHeaderRow(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 10, Style: StyleAttrs{}},
-	}, []*Region{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 10, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{
 		{Start: 0, End: 10, Kind: "table"},
 		{
 			Start: 0, End: 5, Kind: "tablerow",
@@ -2129,9 +2130,9 @@ func TestBuildStyledContent_RunInsideTableCellAlignment(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := makeStyledWindow(t, "abcdefghij")
-			w.applyParsedSpans(0, []StyleRun{
-				{Len: 10, Style: StyleAttrs{}},
-			}, []*Region{
+			w.applyParsedSpans(0, []spans.StyleRun{
+				{Len: 10, Style: spans.StyleAttrs{}},
+			}, []*spans.Region{
 				{Start: 0, End: 10, Kind: "table"},
 				{
 					Start: 2, End: 8, Kind: "tablecell",
@@ -2159,9 +2160,9 @@ func TestBuildStyledContent_RunInsideTableCellAlignment(t *testing.T) {
 // BlockquoteDepth flags.
 func TestBuildStyledContent_TableInsideBlockquote(t *testing.T) {
 	w := makeStyledWindow(t, "abcdefghij")
-	w.applyParsedSpans(0, []StyleRun{
-		{Len: 10, Style: StyleAttrs{}},
-	}, []*Region{
+	w.applyParsedSpans(0, []spans.StyleRun{
+		{Len: 10, Style: spans.StyleAttrs{}},
+	}, []*spans.Region{
 		{Start: 0, End: 10, Kind: "blockquote"},
 		{Start: 2, End: 8, Kind: "table"},
 	}, 10)
@@ -2195,7 +2196,7 @@ func TestBuildStyledContent_TableCellAlignmentInBodyRow(t *testing.T) {
 	// Set up regions for a 3-row table: header (rune 0..9),
 	// separator (rune 10..19), body (rune 20..29). Each row
 	// has one cell at runes [start+1, start+9) (centered).
-	regions := []*Region{
+	regions := []*spans.Region{
 		{Start: 0, End: 30, Kind: "table"},
 		{Start: 0, End: 10, Kind: "tablerow", Params: map[string]string{"header": "true"}},
 		{Start: 1, End: 9, Kind: "tablecell", Params: map[string]string{"align": "center"}},
@@ -2204,7 +2205,7 @@ func TestBuildStyledContent_TableCellAlignmentInBodyRow(t *testing.T) {
 		{Start: 20, End: 30, Kind: "tablerow"},
 		{Start: 21, End: 29, Kind: "tablecell", Params: map[string]string{"align": "center"}},
 	}
-	w.applyParsedSpans(0, []StyleRun{{Len: 36, Style: StyleAttrs{}}}, regions, 36)
+	w.applyParsedSpans(0, []spans.StyleRun{{Len: 36, Style: spans.StyleAttrs{}}}, regions, 36)
 
 	content := w.buildStyledContent()
 	// Collect spans whose runes are inside the body cell
