@@ -116,10 +116,115 @@ in styled mode (this is the visible user-facing change).
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Audit `wind.go` and `exec.go` for any remaining preview-mode debris (comment references, unused imports, dead helpers). Update `Tier 2` rows below based on what the now-cleaner `wind.go` reveals about the spans bridge — particularly any helpers we thought we'd extract that turn out to be unnecessary, or vice-versa. **This is mandatory.** | this file, `wind.go`, `exec.go` | The Tier 2 plan was sketched against pre-deletion `wind.go`; some of its row content may be stale. |
-| [ ] Tests | n/a (planning) | — | — |
-| [ ] Iterate | Final cleanup commit + revise this file's Tier 2 section. | — | — |
-| [ ] Commit | — | — | `docs: cleanup post-deletion debris and revise tier-2 plan` |
+| [x] Design | Audited `wind.go`, `text.go`, `globals.go`, `acme.go` for residual preview-mode debris. Updated Tier 2 rows below based on what the now-cleaner `wind.go` reveals about the spans bridge. | this file, `wind.go`, `exec.go` | See "Tier 1 retrospective" below. |
+| [x] Tests | n/a (planning) | — | — |
+| [x] Iterate | Final cleanup commit + revise this file's Tier 2 section. | — | — |
+| [ ] Commit | — | — | `docs: tier-1 retrospective and tier-2 plan revision` |
+
+---
+
+## Tier 1 retrospective (2026-05-08)
+
+Tier 1 shipped in eight commits, removing ~29,800 net LOC (804 added,
+30,615 deleted) across 37 files. Lessons that informed the Tier 2
+revision below:
+
+### Lesson 1: misnamed cross-mode helpers
+
+**Three helpers prefixed `preview*` actually served styled mode too**.
+Each was identified during deletion when the build broke at a
+HandleStyledMouse caller:
+
+| Original name | Renamed to | Why |
+|---|---|---|
+| `previewExecute` | `richExecute` | B2-execute dispatcher used by both modes |
+| `previewHScrollLatch` | `hscrollLatch` | Block-region scrollbar latching, mode-agnostic |
+| `scrollPreviewToMatch` | `scrollRichToMatch` | Generic scroll-to-rendered-position |
+| `previewClickRT/Pos/Msec` (3 fields) | `richClickRT/Pos/Msec` | Double-click tracking on rich body |
+
+**Implication for Tier 2.** The spans-bridge functions in `wind.go`
+(`buildStyledContent`, `styleSubRun`, `styleAttrsToRichStyle`,
+`boxStyleToRichStyle`, `applyImagePayload`, the six `apply*Region`
+functions) appear well-named for their role, but Tier 2's audit row
+should still verify each function's caller graph before extracting —
+a function named for a single concern may be reached from another.
+
+### Lesson 2: vestigial subpackages I missed in the Tier 1.0 enumeration
+
+Two whole-file deletions surfaced only when the build broke:
+- `wind/preview.go` (`PreviewState` struct + `NewPreviewState()`,
+  composed into `WindowBase`. No external caller.)
+- `command/preview_cmds.go` + `command/preview_cmds_test.go` (an
+  abstract dispatcher for the `Markdown` command. The `command/`
+  package is never imported by anything in the repo.)
+
+Both were planned-but-not-wired infrastructure. Tier 1.0's enumeration
+walked the main package only.
+
+**Implication for Tier 2.** Add an explicit subpackage audit to
+Tier 2.0. Specifically check `wind/`, `command/`, and `internal/`
+for any spans-related types that would need to follow the extraction
+or be deleted as vestigial.
+
+### Lesson 3: test deletion regex needed two passes
+
+`^TestPreview...` missed `TestHandlePreview...`, `TestWindowPreviewMode`,
+`TestStyledAndPreviewMutuallyExclusive`, etc. The `^Test[A-Za-z]*Preview...`
+pattern caught everything on the second pass.
+
+**Implication for Tier 2.** Tier 2 has no bulk test-deletion phase; the
+existing tests for `spanparse`, `spanstore`, `region` move with their
+files. The pattern lesson doesn't carry forward, but the meta-lesson
+(verify with a wider net before declaring sweep complete) does.
+
+### Lesson 4: dead helpers cluster around dead features
+
+Removing `transformForPaste` exposed `stripMarkers`, `stripHeadingPrefix`,
+`wrapWith` as orphan helpers (preview-only callers, nothing else).
+`updateSelectionContext` exposed `analyzeSelectionContent`,
+`classifyStyle`, `clampToBuffer`, `isWordChar`. `SelectionContext` /
+`snarfContext` were preview-only types nothing else referenced.
+
+**Implication for Tier 2.** After moving the spans bridge functions
+to `spans/`, audit `wind.go` for orphan helpers that only the moved
+functions called. Delete or move them too.
+
+### Lesson 5: stale comments outlive their referents
+
+Doc-comments referenced deleted symbols (`previewcmd`,
+`HandlePreviewMouse`, etc.) for ~12 places. None broke compilation;
+they just reduced the doc to misinformation. A `grep -i preview`
+sweep at the end of Tier 1 caught them.
+
+**Implication for Tier 2.** End-of-tier sweep should include a
+reverse search: do any remaining comments mention symbols that
+moved to `spans/`?
+
+### Lesson 6: doc-comments occasionally lie about scope
+
+`imageCache` was documented as "for preview mode" but was shared
+with styled mode through `addImageRichTextOptions`. The comment
+predated the styled-mode work and never got updated. The ground
+truth was the call graph, not the comment.
+
+**Implication for Tier 2.** When deciding whether a function or
+field is in-scope for `spans/` extraction, verify by call graph,
+not by godoc. (This was already implicit in the plan; it's now
+explicit.)
+
+### Quantitative Tier 1 outcome (vs Tier 1.0 estimate)
+
+| Item | Tier 1.0 estimate | Actual |
+|---|---:|---:|
+| Impl LOC removed | ~5,360 | ~6,000 |
+| Test LOC removed | ~19,150 | ~24,600 |
+| Total LOC removed | ~24,500 | ~30,600 |
+| Files touched | (not counted) | 37 |
+| `wind.go` size after | (not estimated) | 1,720 (was ~3,400) |
+
+The actual is ~25% larger than estimated, primarily from the two
+vestigial subpackages and the wider test-deletion regex catching
+more files.
 
 ---
 
@@ -162,34 +267,34 @@ noise around it.
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Confirm `spans/` package boundary + public API shape after Tier 1 has shipped. Identify any helpers freshly visible as bridge code (or no longer needed) post-deletion. Decide whether `cmd/*` tools migrate to import `spans/` now or in a follow-up. | tier-1 retrospective | Decisions to land: (a) public type names (`Store` vs `SpanStore`); (b) `Render` function signature (does it take a `BodyReader` interface or a rune slice?); (c) whether `cmd/*` tools migrate now. |
+| [ ] Design | Confirm `spans/` package boundary + public API shape now that the markdown package is gone. Decide: (a) public type names (`Store` vs `SpanStore`); (b) `Render` function signature — `BodyReader` interface or `[]rune`? Lean toward `[]rune` since the body is small and copy-once is simpler than maintaining an interface; (c) whether `cmd/*` tools (md2spans, edcolor, dirthumb) migrate to import `spans/` now or follow up. **Recommend NOT migrating cmd/* this tier** — they have small local Span types that work, and a same-tier migration would balloon the diff. | tier-1 retrospective | The retrospective revealed that the spans-bridge functions in `wind.go` aren't entangled with preview-mode (preview was its own parser path). This makes Tier 2 a cleaner extraction than originally feared. |
 | [ ] Tests | n/a (planning). | — | — |
-| [ ] Iterate | Revise this Tier 2 section based on findings. | — | — |
-| [ ] Commit | — | — | `docs: revise tier-2 plan after tier-1 retrospective` |
+| [ ] Iterate | Revise the row notes below if 2.0's design pass surfaces unexpected coupling. | — | — |
+| [ ] Commit | — | — | `docs: tier-2 design pass — confirm spans/ public API` |
 
-### Tier 2.1: Create empty `spans/` package shell
+### Tier 2.1: Create `spans/` package shell + subpackage audit
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Empty package with `doc.go` that names the future contents. | base doc | One file; nothing else. |
-| [ ] Tests | n/a — file is empty package decl + comment. | — | — |
-| [ ] Iterate | Add `spans/doc.go`. | — | — |
-| [ ] Commit | — | — | `spans: add empty package` |
+| [ ] Design | Empty package with `doc.go`. **Per Tier 1 lesson 2:** also audit `wind/`, `command/`, `internal/` for spans-related types that might need to follow or be deleted as vestigial. Tier 1 found two vestigial subpackages this way; Tier 2 should not assume the audit is unnecessary. | `wind/`, `command/`, `internal/` | If any vestigial spans-related code is found, file as a row before 2.2 to delete it cleanly. |
+| [ ] Tests | n/a. | — | — |
+| [ ] Iterate | Add `spans/doc.go`; record any subpackage-audit findings here. | — | — |
+| [ ] Commit | — | — | `spans: add empty package + subpackage audit` |
 
 ### Tier 2.2: Move parse.go + tests
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Verify `spanparse.go` has zero edwood-specific imports beyond `rich/`. | `spanparse.go` | If imports surface dependencies on main-package types, lift those to public `spans/` types in this row's design pass. |
+| [ ] Design | Verify `spanparse.go` has zero edwood-specific imports beyond `rich/`. **Per Tier 1 lesson 6:** check by call graph, not by godoc — any helper that LOOKS spans-only but is called from elsewhere needs special handling (rename or split). | `spanparse.go` | The existing imports are limited based on Tier 1's earlier inspection. Worth a fresh check post-Tier-1. |
 | [ ] Tests | Existing `spanparse_test.go` should continue passing after move. | `spanparse_test.go` | — |
-| [ ] Iterate | `git mv spanparse.go spans/parse.go && git mv spanparse_test.go spans/parse_test.go`; rename package; update imports in main package; build + test. | — | Use `git mv` to preserve history. |
+| [ ] Iterate | `git mv spanparse.go spans/parse.go && git mv spanparse_test.go spans/parse_test.go`; rename package; update imports in main package. | — | Use `git mv` to preserve history. |
 | [ ] Commit | — | — | `spans: move spanparse to spans package` |
 
 ### Tier 2.3: Move store + region
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Same import audit for store.go and region.go. | `spanstore.go`, `region.go` | Region tree may have helpers that touch types we didn't expect; check during design pass. |
+| [ ] Design | Same import + call-graph audit for `spanstore.go` and `region.go`. | `spanstore.go`, `region.go` | The `region.go` file has helpers like `tryAddRegion`, `ancestorsOuterFirst` that may or may not move — check during design. |
 | [ ] Tests | Existing tests carry over. | `spanstore_test.go`, `region_test.go` | — |
 | [ ] Iterate | Move files; rename package; update imports. | — | — |
 | [ ] Commit | — | — | `spans: move store and region to spans package` |
@@ -198,16 +303,16 @@ noise around it.
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Move `buildStyledContent`, `styleSubRun`, and the apply* family. Decide whether `Render` takes the body as a rune-reader interface or a rune slice. | `wind.go` post-Tier-1 | This is the row most likely to expose hidden coupling — these functions reach into `Window` for `body.file.Read` etc. Need a small adapter for `BodyReader`. |
-| [ ] Tests | New `spans/render_test.go` covering the conversion paths. | — | Tests may already exist as Window-level tests; copy or move. |
-| [ ] Iterate | Move functions; replace Window-side callers with `spans.Render(w.spanStore, w.regionStore, &windowBody{w})` or similar. | — | — |
+| [ ] Design | Move `buildStyledContent`, `styleSubRun`, and the `apply*Region` family (`applyEnclosingRegions`, `applyCodeRegion`, `applyBlockquoteRegion`, `applyListitemRegion`, `applyTableRegion`, `applyTableRowRegion`, `applyTableCellRegion`, `ancestorsOuterFirst`), `styleAttrsToRichStyle`, `boxStyleToRichStyle`, `applyImagePayload`. **Per Tier 1.0 spec choice:** `Render([]rune body, *Store, *RegionStore) rich.Content`. | `wind.go` post-Tier-1 | These functions reach into `Window` for `body.file.Read`. The cleanest signature is to take a `[]rune` body slice (read once at call site) rather than an interface. |
+| [ ] Tests | New `spans/render_test.go` covering the conversion paths. Existing tests at the Window level either move (if pure data-driven) or stay (if exercising the wider styled-mode flow). | — | Tier 1 didn't preserve test counts here; review existing wind_styled_test.go for tests that should move. |
+| [ ] Iterate | Move functions; replace Window-side callers with `spans.Render(body, w.spanStore, w.regionStore)`. | — | — |
 | [ ] Commit | — | — | `spans: move render bridge from wind.go to spans package` |
 
 ### Tier 2.5: Final cleanup + documentation
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Audit `wind.go` post-move for remaining direct rich.* references that should also live in spans/. Optionally migrate `cmd/*` tools to import `spans/` types. | — | — |
+| [ ] Design | **Per Tier 1 lessons 4 & 5:** after extraction, audit `wind.go` for orphan helpers whose only callers were the moved functions, and grep stale doc-comments mentioning moved symbols (`buildStyledContent`, `styleSubRun`, etc.) for cleanup. Decide whether to optionally migrate `cmd/*` tools to import `spans/` types (recommended: defer to a separate change). | — | — |
 | [ ] Tests | Full `go test ./...` green. | — | — |
-| [ ] Iterate | Remove dead code; update `cmd/*` tools optionally; update `docs/designs/spans-protocol.md` references. | — | — |
+| [ ] Iterate | Remove dead code; clean up stale comments; update `docs/designs/spans-protocol.md` references. | — | — |
 | [ ] Commit | — | — | `spans: final cleanup after tier-2 extraction` |

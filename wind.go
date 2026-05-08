@@ -562,7 +562,7 @@ func (w *Window) Clean(conservative bool) bool {
 }
 
 // VisibleRange returns the rune range [org, end) currently visible in the
-// window body. In styled/preview mode it queries the rich.Frame; otherwise
+// window body. In styled mode it queries the rich.Frame; otherwise
 // it uses the plain text frame.
 func (w *Window) VisibleRange() (org, end int) {
 	if w.styledMode && w.richBody != nil && w.richBody.Frame() != nil {
@@ -663,15 +663,15 @@ func (w *Window) UpdateTag(newtagstatus file.TagStatus) {
 
 
 
-// RichBody returns the rich text renderer for preview mode, or nil if not initialized.
+// RichBody returns the styled-mode rich-text renderer, or nil if not initialized.
 func (w *Window) RichBody() *RichText {
 	return w.richBody
 }
 
-// Draw renders the window. In preview mode, it renders the richBody;
+// Draw renders the window. In styled mode, it renders the richBody;
 // otherwise, it uses the normal body rendering.
 func (w *Window) Draw() {
-	if (w.styledMode) && w.richBody != nil {
+	if w.styledMode && w.richBody != nil {
 		w.richBody.Render(w.body.all)
 	} else {
 		// Normal body rendering is handled by the existing Text.Redraw
@@ -1006,22 +1006,21 @@ func (w *Window) initStyledMode() {
 	italicFont := ft.italic
 	boldItalicFont := ft.boldItalic
 
-	// Scaled fonts for headings — same set previewcmd loads.
-	// Without these, fontForStyle in rich.Frame falls through to
-	// the base font for any Scale > 1, so spans-protocol scale=N
-	// directives (added in Phase 3 round 1) would render at body
-	// size despite the StyleAttrs.Scale field being plumbed
-	// through styleAttrsToRichStyle correctly.
+	// Scaled fonts for headings. Without these, fontForStyle in
+	// rich.Frame falls through to the base font for any Scale > 1,
+	// so spans-protocol scale=N directives (Phase 3 round 1) would
+	// render at body size despite the StyleAttrs.Scale field being
+	// plumbed through styleAttrsToRichStyle correctly.
 	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
 	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
 	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
 
-	// Code font for monospace rendering — same as previewcmd.
-	// Without this, fontForStyle returns the base font for any
-	// span with Code=true, so spans-protocol family=code
-	// directives (added in Phase 3 round 2) would render in the
-	// proportional body font despite StyleAttrs.Family="code"
-	// being plumbed through styleAttrsToRichStyle correctly.
+	// Code font for monospace rendering. Without this,
+	// fontForStyle returns the base font for any span with
+	// Code=true, so spans-protocol family=code directives
+	// (Phase 3 round 2) would render in the proportional body
+	// font despite StyleAttrs.Family="code" being plumbed
+	// through styleAttrsToRichStyle correctly.
 	codeFont := tryLoadCodeFont(display, fontPath)
 
 	rt := NewRichText()
@@ -1064,20 +1063,15 @@ func (w *Window) initStyledMode() {
 	}
 
 	// Create an image cache for box elements that reference
-	// images (initStyledMode is the only mode that
-	// lazily allocates; previewcmd guards on a nil cache).
+	// images. Lazy allocation; first styled-mode entry
+	// initializes it.
 	if w.imageCache == nil {
 		w.imageCache = rich.NewImageCache(0)
 	}
 
 	// Image-related options (cache + onImageLoaded callback +
 	// basePath) are routed through a shared helper so the
-	// preview and styled paths stay in parity. Three rounds
-	// of bugs (rounds 1/2 missed font registration; round 4
-	// missed basePath; the post-review sweep caught the
-	// missed onImageLoaded callback) all came from
-	// previewcmd updating without initStyledMode following.
-	// See addImageRichTextOptions for the rationale.
+	// option list stays in one place.
 	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.styledMode })
 
 	rt.Init(display, font, rtOpts...)
@@ -1089,18 +1083,11 @@ func (w *Window) initStyledMode() {
 
 // addImageRichTextOptions appends the image-related options
 // to the rich-text option list: image cache, async-load
-// callback, and base path for relative image resolution.
-// Both initStyledMode and previewcmd use this — extracting
-// the shared set keeps them in lockstep so a new image-related
-// option doesn't have to be remembered in two places. Each
-// call site passes a closure (`isCurrentMode`) that gates the
-// async-load redraw on the caller's specific mode flag
-// (styledMode vs previewMode); when the closure returns false
-// or the rich body is gone, the redraw is skipped.
-//
-// Background: rounds 1, 2, and 4 each shipped a bug-fix that
-// added a missing option to initStyledMode that previewcmd
-// already had. The recurring pattern motivated this helper.
+// callback, and base path for relative image resolution. The
+// caller passes a closure (`isCurrentMode`) that gates the
+// async-load redraw on the current styled-mode flag; when
+// the closure returns false or the rich body is gone, the
+// redraw is skipped.
 func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode func() bool) []RichTextOption {
 	if w.imageCache != nil {
 		rtOpts = append(rtOpts, WithRichTextImageCache(w.imageCache))
@@ -1151,11 +1138,9 @@ func (w *Window) addImageRichTextOptions(rtOpts []RichTextOption, isCurrentMode 
 // span/region stores and pushes it to richBody, syncing the
 // scroll origin and dot/selection from the body so a
 // freshly-initialized richBody picks up the user's cursor
-// position. Called from both the protocol-driven path
-// (xfidspanswrite) and the user-toggle path (exec.go's
-// markdownPreviewCmd) so they stay in parity. No-op if
-// richBody is nil. Phase 3 round 7 — extracted from
-// xfidspanswrite to fix the cursor-resets-to-#0 bug.
+// position. Called from xfidspanswrite. No-op if richBody is
+// nil. Phase 3 round 7 — extracted from xfidspanswrite to fix
+// the cursor-resets-to-#0 bug.
 func (w *Window) renderStyledFromBody() {
 	if !w.styledMode || w.richBody == nil {
 		return
@@ -1693,8 +1678,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	// Scroll wheel (buttons 4 and 5). When the cursor is over a
 	// horizontally-scrollable block region (table, code block,
 	// inline-replacing image), redirect vertical scroll to
-	// horizontal scrolling — same dispatch pattern as the
-	// preview path.
+	// horizontal scrolling.
 	if m.Buttons&8 != 0 || m.Buttons&16 != 0 {
 		if regionIndex, ok := rt.Frame().PointInBlockRegion(m.Point); ok {
 			delta := 40 // pixels per scroll tick
@@ -1735,9 +1719,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	}
 
 	// Horizontal scrollbar clicks for overflowing block regions
-	// (tables, code blocks, wide images). Uses the same latching
-	// helper as preview mode — the helper's logic is independent
-	// of preview vs. styled mode.
+	// (tables, code blocks, wide images).
 	if regionIndex, ok := rt.Frame().HScrollBarAt(m.Point); ok {
 		button := 0
 		if m.Buttons&1 != 0 {

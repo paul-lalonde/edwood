@@ -558,9 +558,6 @@ func keyboardthread(g *globals, display draw.Display) {
 				t.w.Unlock()
 				display.Flush()
 			}
-		case fn := <-g.previewRenderCh:
-			fn()
-			display.Flush()
 		case r := <-g.keyboardctl.C:
 			for {
 				typetext = g.row.Type(r, g.mouse.Point)
