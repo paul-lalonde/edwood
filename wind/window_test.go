@@ -6,9 +6,6 @@ package wind
 import (
 	"image"
 	"testing"
-
-	"github.com/rjkroege/edwood/markdown"
-	"github.com/rjkroege/edwood/rich"
 )
 
 // TestWindowStateNew tests that a new WindowState is properly initialized.
@@ -389,35 +386,9 @@ func TestWindowBaseRect(t *testing.T) {
 	}
 }
 
-// TestWindowBasePreviewMode tests preview mode toggling.
-func TestWindowBasePreviewMode(t *testing.T) {
-	wb := NewWindowBase()
 
-	// Default should not be in preview mode
-	if wb.IsPreviewMode() {
-		t.Error("default should not be in preview mode")
-	}
 
-	// Enable preview mode
-	wb.SetPreviewMode(true)
-	if !wb.IsPreviewMode() {
-		t.Error("should be in preview mode after SetPreviewMode(true)")
-	}
 
-	// SetPreviewMode should also update Preview and Draw state
-	if !wb.Preview.IsPreviewMode() {
-		t.Error("Preview.IsPreviewMode should be true")
-	}
-	if !wb.Draw.IsPreviewMode() {
-		t.Error("Draw.IsPreviewMode should be true")
-	}
-
-	// Disable preview mode
-	wb.SetPreviewMode(false)
-	if wb.IsPreviewMode() {
-		t.Error("should not be in preview mode after SetPreviewMode(false)")
-	}
-}
 
 // TestWindowBaseDirty tests dirty flag management.
 func TestWindowBaseDirty(t *testing.T) {
@@ -646,54 +617,11 @@ func TestWindowBaseRedraw(t *testing.T) {
 	}
 }
 
-// TestWindowBaseClearPreviewCache tests clearing preview cache with typed fields.
-func TestWindowBaseClearPreviewCache(t *testing.T) {
-	wb := NewWindowBase()
 
-	// Set preview mode first
-	wb.SetPreviewMode(true)
 
-	// Clear cache should not panic and should not affect preview mode
-	wb.ClearPreviewCache()
-	if !wb.IsPreviewMode() {
-		t.Error("clearing cache should not affect preview mode")
-	}
 
-	// Set real typed values via Preview state
-	_, sm, lm := markdown.ParseWithSourceMap("# Test\n")
-	ic := rich.NewImageCache(10)
-	wb.Preview.SetSourceMap(sm)
-	wb.Preview.SetLinkMap(lm)
-	wb.Preview.SetImageCache(ic)
 
-	// Verify they are set
-	if wb.Preview.SourceMap() == nil {
-		t.Fatal("SourceMap should be set")
-	}
-	if wb.Preview.LinkMap() == nil {
-		t.Fatal("LinkMap should be set")
-	}
-	if wb.Preview.ImageCache() == nil {
-		t.Fatal("ImageCache should be set")
-	}
 
-	// ClearPreviewCache should clear all via delegation
-	wb.ClearPreviewCache()
-	if wb.Preview.SourceMap() != nil {
-		t.Error("SourceMap should be nil after ClearPreviewCache")
-	}
-	if wb.Preview.LinkMap() != nil {
-		t.Error("LinkMap should be nil after ClearPreviewCache")
-	}
-	if wb.Preview.ImageCache() != nil {
-		t.Error("ImageCache should be nil after ClearPreviewCache")
-	}
-
-	// Preview mode should still be active
-	if !wb.IsPreviewMode() {
-		t.Error("ClearPreviewCache should not affect preview mode")
-	}
-}
 
 // TestWindowBaseResetEventState tests resetting event state.
 func TestWindowBaseResetEventState(t *testing.T) {

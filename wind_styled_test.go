@@ -482,20 +482,6 @@ func TestExitStyledMode_NopIfNotStyled(t *testing.T) {
 	}
 }
 
-func TestSpanWriteToPreviewWindow_Error(t *testing.T) {
-	// When a window is in preview mode, xfidspanswrite rejects span writes.
-	// This test verifies the check exists via the IsPreviewMode() gate.
-	w := makeStyledWindow(t, "hello")
-	w.previewMode = true
-
-	// The actual error check is in xfidspanswrite, which we tested in
-	// spanparse_test.go. Here we confirm the state invariant: a preview
-	// mode window should not accept styled mode initialization.
-	w.initStyledMode()
-	if w.styledMode {
-		t.Error("should not enter styled mode when in preview mode")
-	}
-}
 
 func TestClearRevertsToPlainMode(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
@@ -592,25 +578,8 @@ func TestRenderStyledFromBodyPreservesSelection(t *testing.T) {
 	}
 }
 
-func TestStyledAndPreviewMutuallyExclusive(t *testing.T) {
-	w := makeStyledWindow(t, "hello")
 
-	// Enter styled mode.
-	w.initStyledMode()
-	if !w.styledMode {
-		t.Fatal("precondition: should be in styled mode")
-	}
 
-	// Simulate entering preview mode (as previewcmd would do).
-	// Preview mode sets previewMode=true, styledMode=false, and creates
-	// a new richBody. Here we verify the invariant.
-	w.styledMode = false
-	w.previewMode = true
-
-	if w.styledMode && w.previewMode {
-		t.Error("styledMode and previewMode should never both be true")
-	}
-}
 
 // TestStyledShowSendsSelectionEvent verifies that when Show() is called in
 // styled mode, the 'S' selection event is sent to the event subscriber

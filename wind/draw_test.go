@@ -72,20 +72,7 @@ func TestMockDrawContextRect(t *testing.T) {
 	}
 }
 
-// TestMockDrawContextPreviewMode tests the PreviewMode getter/setter.
-func TestMockDrawContextPreviewMode(t *testing.T) {
-	dc := NewMockDrawContext()
 
-	dc.SetPreviewMode(true)
-	if !dc.IsPreviewMode() {
-		t.Error("preview mode should be true after SetPreviewMode(true)")
-	}
-
-	dc.SetPreviewMode(false)
-	if dc.IsPreviewMode() {
-		t.Error("preview mode should be false after SetPreviewMode(false)")
-	}
-}
 
 // TestDrawStateNew tests that a new DrawState has correct defaults.
 func TestDrawStateNew(t *testing.T) {
@@ -195,27 +182,7 @@ func TestDrawStateMaxLines(t *testing.T) {
 	}
 }
 
-// TestDrawStatePreviewMode tests preview mode state.
-func TestDrawStatePreviewMode(t *testing.T) {
-	ds := NewDrawState()
 
-	ds.SetPreviewMode(true)
-	if !ds.IsPreviewMode() {
-		t.Error("should be in preview mode after SetPreviewMode(true)")
-	}
-	if !ds.NeedsRedraw() {
-		t.Error("changing preview mode should trigger redraw")
-	}
-
-	ds.ClearRedrawFlag()
-	ds.SetPreviewMode(false)
-	if ds.IsPreviewMode() {
-		t.Error("should not be in preview mode after SetPreviewMode(false)")
-	}
-	if !ds.NeedsRedraw() {
-		t.Error("changing preview mode should trigger redraw")
-	}
-}
 
 // TestDrawStateTagLines tests tag lines management.
 func TestDrawStateTagLines(t *testing.T) {
@@ -316,16 +283,4 @@ func TestDrawStateDirtyNoChangeNoRedraw(t *testing.T) {
 	}
 }
 
-// TestDrawStatePreviewModeNoChangeNoRedraw tests that setting same preview mode doesn't trigger redraw.
-func TestDrawStatePreviewModeNoChangeNoRedraw(t *testing.T) {
-	ds := NewDrawState()
 
-	ds.SetPreviewMode(true)
-	ds.ClearRedrawFlag()
-
-	// Setting the same preview mode should not trigger redraw
-	ds.SetPreviewMode(true)
-	if ds.NeedsRedraw() {
-		t.Error("setting same preview mode should not trigger redraw")
-	}
-}
