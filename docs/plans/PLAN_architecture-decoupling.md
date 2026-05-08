@@ -267,10 +267,66 @@ noise around it.
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Confirm `spans/` package boundary + public API shape now that the markdown package is gone. Decide: (a) public type names (`Store` vs `SpanStore`); (b) `Render` function signature — `BodyReader` interface or `[]rune`? Lean toward `[]rune` since the body is small and copy-once is simpler than maintaining an interface; (c) whether `cmd/*` tools (md2spans, edcolor, dirthumb) migrate to import `spans/` now or follow up. **Recommend NOT migrating cmd/* this tier** — they have small local Span types that work, and a same-tier migration would balloon the diff. | tier-1 retrospective | The retrospective revealed that the spans-bridge functions in `wind.go` aren't entangled with preview-mode (preview was its own parser path). This makes Tier 2 a cleaner extraction than originally feared. |
-| [ ] Tests | n/a (planning). | — | — |
-| [ ] Iterate | Revise the row notes below if 2.0's design pass surfaces unexpected coupling. | — | — |
-| [ ] Commit | — | — | `docs: tier-2 design pass — confirm spans/ public API` |
+| [x] Design | See "Tier 2.0 design output" below. Audit clean — zero subpackage spans-related types; all bridge-function callers confined to wind.go; spanparse.go / spanstore.go / region.go have zero edwood-package imports. | tier-1 retrospective | Cleaner than feared. |
+| [x] Tests | n/a (planning). | — | — |
+| [x] Iterate | Locked decisions in the section below. | — | — |
+| [ ] Commit | — | — | `docs: tier-2 design output — clean extraction confirmed` |
+
+#### Tier 2.0 design output (2026-05-08)
+
+**Subpackage audit.** Zero spans-related references in `wind/`,
+`command/`, or `internal/`. Tier 1.5 already deleted the only spans-
+adjacent code in subpackages (`wind/preview.go`,
+`command/preview_cmds*`).
+
+**Call-graph audit.** Every candidate bridge function in `wind.go` is
+called only from `wind.go`:
+`buildStyledContent`, `styleSubRun`, `styleAttrsToRichStyle`,
+`boxStyleToRichStyle`, `applyImagePayload`, `applyEnclosingRegions`,
+`applyCodeRegion`, `applyBlockquoteRegion`, `applyListitemRegion`,
+`applyTableRegion`, `applyTableRowRegion`, `applyTableCellRegion`,
+`ancestorsOuterFirst`, `tryAddRegion`. **No cross-package callers**;
+no Tier-1-style "misnamed cross-mode helper" surprises expected.
+
+**Imports of the three leaf files.** `spanparse.go` / `spanstore.go` /
+`region.go` import only stdlib (`fmt`, `image/color`, `strconv`,
+`strings`). Zero edwood-package imports. Move-as-is.
+
+**Public API.** Settled decisions:
+
+| Public name | Replaces | Rationale |
+|---|---|---|
+| `spans.Store` | `SpanStore` | Drop the redundant prefix; package qualifies it. |
+| `spans.RegionStore` | `RegionStore` | Same. |
+| `spans.Region` | `Region` | Same. |
+| `spans.StyleRun` | `StyleRun` | Same. |
+| `spans.StyleAttrs` | `StyleAttrs` | Same. |
+| `spans.NewStore()` | `NewSpanStore()` | — |
+| `spans.NewRegionStore()` | `NewRegionStore()` | — |
+| `spans.ParseMessage(data, bufLen)` | `parseSpanMessage` | Capitalize for export. |
+| `spans.Render(body []rune, *Store, *RegionStore) rich.Content` | `(*Window).buildStyledContent` | Signature: `[]rune` body, not `BodyReader` — body is small, copy-once. |
+
+Helpers stay package-private: `parseSpanLine`, `parseBoxLine`,
+`parsePlacementFlag`, `parseScaleFlag`, `parseFamilyFlag`, `parseColor`,
+`fillGaps`, etc.
+
+**`cmd/*` tools.** md2spans, edcolor, dirthumb keep their local Span
+types — defer the optional migration to a follow-up change. Tier 2 is
+already large; not bundling.
+
+**Move order** (each row is one commit per CODING-PROCESS):
+
+1. **2.1**: empty `spans/` package + this audit recorded. (Optional
+   commit; can fold into 2.2 if minimal.)
+2. **2.2**: move `spanparse.go` + tests.
+3. **2.3**: move `spanstore.go` + `region.go` + tests.
+4. **2.4**: extract `Render` from `wind.go` plus the apply* family;
+   thin window wrapper around `spans.Render`.
+5. **2.5**: cleanup — orphan helpers, stale comments, doc updates.
+
+Estimated impact: ~1,400 LOC moved into `spans/`; ~300 LOC of bridge
+code leaves `wind.go`; main-package public surface keeps the same
+behavior.
 
 ### Tier 2.1: Create `spans/` package shell + subpackage audit
 
