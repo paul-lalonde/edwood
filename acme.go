@@ -440,14 +440,6 @@ func MovedMouse(g *globals, m draw.Mouse) {
 		return
 	}
 
-	// Handle preview mode: route body mouse events to HandlePreviewMouse
-	// In preview mode, the body area is fully controlled by the preview - don't fall through
-	if w != nil && t.what == Body && w.IsPreviewMode() {
-		w.Lock('M')
-		w.HandlePreviewMouse(&m, global.mousectl)
-		w.Unlock()
-		return
-	}
 	// Handle styled mode: route body mouse events to HandleStyledMouse
 	if w != nil && t.what == Body && w.IsStyledMode() {
 		w.Lock('M')

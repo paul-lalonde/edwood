@@ -280,17 +280,17 @@ func execute(t *Text, aq0 int, aq1 int, external bool, argt *Text) {
 	run(t.w, string(b), dir, true, aa, a, false)
 }
 
-// previewExecute executes a command from the rendered preview text.
-// Unlike execute(), which reads command text from the source file buffer,
-// this uses the rendered text directly (without markdown formatting).
-// The body Text is used for context (window, directory, etc.).
-func previewExecute(t *Text, cmdText string) {
+// richExecute executes a command from the rendered rich-text body.
+// Unlike execute(), which reads command text from the source file
+// buffer, this uses the cmdText string directly (already extracted
+// from the rich.Frame's selection). The body Text is used for
+// context (window, directory, etc.). Called from the styled-mode
+// mouse handler when the user B2-executes a span of rendered text.
+func richExecute(t *Text, cmdText string) {
 	r := []rune(cmdText)
 	e := lookup(string(r), globalexectab)
 
-	// Send commands to external client if the target window's event file is in use.
 	if t.w != nil && t.w.nopen[QWevent] > 0 {
-		// For preview mode with external clients, use the source-mapped positions
 		delegateExecution(t, e, t.q0, t.q1, t.q0, t.q1, nil)
 		return
 	}

@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"9fans.net/go/plumb"
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
@@ -460,8 +459,8 @@ func (w *Window) Undo(isundo bool) {
 
 	// End any in-progress typing sequence so that the next typed character
 	// creates a fresh undo point via Mark(). Without this, eq0 stays set
-	// from the previous typing session and HandlePreviewType (and Text.Type)
-	// skips Mark(), leaving seq at the value returned by the undo — which is
+	// from the previous typing session and Text.Type skips Mark(), leaving
+	// seq at the value returned by the undo — which is
 	// 0 when all changes have been undone. A subsequent Insert with seq 0
 	// triggers FlattenHistory, permanently destroying the undo stack.
 	body.eq0 = ^0
@@ -490,14 +489,6 @@ func (w *Window) SetName(name string) {
 }
 
 func (w *Window) Type(t *Text, r rune) {
-	// In preview mode, route body key events through HandlePreviewKey
-	if t.what == Body && w.IsPreviewMode() {
-		if w.HandlePreviewKey(r) {
-			return
-		}
-		w.HandlePreviewType(t, r)
-		return
-	}
 	t.Type(r)
 }
 
@@ -984,505 +975,6 @@ func (w *Window) Draw() {
 	}
 }
 
-// HandlePreviewMouse handles mouse events when the window is in preview mode.
-// Returns true if the event was handled by the preview mode, false otherwise.
-// When false is returned, the caller should handle the event normally.
-func (w *Window) HandlePreviewMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
-	if !w.previewMode || w.richBody == nil {
-		return false
-	}
-
-	// Check if the mouse is in the body area
-	if !m.Point.In(w.body.all) {
-		return false
-	}
-
-	rt := w.richBody
-
-	// Handle scroll wheel (buttons 4 and 5).
-	// When the cursor is over a horizontally-scrollable block region,
-	// redirect vertical scroll to horizontal scrolling.
-	if m.Buttons&8 != 0 || m.Buttons&16 != 0 {
-		if regionIndex, ok := rt.Frame().PointInBlockRegion(m.Point); ok {
-			// Horizontal scroll: button 4 = left, button 5 = right.
-			delta := 40 // pixels per scroll tick
-			if m.Buttons&8 != 0 {
-				delta = -delta
-			}
-			rt.Frame().HScrollWheel(delta, regionIndex)
-		} else {
-			// Normal vertical scroll.
-			up := m.Buttons&8 != 0
-			rt.ScrollWheel(up)
-		}
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-		return true
-	}
-
-	// Handle scrollbar clicks (buttons 1, 2, 3 in scrollbar area).
-	// Uses latching: once pressed, the scroll tracks the mouse until release.
-	scrRect := rt.ScrollRect()
-	if m.Point.In(scrRect) {
-		button := 0
-		if m.Buttons&1 != 0 {
-			button = 1
-		} else if m.Buttons&2 != 0 {
-			button = 2
-		} else if m.Buttons&4 != 0 {
-			button = 3
-		}
-		if button != 0 && mc != nil && rt.scrollbar != nil {
-			rt.scrollbar.HandleClick(button)
-			w.Draw()
-			if w.display != nil {
-				w.display.Flush()
-			}
-			return true
-		}
-	}
-
-	// Handle horizontal scrollbar clicks (buttons 1, 2, 3 on h-scrollbar).
-	// Uses latching: same pattern as vertical.
-	if regionIndex, ok := rt.Frame().HScrollBarAt(m.Point); ok {
-		button := 0
-		if m.Buttons&1 != 0 {
-			button = 1
-		} else if m.Buttons&2 != 0 {
-			button = 2
-		} else if m.Buttons&4 != 0 {
-			button = 3
-		}
-		if button != 0 && mc != nil {
-			w.previewHScrollLatch(rt, mc, button, regionIndex)
-			return true
-		}
-	}
-
-	// Handle button 1 in frame area for text selection and chording.
-	// Chord processing follows the same pattern as text.go: chords are
-	// handled inline in a loop while B1 is held, so that sequential
-	// B1+B2 (cut) then B1+B3 (paste) works correctly.
-	frameRect := rt.Frame().Rect()
-	if m.Point.In(frameRect) && m.Buttons&1 != 0 && mc != nil {
-		var p0, p1 int
-		var lastButtons int // track button state for chord loop
-
-		selectq := rt.Frame().Charofpt(m.Point)
-		b := m.Buttons
-		fr := rt.Frame()
-
-		// Check for double-click: same richtext, same position, within 500ms.
-		prevP0, prevP1 := rt.Selection()
-		if w.previewClickRT == rt &&
-			m.Msec-w.previewClickMsec < 500 &&
-			prevP0 == prevP1 && selectq == prevP0 {
-
-			// Double-click: expand selection
-			p0, p1 = fr.ExpandAtPos(selectq)
-			rt.SetSelection(p0, p1)
-			fr.Redraw()
-			if w.display != nil {
-				w.display.Flush()
-			}
-			w.previewClickRT = nil
-
-			// Wait for mouse state change (jitter tolerance), then
-			// fall through to the chord processing loop below.
-			x, y := m.Point.X, m.Point.Y
-			for {
-				me := <-mc.C
-				lastButtons = me.Buttons
-				if !(me.Buttons == b &&
-					util.Abs(me.Point.X-x) < 3 &&
-					util.Abs(me.Point.Y-y) < 3) {
-					break
-				}
-			}
-		} else {
-			// Normal click/drag selection: track drag until a chord
-			// is detected or all buttons are released.
-			anchor := selectq
-			for {
-				me := <-mc.C
-				lastButtons = me.Buttons
-				current := fr.Charofpt(me.Point)
-				if anchor <= current {
-					p0, p1 = anchor, current
-				} else {
-					p0, p1 = current, anchor
-				}
-				rt.SetSelection(p0, p1)
-				fr.Redraw()
-				if w.display != nil {
-					w.display.Flush()
-				}
-				// Chord detected or all buttons released: exit drag.
-				if me.Buttons != b || me.Buttons == 0 {
-					break
-				}
-			}
-
-			// Record double-click state
-			if p0 == p1 {
-				w.previewClickRT = rt
-				w.previewClickPos = p0
-				w.previewClickMsec = m.Msec
-			} else {
-				w.previewClickRT = nil
-			}
-		}
-
-		// Sync the preview selection to the source body buffer
-		w.syncSourceSelection()
-		q0 := w.body.q0
-
-		// Chord processing loop: handle B2/B3 chords while B1 is held,
-		// matching the text.go pattern with undo/redo toggle semantics.
-		const (
-			chordNone = iota
-			chordCut
-			chordPaste
-			chordSnarf
-		)
-		state := chordNone
-		for lastButtons != 0 {
-			if lastButtons == 7 && state == chordNone {
-				// B1+B2+B3 simultaneous: snarf only (copy, no delete)
-				cut(&w.body, &w.body, nil, true, false, "")
-				global.snarfContext = w.selectionContext
-				state = chordSnarf
-			} else if (lastButtons&1) != 0 && (lastButtons&6) != 0 && state != chordSnarf {
-				if state == chordNone {
-					w.body.TypeCommit()
-					global.seq++
-					w.body.file.Mark(global.seq)
-				}
-				if lastButtons&2 != 0 {
-					// B2 chord: cut (or undo a previous paste)
-					if state == chordPaste {
-						w.Undo(true)
-						w.body.SetSelect(q0, w.body.q1)
-						state = chordNone
-					} else if state != chordCut {
-						cut(&w.body, &w.body, nil, true, true, "")
-						global.snarfContext = w.selectionContext
-						state = chordCut
-					}
-				} else {
-					// B3 chord: paste (or undo a previous cut)
-					if state == chordCut {
-						w.Undo(true)
-						w.body.SetSelect(q0, w.body.q1)
-						state = chordNone
-					} else if state != chordPaste {
-						paste(&w.body, &w.body, nil, true, false, "")
-						state = chordPaste
-					}
-				}
-				// Collapse the rich frame's selection before re-rendering
-				// so UpdatePreview doesn't draw a stale highlight.
-				mq0, mq1 := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
-				rt.SetSelection(mq0, mq1)
-				w.UpdatePreview()
-				// Now use the new source map to set the correct selection.
-				if w.previewSourceMap != nil {
-					rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
-					if rendStart >= 0 {
-						rt.SetSelection(rendStart, rendEnd)
-					}
-				}
-				clearmouse()
-			}
-			// Wait for button state to change
-			prev := lastButtons
-			for lastButtons == prev {
-				me := <-mc.C
-				lastButtons = me.Buttons
-			}
-			w.previewClickRT = nil
-		}
-
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-		return true
-	}
-
-	// Handle button 2 (B2/middle-click) in frame area for Execute action
-	if m.Point.In(frameRect) && m.Buttons&2 != 0 {
-		// Save the prior selection to restore after B2 execute
-		priorP0, priorP1 := rt.Selection()
-
-		var p0, p1 int
-		if mc != nil {
-			// Use Frame.SelectWithColor() for proper drag selection with B2
-			// Pass global.but2col (red) for colored sweep during drag
-			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but2col)
-			rt.SetSelection(p0, p1)
-		} else {
-			// Fallback: just set point selection if no Mousectl available
-			charPos := rt.Frame().Charofpt(m.Point)
-			p0, p1 = charPos, charPos
-			rt.SetSelection(charPos, charPos)
-		}
-		// If null click (no sweep), expand selection. In a code block,
-		// expands to the full block; otherwise expands to word.
-		if p0 == p1 {
-			q0, q1 := rt.Frame().ExpandAtPos(p0)
-			if q0 != q1 {
-				rt.SetSelection(q0, q1)
-				p0, p1 = q0, q1
-			}
-		}
-		// Sync the preview selection to the source body buffer
-		w.syncSourceSelection()
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-		// Execute the rendered text as a command
-		cmdText := w.PreviewExecText()
-		if cmdText != "" {
-			previewExecute(&w.body, cmdText)
-		}
-		// Restore prior selection after B2 execute action
-		rt.SetSelection(priorP0, priorP1)
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-		return true
-	}
-
-	// Handle button 3 (B3/right-click) in frame area for Look action
-	if m.Point.In(frameRect) && m.Buttons&4 != 0 {
-		// Save prior selection before the sweep overwrites it.
-		// Needed so a B3 null-click inside an existing selection uses
-		// that selection rather than expanding to a word.
-		priorQ0, priorQ1 := rt.Selection()
-
-		// First, perform sweep selection (like B1/B2)
-		var p0, p1 int
-		if mc != nil {
-			// Use Frame.SelectWithColor() for proper drag selection with B3
-			// Pass global.but3col (green) for colored sweep during drag
-			p0, p1 = rt.Frame().SelectWithColor(mc, m, global.but3col)
-			rt.SetSelection(p0, p1)
-		} else {
-			charPos := rt.Frame().Charofpt(m.Point)
-			p0, p1 = charPos, charPos
-			rt.SetSelection(charPos, charPos)
-		}
-
-		// Determine the character position for link/image checks
-		charPos := p0
-
-		// If null click (no sweep), check for existing selection or expand.
-		// Use word-level expansion only (not code block expansion).
-		if p0 == p1 {
-			// Check if click is inside the prior selection
-			if priorQ0 != priorQ1 && charPos >= priorQ0 && charPos < priorQ1 {
-				// Click inside existing selection - use it as-is
-				p0, p1 = priorQ0, priorQ1
-				rt.SetSelection(priorQ0, priorQ1)
-			} else {
-				q0, q1 := rt.Frame().ExpandWordAtPos(p0)
-				if q0 != q1 {
-					rt.SetSelection(q0, q1)
-					p0, p1 = q0, q1
-				}
-			}
-		}
-
-		// Check if this position is within a link
-		url := w.PreviewLookLinkURL(charPos)
-
-		// For swept selections, also check if the range overlaps a single link
-		if url == "" && p0 != p1 && w.previewLinkMap != nil {
-			url = w.previewLinkMap.URLForRange(p0, p1)
-		}
-
-		if url != "" {
-			// Save body selection before any modifications - we'll restore it before returning
-			// so that preview link operations don't leave selections in the text buffer
-			savedBodyQ0 := w.body.q0
-			savedBodyQ1 := w.body.q1
-
-			// Sync source selection so body.q1 is set as search start
-			w.syncSourceSelection()
-
-			// Check if URL is an address expression (like :/^# Index or ?word)
-			if len(url) > 0 && (url[0] == ':' || url[0] == '/' || url[0] == '?') {
-				// Parse as Acme address expression
-				urlRunes := []rune(url)
-				found := false
-
-				// Create a getc function for the URL string
-				getc := func(q int) rune {
-					if q < len(urlRunes) {
-						return urlRunes[q]
-					}
-					return 0
-				}
-
-				// Set search start to after the current selection, so the address
-				// expression searches forward from the current position.
-				// Save original selection in case address evaluation fails.
-				origQ0 := w.body.q0
-				origQ1 := w.body.q1
-				w.body.q0 = origQ1
-				w.body.q1 = origQ1
-
-				// Skip the leading ':' prefix — it's our convention marker meaning
-				// "this is an address expression", not part of Acme's address syntax.
-				// Without this, the address parser treats ':' as a compound operator,
-				// turning /regexp/ into a range instead of a point search.
-				addrStart := 0
-				if urlRunes[0] == ':' {
-					addrStart = 1
-				}
-
-				// Evaluate the address expression
-				r, eval, _ := address(false, &w.body, Range{-1, -1}, Range{w.body.q0, w.body.q1}, addrStart, len(urlRunes), getc, true)
-				if eval && r.q0 <= r.q1 {
-					w.body.q0 = r.q0
-					w.body.q1 = r.q1
-					found = true
-				}
-
-				// Wrap around: if forward search didn't find from current
-				// position, retry from the start of the file. For backward
-				// search, retry from the end. This matches Acme's Look behavior.
-				if !found {
-					nr := w.body.file.Nr()
-					w.body.q0 = 0
-					w.body.q1 = 0
-					r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{0, 0}, addrStart, len(urlRunes), getc, true)
-					if eval && r.q0 <= r.q1 {
-						w.body.q0 = r.q0
-						w.body.q1 = r.q1
-						found = true
-					} else {
-						// Also try from end for backward searches
-						w.body.q0 = nr
-						w.body.q1 = nr
-						r, eval, _ = address(false, &w.body, Range{-1, -1}, Range{nr, nr}, addrStart, len(urlRunes), getc, true)
-						if eval && r.q0 <= r.q1 {
-							w.body.q0 = r.q0
-							w.body.q1 = r.q1
-							found = true
-						}
-					}
-				}
-
-				if !found {
-					w.body.q0 = origQ0
-					w.body.q1 = origQ1
-				}
-
-				if found {
-					// Use ShowInPreview to map source positions to rendered,
-					// set selection, scroll, draw, and flush — all in one call.
-					rendStart := w.ShowInPreview(w.body.q0, w.body.q1)
-					if rendStart >= 0 {
-						// Warp cursor to found text
-						if w.display != nil {
-							warpPt := rt.Frame().Ptofchar(rendStart).Add(
-								image.Pt(4, rt.Frame().DefaultFontHeight()-4))
-							w.display.MoveTo(warpPt)
-						}
-						// Restore original body selection so toggling preview mode doesn't show erroneous selection
-						w.body.q0 = savedBodyQ0
-						w.body.q1 = savedBodyQ1
-						return true
-					}
-				}
-			}
-
-			// Not an address expression, or address evaluation failed — plumb the URL.
-			// We don't search the body for the URL text because search() wraps around
-			// and matches the URL inside the link's own markdown syntax [text](url).
-			w.body.q0 = savedBodyQ0
-			w.body.q1 = savedBodyQ1
-
-			if plumbsendfid != nil {
-				pm := &plumb.Message{
-					Src:  "acme",
-					Dst:  "",
-					Dir:  w.body.AbsDirName(""),
-					Type: "text",
-					Data: []byte(url),
-				}
-				if err := pm.Send(plumbsendfid); err != nil {
-					warning(nil, "Markdown B3: plumb failed: %v\n", err)
-				}
-			} else {
-				warning(nil, "Markdown B3: plumber not running\n")
-			}
-			return true
-		}
-
-		// Check if this position is within an image
-		imageURL := rt.Frame().ImageURLAt(charPos)
-		if imageURL != "" {
-			// Plumb the image path
-			if plumbsendfid != nil {
-				pm := &plumb.Message{
-					Src:  "acme",
-					Dst:  "",
-					Dir:  w.body.AbsDirName(""),
-					Type: "text",
-					Data: []byte(imageURL),
-				}
-				if err := pm.Send(plumbsendfid); err != nil {
-					warning(nil, "Markdown B3 image: plumb failed: %v\n", err)
-				}
-			} else {
-				warning(nil, "Markdown B3 image: plumber not running\n")
-			}
-			return true
-		}
-
-		// Not a link or image - use rendered text for Look (search in body)
-		// Get the rendered (plain) text to search for, not the source markdown
-		lookText := w.PreviewLookText()
-
-		// Still sync the source selection so body.q1 is set as the search start position
-		w.syncSourceSelection()
-
-		if len(lookText) > 0 {
-			// Search source buffer for the rendered text (no markup)
-			if search(&w.body, []rune(lookText)) {
-				// Map the search result (body.q0/q1) back to rendered positions
-				if w.previewSourceMap != nil {
-					rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
-					if rendStart >= 0 && rendEnd >= 0 {
-						rt.SetSelection(rendStart, rendEnd)
-						w.scrollPreviewToMatch(rt, rendStart)
-						// Warp cursor to found text, matching normal Acme's look3() behavior
-						if w.display != nil {
-							warpPt := rt.Frame().Ptofchar(rendStart).Add(
-								image.Pt(4, rt.Frame().DefaultFontHeight()-4))
-							w.display.MoveTo(warpPt)
-						}
-					}
-				}
-			}
-		}
-
-		w.Draw()
-		if w.display != nil {
-			w.display.Flush()
-		}
-		return true
-	}
-
-	return false
-}
 
 // drainScrollEvents consumes all mouse events from mc that arrive
 // within the given duration, leaving the LATEST event's state in
@@ -1517,10 +1009,11 @@ func drainScrollEvents(mc *draw.Mousectl, d time.Duration) {
 	}
 }
 
-// previewHScrollLatch implements acme-style latching for horizontal
-// scrollbars in preview mode. Same pattern as previewVScrollLatch but for the
-// horizontal axis. The cursor is warped to stay within the scrollbar band.
-func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int, regionIndex int) {
+// hscrollLatch implements acme-style latching for horizontal
+// scrollbars on rich.Frame block regions (tables, code blocks,
+// images). The cursor is warped to stay within the scrollbar band.
+// Used by the styled-mode mouse handler.
+func (w *Window) hscrollLatch(rt *RichText, mc *draw.Mousectl, button int, regionIndex int) {
 	buttonBit := 1 << uint(button-1)
 	frameRect := rt.Frame().Rect()
 
@@ -1585,27 +1078,6 @@ func (w *Window) previewHScrollLatch(rt *RichText, mc *draw.Mousectl, button int
 	}
 }
 
-// ShowInPreview maps source positions [q0, q1) to rendered positions,
-// updates the preview selection, scrolls to make it visible, and redraws.
-// Returns the rendered start position (for cursor warping), or -1 if
-// mapping failed.
-func (w *Window) ShowInPreview(q0, q1 int) int {
-	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
-		return -1
-	}
-	rt := w.richBody
-	rendStart, rendEnd := w.previewSourceMap.ToRendered(q0, q1)
-	if rendStart < 0 || rendEnd < 0 {
-		return -1
-	}
-	rt.SetSelection(rendStart, rendEnd)
-	w.scrollPreviewToMatch(rt, rendStart)
-	w.Draw()
-	if w.display != nil {
-		w.display.Flush()
-	}
-	return rendStart
-}
 
 // ShowInStyledMode sets the rich text selection and scrolls to make it
 // visible. In styled mode, rune positions are 1:1 with the source text
@@ -1616,7 +1088,7 @@ func (w *Window) ShowInStyledMode(q0, q1 int) {
 	}
 	rt := w.richBody
 	rt.SetSelection(q0, q1)
-	w.scrollPreviewToMatch(rt, q0)
+	w.scrollRichToMatch(rt, q0)
 	w.body.org = rt.Origin() // Keep plain frame origin in sync
 	w.Draw()
 	if w.display != nil {
@@ -1624,11 +1096,11 @@ func (w *Window) ShowInStyledMode(q0, q1 int) {
 	}
 }
 
-// scrollPreviewToMatch scrolls the preview so that the match at rendStart
-// is visible, placing it roughly 1/3 from the top of the frame (matching
-// Acme's Show() scroll behavior). If the match is already visible, no
-// scrolling occurs.
-func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
+// scrollRichToMatch scrolls a rich.Frame so that the match at
+// rendStart is visible, placing it roughly 1/4 from the top of the
+// frame (matching Acme's Show() scroll behavior). If the match is
+// already visible, no scrolling occurs.
+func (w *Window) scrollRichToMatch(rt *RichText, rendStart int) {
 	fr := rt.Frame()
 	if fr == nil {
 		return
@@ -1688,6 +1160,7 @@ func (w *Window) scrollPreviewToMatch(rt *RichText, rendStart int) {
 		rt.SetOrigin(adjustedOrigin)
 	}
 }
+
 
 // SetPreviewSourceMap sets the source map used for mapping rendered positions
 // to source positions when in preview mode.
@@ -1995,247 +1468,9 @@ func (w *Window) syncSourceSelection() {
 	w.body.q1 = srcEnd
 }
 
-// HandlePreviewKey handles keyboard input when the window is in preview mode.
-// Returns true if the key was handled (navigation keys), false otherwise (typing keys).
-// Navigation keys (Page Up/Down, arrows, Home, End) scroll the preview.
-// Escape exits preview mode.
-// Typing keys are ignored in preview mode (returns false to indicate not handled).
-func (w *Window) HandlePreviewKey(key rune) bool {
-	if !w.previewMode || w.richBody == nil {
-		return false
-	}
 
-	rt := w.richBody
-	frame := rt.Frame()
-	if frame == nil {
-		return false
-	}
 
-	// Compute current pixel position for pixel-based scrolling.
-	// Uses the frame's layout line data (which accounts for images and
-	// other tall elements) rather than content newlines.
-	lineHeights := frame.LinePixelHeights()
-	lineStarts := frame.LineStartRunes()
-	if len(lineHeights) == 0 || len(lineStarts) == 0 {
-		return false
-	}
 
-	totalPixelHeight := frame.TotalDocumentHeight()
-	frameHeight := frame.Rect().Dy()
-	fontH := frame.DefaultFontHeight()
-	if fontH <= 0 {
-		fontH = 14
-	}
-
-	currentLine := findLineForOrigin(rt.Origin(), lineStarts)
-	currentPixelY := lineOffsetToPixel(currentLine, rt.GetOriginYOffset(), lineHeights)
-
-	maxPixelY := totalPixelHeight - frameHeight
-	if maxPixelY < 0 {
-		maxPixelY = 0
-	}
-
-	switch key {
-	case draw.KeyPageDown:
-		// Scroll down by a page worth of pixels
-		step := frame.MaxLines() * fontH
-		if step <= 0 {
-			step = 10 * fontH
-		}
-		rt.ScrollToPixelY(currentPixelY + step)
-		rt.Redraw()
-		return true
-
-	case draw.KeyPageUp:
-		// Scroll up by a page worth of pixels
-		step := frame.MaxLines() * fontH
-		if step <= 0 {
-			step = 10 * fontH
-		}
-		rt.ScrollToPixelY(currentPixelY - step)
-		rt.Redraw()
-		return true
-
-	case draw.KeyDown:
-		// Scroll down by one text line of pixels
-		rt.ScrollToPixelY(currentPixelY + fontH)
-		rt.Redraw()
-		return true
-
-	case draw.KeyUp:
-		// Scroll up by one text line of pixels
-		rt.ScrollToPixelY(currentPixelY - fontH)
-		rt.Redraw()
-		return true
-
-	case draw.KeyHome:
-		// Scroll to beginning
-		rt.ScrollToPixelY(0)
-		rt.Redraw()
-		return true
-
-	case draw.KeyEnd:
-		// Scroll to end
-		rt.ScrollToPixelY(maxPixelY)
-		rt.Redraw()
-		return true
-
-	default:
-		// Typing keys and other keys are not handled in preview mode
-		return false
-	}
-}
-
-// HandlePreviewType handles text editing keys in preview mode, inserting or
-// deleting characters in the source buffer and immediately re-rendering the
-// preview. It follows the same sync→edit→render→remap cycle used by the
-// chord cut/paste handlers.
-func (w *Window) HandlePreviewType(t *Text, r rune) {
-	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
-		return
-	}
-
-	// Only accept printable characters, newline, tab, and editing keys.
-	switch {
-	case r == '\n', r == '\t':
-		// accepted
-	case r == 0x08: // ^H: backspace
-	case r == 0x7F: // Del: delete right
-	case r == 0x15: // ^U: kill line
-	case r == 0x17: // ^W: kill word
-	case r >= 0x20 && r < KF: // printable, excluding draw key constants (0xF0xx, 0xF1xx)
-		// accepted
-	default:
-		return
-	}
-
-	// 1. Map rendered cursor/selection to source positions.
-	w.syncSourceSelection()
-
-	// 2. Create undo points matching text mode behavior.
-	// Deletion keys and newline always start a new undo group.
-	// Regular characters only create an undo point at the start of
-	// a typing sequence (eq0 == -1), so consecutive chars are grouped
-	// into one Undo operation.
-	switch r {
-	case 0x08, 0x7F, 0x15, 0x17, '\n': // deletion keys and newline
-		t.TypeCommit()
-		global.seq++
-		t.file.Mark(global.seq)
-	default:
-		if t.eq0 == -1 {
-			t.TypeCommit()
-			global.seq++
-			t.file.Mark(global.seq)
-		}
-	}
-
-	// 3. Handle deletion keys.
-	switch r {
-	case 0x08: // ^H: backspace
-		if t.q0 != t.q1 {
-			// Range selected: delete it.
-			cut(t, t, nil, false, true, "")
-		} else if t.q0 > 0 {
-			t.q0--
-			cut(t, t, nil, false, true, "")
-		}
-		w.previewTypeFinish(t)
-		return
-
-	case 0x7F: // Del: delete right
-		if t.q0 != t.q1 {
-			cut(t, t, nil, false, true, "")
-		} else if t.q1 < t.file.Nr() {
-			t.q1++
-			cut(t, t, nil, false, true, "")
-		}
-		w.previewTypeFinish(t)
-		return
-
-	case 0x15: // ^U: kill line
-		if t.q0 != t.q1 {
-			cut(t, t, nil, false, true, "")
-		} else if t.q0 > 0 {
-			nnb := t.BsWidth(0x15)
-			if nnb > 0 {
-				t.q0 -= nnb
-				cut(t, t, nil, false, true, "")
-			}
-		}
-		w.previewTypeFinish(t)
-		return
-
-	case 0x17: // ^W: kill word
-		if t.q0 != t.q1 {
-			cut(t, t, nil, false, true, "")
-		} else if t.q0 > 0 {
-			nnb := t.BsWidth(0x17)
-			if nnb > 0 {
-				t.q0 -= nnb
-				cut(t, t, nil, false, true, "")
-			}
-		}
-		w.previewTypeFinish(t)
-		return
-	}
-
-	// 4. If range selected, cut it first (like Text.Type).
-	if t.q1 > t.q0 {
-		cut(t, t, nil, false, true, "")
-		t.eq0 = ^0
-	}
-
-	// 5. Insert the character into the source buffer.
-	t.file.InsertAt(t.q0, []rune{r})
-	t.q0++
-	t.q1 = t.q0
-
-	w.previewTypeFinish(t)
-}
-
-// previewRenderInterval is the minimum time between preview renders during
-// typing. Renders are throttled to this interval; a trailing timer ensures
-// the final keystroke in a burst always triggers a render.
-const previewRenderInterval = 80 * time.Millisecond
-
-// previewTypeFinish completes a preview-mode edit by updating the model
-// synchronously and throttling the render.
-func (w *Window) previewTypeFinish(t *Text) {
-	// Always update the model synchronously (cheap).
-	w.updatePreviewModel()
-
-	// Remap source cursor to rendered position and update selection.
-	if w.previewSourceMap != nil {
-		rendStart, rendEnd := w.previewSourceMap.ToRendered(t.q0, t.q1)
-		if rendStart >= 0 {
-			w.richBody.SetSelection(rendStart, rendEnd)
-		} else if t.q0 == t.q1 {
-			// Cursor at end of content or in a gap between source map entries.
-			// Fall back to the end of the rendered content.
-			contentLen := w.richBody.Content().Len()
-			w.richBody.SetSelection(contentLen, contentLen)
-		}
-	}
-
-	// Throttle rendering.
-	w.cancelPreviewDebounce()
-	now := time.Now()
-	if now.Sub(w.previewLastRender) >= previewRenderInterval {
-		w.renderPreview()
-	} else {
-		w.previewRenderPending = true
-		w.previewDebounceTimer = time.AfterFunc(previewRenderInterval, func() {
-			global.previewRenderCh <- func() {
-				global.row.lk.Lock()
-				defer global.row.lk.Unlock()
-				if w.previewRenderPending && w.previewMode {
-					w.renderPreview()
-				}
-			}
-		})
-	}
-}
 
 // renderPreview performs the actual render+flush for preview mode.
 func (w *Window) renderPreview() {
@@ -3136,9 +2371,9 @@ func applyImagePayload(s *rich.Style, payload string) {
 }
 
 // HandleStyledMouse handles mouse events when the window is in styled rendering
-// mode. Returns true if the event was handled, false otherwise. This is the
-// styled-mode analog of HandlePreviewMouse, simplified by the identity mapping
-// between rich.Frame positions and body buffer positions.
+// mode. Returns true if the event was handled, false otherwise. Rune
+// positions in rich.Frame are 1:1 with the body buffer (no source-map
+// indirection), so click/selection translation is the identity.
 func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 	if !w.styledMode || w.richBody == nil {
 		return false
@@ -3207,7 +2442,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			button = 3
 		}
 		if button != 0 && mc != nil {
-			w.previewHScrollLatch(rt, mc, button, regionIndex)
+			w.hscrollLatch(rt, mc, button, regionIndex)
 			return true
 		}
 	}
@@ -3375,7 +2610,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			cmdText = string(buf)
 		}
 		if cmdText != "" {
-			previewExecute(&w.body, cmdText)
+			richExecute(&w.body, cmdText)
 		}
 
 		rt.SetSelection(priorP0, priorP1)
