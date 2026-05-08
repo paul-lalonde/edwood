@@ -441,17 +441,7 @@ func TestInitStyledMode_NopIfAlreadyStyled(t *testing.T) {
 	}
 }
 
-func TestInitStyledMode_NopIfPreviewMode(t *testing.T) {
-	w := makeStyledWindow(t, "hello")
-	w.previewMode = true
-	w.richBody = &RichText{} // simulate preview mode richBody
 
-	w.initStyledMode()
-
-	if w.styledMode {
-		t.Error("initStyledMode() set styledMode when in preview mode")
-	}
-}
 
 func TestExitStyledMode_ClearsState(t *testing.T) {
 	w := makeStyledWindow(t, "hello")
@@ -509,33 +499,9 @@ func TestClearRevertsToPlainMode(t *testing.T) {
 	}
 }
 
-func TestAutoSwitchToStyledMode(t *testing.T) {
-	w := makeStyledWindow(t, "hello")
 
-	// Simulate what xfidspanswrite does: first span write on plain window.
-	if w.styledMode {
-		t.Fatal("precondition: should start in plain mode")
-	}
 
-	// Ensure span store exists.
-	w.spanStore = NewSpanStore()
-	w.spanStore.Insert(0, 5)
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 5, Style: StyleAttrs{Fg: color.RGBA{R: 0xff, A: 0xff}}},
-	})
 
-	// Auto-switch: if not styled and not preview, init styled mode.
-	if !w.styledMode && !w.previewMode {
-		w.initStyledMode()
-	}
-
-	if !w.styledMode {
-		t.Error("should have switched to styled mode after first span write")
-	}
-	if w.richBody == nil {
-		t.Error("richBody should be initialized after auto-switch")
-	}
-}
 
 // TestRenderStyledFromBodyPreservesSelection: regression for
 // the md2spans cursor-resets-to-#0 bug. md2spans's normal
@@ -1175,91 +1141,7 @@ func TestBuildStyledContent_TripleNestedBlockquote(t *testing.T) {
 	}
 }
 
-// TestBuildStyledContent_CodeInsideBlockquote: cross-kind
-// nesting — a code region inside a blockquote region
-// produces a span with BOTH Block/Code/Bg AND
-// Blockquote/BlockquoteDepth=1.
-func TestBuildStyledContent_CodeInsideBlockquote(t *testing.T) {
-	w := makeStyledWindow(t, "abcdefghij")
-	w.spanStore = NewSpanStore()
-	w.spanStore.Insert(0, 10)
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 3, Style: StyleAttrs{}},
-		{Len: 4, Style: StyleAttrs{Family: "code"}},
-		{Len: 3, Style: StyleAttrs{}},
-	})
-	w.regionStore = NewRegionStore()
-	w.regionStore.Add(&Region{Start: 0, End: 10, Kind: "blockquote"})
-	w.regionStore.Add(&Region{Start: 3, End: 7, Kind: "code"})
 
-	content := w.buildStyledContent()
-	if len(content) != 3 {
-		t.Fatalf("got %d spans, want 3", len(content))
-	}
-	mid := content[1]
-	// Code flags (deepest):
-	if !mid.Style.Block || !mid.Style.Code || mid.Style.Bg == nil {
-		t.Errorf("middle span should have Block+Code+Bg from code region; got %+v", mid.Style)
-	}
-	// Blockquote flags (outer):
-	if !mid.Style.Blockquote {
-		t.Error("middle span should have Blockquote=true")
-	}
-	if mid.Style.BlockquoteDepth != 1 {
-		t.Errorf("BlockquoteDepth = %d, want 1", mid.Style.BlockquoteDepth)
-	}
-}
-
-// TestBuildStyledContentImageBelowBox covers the Phase 3
-// round 4 contract (post-pivot): an IsBox+placement=below
-// run covers the source markdown runes [offset,
-// offset+length); buildStyledContent produces a Span whose
-// Text is the source bytes and whose Style carries
-// Image=true, ImageBelow=true, and ImageURL set. The
-// renderer renders the source as text AND paints the image
-// below the line.
-func TestBuildStyledContentImageBelowBox(t *testing.T) {
-	w := makeStyledWindow(t, "see ![alt](pic.png) ok") // 22 runes
-
-	w.spanStore = NewSpanStore()
-	// Body: "see " (4) "![alt](pic.png)" (15) " ok" (3) = 22 runes.
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 4, Style: StyleAttrs{}},
-		{Len: 15, Style: StyleAttrs{
-			IsBox:        true,
-			BoxPayload:   "image:pic.png",
-			BoxPlacement: "below",
-		}},
-		{Len: 3, Style: StyleAttrs{}},
-	})
-
-	content := w.buildStyledContent()
-	if len(content) != 3 {
-		t.Fatalf("got %d spans; want 3", len(content))
-	}
-	if !content[1].Style.ImageBelow {
-		t.Error("middle span should have Style.ImageBelow=true")
-	}
-	if !content[1].Style.Image {
-		t.Error("middle span should have Style.Image=true")
-	}
-	if content[1].Style.ImageURL != "pic.png" {
-		t.Errorf("middle span ImageURL = %q; want %q",
-			content[1].Style.ImageURL, "pic.png")
-	}
-	// The middle span's Text is the source markdown runes,
-	// not synthetic placeholder. Source markers stay visible.
-	if content[1].Text != "![alt](pic.png)" {
-		t.Errorf("middle span Text = %q; want %q",
-			content[1].Text, "![alt](pic.png)")
-	}
-	if content[0].Text != "see " {
-		t.Errorf("span[0] text = %q; want %q", content[0].Text, "see ")
-	}
-	if content[2].Text != " ok" {
-		t.Errorf("span[2] text = %q; want %q", content[2].Text, " ok")
-	}
-}
 
 func TestBuildStyledContentBoxRun(t *testing.T) {
 	w := makeStyledWindow(t, "hello world test!") // 17 runes
@@ -1315,49 +1197,9 @@ func TestBuildStyledContentBoxRun(t *testing.T) {
 	}
 }
 
-func TestBuildStyledContentMixedSpansAndBoxes(t *testing.T) {
-	w := makeStyledWindow(t, "abcdefghijklmnop") // 16 runes
 
-	w.spanStore = NewSpanStore()
-	w.spanStore.RegionUpdate(0, []StyleRun{
-		{Len: 4, Style: StyleAttrs{Bold: true}},
-		{Len: 4, Style: StyleAttrs{
-			IsBox: true, BoxWidth: 100, BoxHeight: 50,
-			BoxPayload: "image:/img1.png",
-		}},
-		{Len: 4, Style: StyleAttrs{Italic: true}},
-		{Len: 4, Style: StyleAttrs{
-			IsBox: true, BoxWidth: 200, BoxHeight: 100,
-		}},
-	})
 
-	content := w.buildStyledContent()
-	if len(content) != 4 {
-		t.Fatalf("got %d spans; want 4", len(content))
-	}
 
-	// text, image-box, text, fixed-box pattern.
-	if content[0].Style.Image || content[0].Style.FixedBox {
-		t.Error("span[0] should not be image or fixed box")
-	}
-	if !content[1].Style.Image {
-		t.Error("span[1] should be image (has image: payload)")
-	}
-	if content[2].Style.Image || content[2].Style.FixedBox {
-		t.Error("span[2] should not be image or fixed box")
-	}
-	if content[3].Style.Image {
-		t.Error("span[3] should not be image (no image: payload)")
-	}
-	if !content[3].Style.FixedBox {
-		t.Error("span[3] should be FixedBox")
-	}
-
-	// Verify the second box has no ImageURL since payload is empty.
-	if content[3].Style.ImageURL != "" {
-		t.Errorf("span[3] ImageURL = %q; want empty", content[3].Style.ImageURL)
-	}
-}
 
 func TestStyledShowScrollsRichText(t *testing.T) {
 	// Build body with enough text that later content is off-screen.

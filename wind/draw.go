@@ -11,8 +11,6 @@ import (
 type DrawContext interface {
 	// Rect returns the current drawing rectangle.
 	Rect() image.Rectangle
-	// IsPreviewMode returns true if in preview mode.
-	IsPreviewMode() bool
 }
 
 // DrawState tracks the state needed for window drawing operations.
@@ -24,7 +22,6 @@ type DrawState struct {
 	bodyRect       image.Rectangle // body area rectangle
 	buttonRect     image.Rectangle // dirty indicator button rectangle
 	maxLines       int             // maximum visible lines in body
-	previewMode    bool            // true when showing rendered preview
 	needsRedraw    bool            // true when a redraw is pending
 	tagLines       int             // number of lines in the tag
 	tagExpand      bool            // whether tag can expand beyond one line
@@ -100,19 +97,6 @@ func (ds *DrawState) MaxLines() int {
 // SetMaxLines sets the maximum visible lines.
 func (ds *DrawState) SetMaxLines(n int) {
 	ds.maxLines = n
-}
-
-// IsPreviewMode returns true if in preview mode.
-func (ds *DrawState) IsPreviewMode() bool {
-	return ds.previewMode
-}
-
-// SetPreviewMode sets the preview mode state.
-func (ds *DrawState) SetPreviewMode(mode bool) {
-	if ds.previewMode != mode {
-		ds.needsRedraw = true
-	}
-	ds.previewMode = mode
 }
 
 // NeedsRedraw returns true if the window needs to be redrawn.

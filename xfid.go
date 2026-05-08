@@ -438,9 +438,6 @@ func xfidwrite(x *Xfid) {
 					t.Show(q0+(nr), q0+(nr), true)
 				}
 				t.ScrDraw()
-				if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
-					t.w.UpdatePreview()
-				}
 			}
 			if qid == QWwrsel {
 				w.wrselrange.q1 += len(r)
@@ -537,9 +534,6 @@ func xfidwrite(x *Xfid) {
 			t.Show(q0+len(r), q0+len(r), false)
 		}
 		t.ScrDraw()
-		if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
-			t.w.UpdatePreview()
-		}
 		w.addr.q0 += len(r)
 		w.addr.q1 = w.addr.q0
 		fc.Count = x.fcall.Count
@@ -564,12 +558,6 @@ func xfidwrite(x *Xfid) {
 
 func xfidspanswrite(x *Xfid, w *Window) {
 	var fc plan9.Fcall
-
-	// Reject writes to preview mode windows.
-	if w.IsPreviewMode() {
-		x.respond(&fc, fmt.Errorf("cannot write spans to preview mode window"))
-		return
-	}
 
 	data := strings.TrimRight(string(x.fcall.Data), "\n")
 	if data == "" {
@@ -632,7 +620,7 @@ func xfidspanswrite(x *Xfid, w *Window) {
 
 	// Auto-switch to styled mode on first span write, unless the user
 	// has explicitly chosen plain mode via the Plain button.
-	if !w.styledMode && !w.previewMode && !w.styledSuppressed {
+	if !w.styledMode && !w.styledSuppressed {
 		w.initStyledMode()
 	}
 

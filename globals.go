@@ -145,11 +145,6 @@ type globals struct {
 	// after cut/copy operations.
 	snarfbuf []byte
 
-	// snarfContext stores rich text metadata (content type, formatting)
-	// associated with the snarfed selection. Used to preserve formatting
-	// when pasting within Edwood's rich text preview mode.
-	snarfContext *SelectionContext
-
 	// ═══════════════════════════════════════════════════════════════════
 	// Environment/Directory State
 	// ═══════════════════════════════════════════════════════════════════

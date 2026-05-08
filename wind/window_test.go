@@ -232,40 +232,8 @@ func TestRangeType(t *testing.T) {
 	}
 }
 
-// TestAllStateTypesIndependent verifies that state types can be used independently.
-// This is important for the Window extraction to ensure clean separation.
-func TestAllStateTypesIndependent(t *testing.T) {
-	// Create all state types independently
-	ws := NewWindowState()
-	ds := NewDrawState()
-	es := NewEventState()
-	ps := NewPreviewState()
 
-	// Each should be non-nil and independently usable
-	if ws == nil || ds == nil || es == nil || ps == nil {
-		t.Fatal("all state types should be created successfully")
-	}
 
-	// Modify one without affecting others
-	ws.SetDirty(true)
-	ds.SetPreviewMode(true)
-	es.SetMouseInTag(true)
-	ps.SetPreviewMode(true)
-
-	// Verify independence
-	if !ws.IsDirty() {
-		t.Error("WindowState dirty flag should be set")
-	}
-	if !ds.IsPreviewMode() {
-		t.Error("DrawState preview mode should be set")
-	}
-	if !es.IsMouseInTag() {
-		t.Error("EventState mouseInTag should be set")
-	}
-	if !ps.IsPreviewMode() {
-		t.Error("PreviewState preview mode should be set")
-	}
-}
 
 // TestWindowStateAddrClamp tests address clamping behavior that Window.ClampAddr
 // will need. This test validates the Range type for this use case.
@@ -315,32 +283,6 @@ func TestWindowStateAddrClamp(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Tests for WindowBase (Phase 5F)
-// These tests validate the WindowBase struct that provides portable window state.
-// =============================================================================
-
-// TestWindowBaseNew tests that NewWindowBase creates a properly initialized struct.
-func TestWindowBaseNew(t *testing.T) {
-	wb := NewWindowBase()
-	if wb == nil {
-		t.Fatal("NewWindowBase returned nil")
-	}
-
-	// All state components should be initialized
-	if wb.State == nil {
-		t.Error("WindowBase.State should not be nil")
-	}
-	if wb.Draw == nil {
-		t.Error("WindowBase.Draw should not be nil")
-	}
-	if wb.Events == nil {
-		t.Error("WindowBase.Events should not be nil")
-	}
-	if wb.Preview == nil {
-		t.Error("WindowBase.Preview should not be nil")
-	}
-}
 
 // TestWindowBaseImplementsWindow verifies WindowBase implements the Window interface.
 func TestWindowBaseImplementsWindow(t *testing.T) {
@@ -577,23 +519,7 @@ func TestWindowBaseMouseRegion(t *testing.T) {
 	}
 }
 
-// TestWindowBaseClickState tests click state for double-click detection.
-func TestWindowBaseClickState(t *testing.T) {
-	wb := NewWindowBase()
 
-	// Default should be (0, 0)
-	pos, msec := wb.ClickState()
-	if pos != 0 || msec != 0 {
-		t.Errorf("default click state should be (0, 0); got (%d, %d)", pos, msec)
-	}
-
-	// Set click state
-	wb.SetClickState(100, 12345)
-	pos, msec = wb.ClickState()
-	if pos != 100 || msec != 12345 {
-		t.Errorf("click state should be (100, 12345); got (%d, %d)", pos, msec)
-	}
-}
 
 // TestWindowBaseRedraw tests redraw flag management.
 func TestWindowBaseRedraw(t *testing.T) {
@@ -648,83 +574,4 @@ func TestWindowBaseResetEventState(t *testing.T) {
 	}
 }
 
-// TestWindowBaseComposition tests that WindowBase properly composes state types.
-func TestWindowBaseComposition(t *testing.T) {
-	wb := NewWindowBase()
 
-	// Simulate a complete window setup
-	wb.SetID(1)
-	wb.SetRect(image.Rect(0, 0, 800, 600))
-	wb.SetTagRect(image.Rect(0, 0, 800, 20))
-	wb.SetBodyRect(image.Rect(0, 21, 800, 600))
-	wb.SetButtonRect(image.Rect(0, 0, 16, 16))
-	wb.SetTagLines(2)
-	wb.SetMaxLines(25)
-	wb.SetAddr(Range{Start: 100, End: 200})
-	wb.SetLimit(Range{Start: 0, End: 1000})
-	wb.SetDirty(true)
-	wb.SetPreviewMode(true)
-
-	// Verify all state is correctly set across components
-	if wb.ID() != 1 {
-		t.Errorf("ID should be 1; got %d", wb.ID())
-	}
-	if !wb.Rect().Eq(image.Rect(0, 0, 800, 600)) {
-		t.Errorf("Rect mismatch; got %v", wb.Rect())
-	}
-	if wb.TagLines() != 2 {
-		t.Errorf("TagLines should be 2; got %d", wb.TagLines())
-	}
-	if wb.MaxLines() != 25 {
-		t.Errorf("MaxLines should be 25; got %d", wb.MaxLines())
-	}
-	addr := wb.Addr()
-	if addr.Start != 100 || addr.End != 200 {
-		t.Errorf("Addr should be (100, 200); got (%d, %d)", addr.Start, addr.End)
-	}
-	if !wb.IsDirty() {
-		t.Error("should be dirty")
-	}
-	if !wb.IsPreviewMode() {
-		t.Error("should be in preview mode")
-	}
-
-	// Verify state is synchronized across components
-	if !wb.State.IsDirty() {
-		t.Error("State.IsDirty should match")
-	}
-	if !wb.Draw.IsDirty() {
-		t.Error("Draw.IsDirty should match")
-	}
-	if !wb.Preview.IsPreviewMode() {
-		t.Error("Preview.IsPreviewMode should match")
-	}
-	if !wb.Draw.IsPreviewMode() {
-		t.Error("Draw.IsPreviewMode should match")
-	}
-}
-
-// TestWindowInterfacePolymorphism tests that Window interface can be used polymorphically.
-func TestWindowInterfacePolymorphism(t *testing.T) {
-	// Create a WindowBase and use it as Window interface
-	wb := NewWindowBase()
-	wb.SetID(42)
-	wb.SetRect(image.Rect(0, 0, 800, 600))
-	wb.SetPreviewMode(true)
-
-	// Use as Window interface
-	var w Window = wb
-
-	if w.ID() != 42 {
-		t.Errorf("Window.ID() should be 42; got %d", w.ID())
-	}
-	if !w.Rect().Eq(image.Rect(0, 0, 800, 600)) {
-		t.Errorf("Window.Rect() mismatch; got %v", w.Rect())
-	}
-	if !w.IsPreviewMode() {
-		t.Error("Window.IsPreviewMode() should be true")
-	}
-	if w.IsDirty() {
-		t.Error("Window.IsDirty() should be false")
-	}
-}

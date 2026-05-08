@@ -4,7 +4,6 @@
 //   - Window: an interface defining window operations
 //   - WindowBase: a composable struct containing portable window state
 //   - WindowState: file descriptor tracking, addresses, dirty flags
-//   - PreviewState: preview mode fields for rich text rendering
 //   - DrawState: drawing state for window rendering
 //   - EventState: event handling state
 //
@@ -23,12 +22,6 @@ import (
 type Window interface {
 	// ID returns the window's unique identifier.
 	ID() int
-
-	// IsPreviewMode returns true if the window is showing a rendered preview.
-	IsPreviewMode() bool
-
-	// SetPreviewMode enables or disables preview mode.
-	SetPreviewMode(enabled bool)
 
 	// Rect returns the window's bounding rectangle.
 	Rect() image.Rectangle
@@ -55,9 +48,6 @@ type WindowBase struct {
 	// Events contains event handling state.
 	Events *EventState
 
-	// Preview contains preview mode state for rich text rendering.
-	Preview *PreviewState
-
 	// id is the window's unique identifier.
 	id int
 
@@ -68,10 +58,9 @@ type WindowBase struct {
 // NewWindowBase creates a new WindowBase with initialized state.
 func NewWindowBase() *WindowBase {
 	return &WindowBase{
-		State:   NewWindowState(),
-		Draw:    NewDrawState(),
-		Events:  NewEventState(),
-		Preview: NewPreviewState(),
+		State:  NewWindowState(),
+		Draw:   NewDrawState(),
+		Events: NewEventState(),
 	}
 }
 
@@ -94,17 +83,6 @@ func (wb *WindowBase) Rect() image.Rectangle {
 func (wb *WindowBase) SetRect(r image.Rectangle) {
 	wb.rect = r
 	wb.Draw.SetRect(r)
-}
-
-// IsPreviewMode returns true if the window is in preview mode.
-func (wb *WindowBase) IsPreviewMode() bool {
-	return wb.Preview.IsPreviewMode()
-}
-
-// SetPreviewMode enables or disables preview mode.
-func (wb *WindowBase) SetPreviewMode(enabled bool) {
-	wb.Preview.SetPreviewMode(enabled)
-	wb.Draw.SetPreviewMode(enabled)
 }
 
 // IsDirty returns true if the window has unsaved changes.
@@ -218,21 +196,6 @@ func (wb *WindowBase) ButtonRect() image.Rectangle {
 // SetButtonRect sets the dirty indicator button rectangle.
 func (wb *WindowBase) SetButtonRect(r image.Rectangle) {
 	wb.Draw.SetButtonRect(r)
-}
-
-// ClickState returns the last click position and timestamp for double-click detection.
-func (wb *WindowBase) ClickState() (pos int, msec uint32) {
-	return wb.Preview.ClickState()
-}
-
-// SetClickState updates the click state for double-click detection.
-func (wb *WindowBase) SetClickState(pos int, msec uint32) {
-	wb.Preview.SetClickState(pos, msec)
-}
-
-// ClearPreviewCache clears cached preview data.
-func (wb *WindowBase) ClearPreviewCache() {
-	wb.Preview.ClearCache()
 }
 
 // Reset resets all event state to default values.

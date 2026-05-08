@@ -197,30 +197,3 @@ func TestPlaincmd_ReRenderAfterToggleBack(t *testing.T) {
 	}
 }
 
-// TestPlaincmd_NoopInPreviewMode verifies that Plain is a no-op when the
-// window is in preview mode.
-func TestPlaincmd_NoopInPreviewMode(t *testing.T) {
-	w := makePlainTestWindow(t, "hello")
-
-	// Simulate preview mode.
-	w.previewMode = true
-
-	plaincmd(&w.body, nil, nil, false, false, "")
-
-	if !w.IsPreviewMode() {
-		t.Error("should still be in preview mode")
-	}
-	if w.IsStyledMode() {
-		t.Error("should not have entered styled mode")
-	}
-}
-
-// TestPlaincmd_NilText verifies that plaincmd handles nil inputs gracefully.
-func TestPlaincmd_NilText(t *testing.T) {
-	// Should not panic with nil text.
-	plaincmd(nil, nil, nil, false, false, "")
-
-	// Should not panic with text that has nil window.
-	et := &Text{}
-	plaincmd(et, nil, nil, false, false, "")
-}

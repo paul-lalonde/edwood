@@ -9,8 +9,7 @@ import (
 
 // MockDrawContext is a test double for DrawContext.
 type MockDrawContext struct {
-	rect        image.Rectangle
-	previewMode bool
+	rect image.Rectangle
 }
 
 // NewMockDrawContext creates a new MockDrawContext with default values.
@@ -30,16 +29,6 @@ func (m *MockDrawContext) SetRect(r image.Rectangle) {
 	m.rect = r
 }
 
-// IsPreviewMode implements DrawContext.
-func (m *MockDrawContext) IsPreviewMode() bool {
-	return m.previewMode
-}
-
-// SetPreviewMode sets the preview mode state.
-func (m *MockDrawContext) SetPreviewMode(mode bool) {
-	m.previewMode = mode
-}
-
 // TestMockDrawContextNew tests that a new MockDrawContext has default values.
 func TestMockDrawContextNew(t *testing.T) {
 	dc := NewMockDrawContext()
@@ -51,11 +40,6 @@ func TestMockDrawContextNew(t *testing.T) {
 	r := dc.Rect()
 	if r.Dx() != 800 || r.Dy() != 600 {
 		t.Errorf("default rect should be 800x600; got %dx%d", r.Dx(), r.Dy())
-	}
-
-	// Default preview mode should be false
-	if dc.IsPreviewMode() {
-		t.Error("default preview mode should be false")
 	}
 }
 
@@ -83,10 +67,6 @@ func TestDrawStateNew(t *testing.T) {
 
 	if ds.IsDirty() {
 		t.Error("new DrawState should not be dirty")
-	}
-
-	if ds.IsPreviewMode() {
-		t.Error("new DrawState should not be in preview mode")
 	}
 
 	if ds.TagLines() != 1 {

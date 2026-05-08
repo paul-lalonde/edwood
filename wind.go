@@ -15,7 +15,6 @@ import (
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
 	"github.com/rjkroege/edwood/internal/ui"
-	"github.com/rjkroege/edwood/markdown"
 	"github.com/rjkroege/edwood/rich"
 	"github.com/rjkroege/edwood/util"
 )
@@ -69,27 +68,17 @@ type Window struct {
 
 	editoutlk chan bool
 
-	// Preview mode fields for rich text rendering
-	previewMode      bool                // true when showing rendered markdown preview
-	richBody         *RichText           // rich text renderer for preview mode
-	previewSourceMap *markdown.SourceMap // maps rendered positions to source positions
-	previewLinkMap   *markdown.LinkMap   // maps rendered positions to link URLs
-	imageCache       *rich.ImageCache    // cache for loaded images in preview mode
-	selectionContext *SelectionContext   // context metadata for the current preview selection
+	// Rich-text renderer (used by styled mode). Image cache is
+	// shared with styled mode and lazily allocated.
+	richBody   *RichText
+	imageCache *rich.ImageCache
 
-	// Preview double-click state (mirrors clicktext/clickmsec in text.go)
-	previewClickPos  int       // rune position of last B1 null-click
-	previewClickMsec uint32    // timestamp of last B1 null-click
-	previewClickRT   *RichText // which richtext received the last click
-
-	// Incremental preview update state
-	prevBlockIndex *markdown.BlockIndex  // block boundaries from last parse
-	pendingEdits   []markdown.EditRecord // edits since last UpdatePreview
-
-	// Preview render debounce state
-	previewLastRender    time.Time   // timestamp of last preview render
-	previewRenderPending bool        // a render was skipped due to throttle
-	previewDebounceTimer *time.Timer // trailing-edge timer for deferred render
+	// Double-click state for the styled-mode mouse handler:
+	// position, timestamp, and which RichText received the
+	// last B1 null-click.
+	richClickRT   *RichText
+	richClickPos  int
+	richClickMsec uint32
 
 	spanStore        *SpanStore   // styled text runs (nil when no spans)
 	regionStore      *RegionStore // sidecar region tree (nil when no regions); Phase 3 round 5
@@ -360,14 +349,14 @@ func (w *Window) Resize(r image.Rectangle, safe, keepextra bool) int {
 			r1.Max.Y = y
 		}
 		// Always resize body Text to maintain canonical rectangle
-		// Pass noredraw=true if in preview or styled mode (we'll render ourselves)
-		y = w.body.Resize(r1, keepextra, w.previewMode || w.styledMode /* noredraw */)
+		// Pass noredraw=true if in styled mode (we'll render ourselves)
+		y = w.body.Resize(r1, keepextra, w.styledMode /* noredraw */)
 		w.r = r
 		w.r.Max.Y = y
 		w.body.all.Min.Y = oy
 
 		// Render the appropriate view
-		if (w.previewMode || w.styledMode) && w.richBody != nil {
+		if w.styledMode && w.richBody != nil {
 			w.richBody.Render(w.body.all)
 		} else {
 			w.body.ScrDraw()
@@ -426,9 +415,6 @@ func (w *Window) MouseBut() {
 
 func (w *Window) Close() {
 	if w.ref.Dec() == 0 {
-		w.cancelPreviewDebounce()
-		w.previewRenderPending = false
-		w.previewMode = false
 		w.styledMode = false
 		w.styledSuppressed = false
 		w.richBody = nil
@@ -474,10 +460,7 @@ func (w *Window) Undo(isundo bool) {
 	body.Show(body.q0, body.q1, true)
 
 	// Undo/Redo bypasses the buffer's Insert/Delete observers, so
-	// update the preview directly.
-	if w.IsPreviewMode() {
-		w.UpdatePreview()
-	}
+	// update the styled view directly.
 	if w.IsStyledMode() {
 		w.UpdateStyledView()
 	}
@@ -678,278 +661,7 @@ func (w *Window) UpdateTag(newtagstatus file.TagStatus) {
 	w.setTag1()
 }
 
-// SelectionContentType identifies the markdown formatting type of a selection.
-type SelectionContentType int
 
-const (
-	ContentPlain      SelectionContentType = iota // Plain unformatted text
-	ContentHeading                                // Heading (# ... ######)
-	ContentBold                                   // Bold (**text**)
-	ContentItalic                                 // Italic (*text*)
-	ContentBoldItalic                             // Bold+Italic (***text***)
-	ContentCode                                   // Inline code (`text`)
-	ContentCodeBlock                              // Fenced code block (```...```)
-	ContentLink                                   // Link ([text](url))
-	ContentImage                                  // Image (![alt](url))
-	ContentMixed                                  // Selection spans multiple formatting types
-)
-
-// SelectionContext holds metadata about the current selection in preview mode,
-// including source and rendered positions, content type, and formatting style.
-// This is used for context-aware paste operations that adapt formatting based
-// on the source and destination context.
-type SelectionContext struct {
-	SourceStart   int                  // Start offset in source markdown text
-	SourceEnd     int                  // End offset in source markdown text
-	RenderedStart int                  // Start offset in rendered text
-	RenderedEnd   int                  // End offset in rendered text
-	ContentType   SelectionContentType // Type of content selected
-	PrimaryStyle  rich.Style           // Dominant style of the selection
-	CodeLanguage  string               // Language tag for code blocks (e.g., "go")
-
-	IncludesOpenMarker  bool // Selection includes the opening formatting marker
-	IncludesCloseMarker bool // Selection includes the closing formatting marker
-}
-
-// classifyStyle maps a rich.Style to its SelectionContentType.
-func classifyStyle(s rich.Style) SelectionContentType {
-	switch {
-	case s.Image:
-		return ContentImage
-	case s.Link:
-		return ContentLink
-	case s.Code && s.Block:
-		return ContentCodeBlock
-	case s.Code:
-		return ContentCode
-	case s.Bold && s.Scale > 1.0:
-		return ContentHeading
-	case s.Bold && s.Italic:
-		return ContentBoldItalic
-	case s.Bold:
-		return ContentBold
-	case s.Italic:
-		return ContentItalic
-	default:
-		return ContentPlain
-	}
-}
-
-// analyzeSelectionContent examines the spans in the rendered RichText content
-// within the given rendered-position range [rStart, rEnd) and determines the
-// SelectionContentType. This is used during selection context updates to
-// classify what kind of markdown content the user has selected.
-func (w *Window) analyzeSelectionContent(rStart, rEnd int) SelectionContentType {
-	if w.richBody == nil || rStart >= rEnd {
-		return ContentPlain
-	}
-
-	content := w.richBody.Content()
-	if len(content) == 0 {
-		return ContentPlain
-	}
-
-	var foundType SelectionContentType
-	found := false
-	pos := 0
-
-	for _, span := range content {
-		runeLen := len([]rune(span.Text))
-		spanEnd := pos + runeLen
-
-		// Check if this span overlaps [rStart, rEnd)
-		if spanEnd > rStart && pos < rEnd {
-			ct := classifyStyle(span.Style)
-			if !found {
-				foundType = ct
-				found = true
-			} else if ct != foundType {
-				return ContentMixed
-			}
-		}
-
-		pos = spanEnd
-		if pos >= rEnd {
-			break
-		}
-	}
-
-	if !found {
-		return ContentPlain
-	}
-	return foundType
-}
-
-// updateSelectionContext reads the current selection from richBody, translates
-// the rendered positions to source positions via the previewSourceMap, analyzes
-// the content type, and stores the result in w.selectionContext. This should be
-// called after each selection change in preview mode.
-func (w *Window) updateSelectionContext() {
-	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
-		w.selectionContext = nil
-		return
-	}
-
-	p0, p1 := w.richBody.Selection()
-	contentType := w.analyzeSelectionContent(p0, p1)
-
-	// Translate rendered positions to source positions.
-	srcStart, srcEnd := w.previewSourceMap.ToSource(p0, p1)
-
-	// Determine the primary style from the first overlapping span.
-	var primaryStyle rich.Style
-	content := w.richBody.Content()
-	pos := 0
-	for _, span := range content {
-		runeLen := len([]rune(span.Text))
-		spanEnd := pos + runeLen
-		if spanEnd > p0 && pos < p1 {
-			primaryStyle = span.Style
-			break
-		}
-		pos = spanEnd
-	}
-
-	w.selectionContext = &SelectionContext{
-		SourceStart:   srcStart,
-		SourceEnd:     srcEnd,
-		RenderedStart: p0,
-		RenderedEnd:   p1,
-		ContentType:   contentType,
-		PrimaryStyle:  primaryStyle,
-	}
-}
-
-// transformForPaste adapts the pasted text based on source and destination
-// context. It applies formatting rules: re-wraps formatted text for plain
-// destinations, strips markers when destination already has the same format,
-// and handles structural elements (headings, code blocks) based on whether
-// the text includes a trailing newline.
-func transformForPaste(text []byte, sourceCtx, destCtx *SelectionContext) []byte {
-	// Pass through when context is missing or text is empty.
-	if sourceCtx == nil || destCtx == nil || len(text) == 0 {
-		return text
-	}
-
-	srcType := sourceCtx.ContentType
-	dstType := destCtx.ContentType
-
-	// If source and destination are the same formatting type, strip markers
-	// (the destination context already provides the formatting).
-	if srcType == dstType {
-		return stripMarkers(text, srcType)
-	}
-
-	// Handle structural elements (headings, code blocks).
-	switch srcType {
-	case ContentHeading:
-		// Trailing newline means structural paste — preserve as-is.
-		if len(text) > 0 && text[len(text)-1] == '\n' {
-			return text
-		}
-		// No trailing newline — strip the heading prefix, treat as text.
-		return stripHeadingPrefix(text)
-
-	case ContentCodeBlock:
-		// Trailing newline means structural paste — preserve fences.
-		if len(text) > 0 && text[len(text)-1] == '\n' {
-			return text
-		}
-		// No trailing newline — just the code text, no fences.
-		return text
-
-	case ContentBold:
-		if dstType == ContentPlain {
-			return wrapWith(text, "**")
-		}
-		return text
-
-	case ContentItalic:
-		if dstType == ContentPlain {
-			return wrapWith(text, "*")
-		}
-		return text
-
-	case ContentBoldItalic:
-		if dstType == ContentPlain {
-			return wrapWith(text, "***")
-		}
-		return text
-
-	case ContentCode:
-		if dstType == ContentPlain {
-			return wrapWith(text, "`")
-		}
-		return text
-	}
-
-	// Plain text or unrecognized — pass through.
-	return text
-}
-
-// stripMarkers removes formatting markers for same-type paste (e.g., heading prefix).
-func stripMarkers(text []byte, ct SelectionContentType) []byte {
-	switch ct {
-	case ContentHeading:
-		return stripHeadingPrefix(text)
-	default:
-		return text
-	}
-}
-
-// stripHeadingPrefix removes leading # characters and the following space.
-func stripHeadingPrefix(text []byte) []byte {
-	i := 0
-	for i < len(text) && text[i] == '#' {
-		i++
-	}
-	if i > 0 && i < len(text) && text[i] == ' ' {
-		i++
-	}
-	return text[i:]
-}
-
-// wrapWith wraps text in the given marker string (e.g., "**", "*", "`").
-func wrapWith(text []byte, marker string) []byte {
-	m := []byte(marker)
-	result := make([]byte, 0, len(m)+len(text)+len(m))
-	result = append(result, m...)
-	result = append(result, text...)
-	result = append(result, m...)
-	return result
-}
-
-// IsPreviewMode returns true if the window is in preview mode (showing rendered markdown).
-func (w *Window) IsPreviewMode() bool {
-	return w.previewMode
-}
-
-// SetPreviewMode enables or disables preview mode.
-// When disabling preview mode, triggers a full redraw of the body.
-// The image cache is kept alive so re-entering preview is fast.
-func (w *Window) SetPreviewMode(enabled bool) {
-	wasPreview := w.previewMode
-	w.previewMode = enabled
-
-	// When exiting preview mode, cancel any pending debounce render
-	// and refresh the body.
-	// Keep the image cache alive so re-entering preview is fast.
-	if wasPreview && !enabled {
-		w.cancelPreviewDebounce()
-		w.previewRenderPending = false
-		// Force a full redraw of the body by resizing it
-		if w.display != nil {
-			w.body.Resize(w.body.all, true, false)
-			w.body.ScrDraw()
-			w.display.Flush()
-		}
-	}
-}
-
-// TogglePreviewMode toggles the preview mode state.
-func (w *Window) TogglePreviewMode() {
-	w.SetPreviewMode(!w.previewMode)
-}
 
 // RichBody returns the rich text renderer for preview mode, or nil if not initialized.
 func (w *Window) RichBody() *RichText {
@@ -959,7 +671,7 @@ func (w *Window) RichBody() *RichText {
 // Draw renders the window. In preview mode, it renders the richBody;
 // otherwise, it uses the normal body rendering.
 func (w *Window) Draw() {
-	if (w.previewMode || w.styledMode) && w.richBody != nil {
+	if (w.styledMode) && w.richBody != nil {
 		w.richBody.Render(w.body.all)
 	} else {
 		// Normal body rendering is handled by the existing Text.Redraw
@@ -1162,118 +874,14 @@ func (w *Window) scrollRichToMatch(rt *RichText, rendStart int) {
 }
 
 
-// SetPreviewSourceMap sets the source map used for mapping rendered positions
-// to source positions when in preview mode.
-func (w *Window) SetPreviewSourceMap(sm *markdown.SourceMap) {
-	w.previewSourceMap = sm
-}
 
-// PreviewSourceMap returns the current source map, or nil if not set.
-func (w *Window) PreviewSourceMap() *markdown.SourceMap {
-	return w.previewSourceMap
-}
 
-// SetPreviewLinkMap sets the link map used for mapping rendered positions
-// to link URLs when in preview mode.
-func (w *Window) SetPreviewLinkMap(lm *markdown.LinkMap) {
-	w.previewLinkMap = lm
-}
 
-// PreviewLinkMap returns the current link map, or nil if not set.
-func (w *Window) PreviewLinkMap() *markdown.LinkMap {
-	return w.previewLinkMap
-}
 
-// PreviewLookLinkURL returns the URL if the given position in the rendered preview
-// falls within a link. Returns empty string if the position is not within a link,
-// if not in preview mode, or if no link map is set.
-// This is used by the Look handler to determine if a B3 click should open a URL.
-func (w *Window) PreviewLookLinkURL(pos int) string {
-	if !w.previewMode || w.previewLinkMap == nil {
-		return ""
-	}
-	return w.previewLinkMap.URLAt(pos)
-}
 
-// recordEdit accumulates an edit record for the incremental preview path.
-func (w *Window) recordEdit(e markdown.EditRecord) {
-	w.pendingEdits = append(w.pendingEdits, e)
-}
 
-// updatePreviewModel performs the model-only portion of a preview update:
-// incremental/full markdown parse, updating content + sourceMap + linkMap +
-// blockIdx, and restoring the scroll position. It does NOT render or flush.
-func (w *Window) updatePreviewModel() {
-	if !w.previewMode || w.richBody == nil {
-		return
-	}
 
-	// Get the current scroll position to preserve it
-	currentOrigin := w.richBody.Origin()
-	currentYOffset := w.richBody.GetOriginYOffset()
 
-	// Determine if the user was scrolled near the end of the content.
-	// If so, we'll follow the tail after updating (like a terminal).
-	oldLen := 0
-	if oldContent := w.richBody.Content(); oldContent != nil {
-		oldLen = oldContent.Len()
-	}
-	followTail := isNearEnd(currentOrigin, oldLen)
-
-	// Read the current body content
-	bodyContent := w.body.file.String()
-
-	var content rich.Content
-	var sourceMap *markdown.SourceMap
-	var linkMap *markdown.LinkMap
-	var blockIdx *markdown.BlockIndex
-
-	// Try incremental path when we have a previous block index and pending edits.
-	if w.prevBlockIndex != nil && len(w.pendingEdits) > 0 {
-		old := markdown.StitchResult{
-			Content:  w.richBody.Content(),
-			SM:       w.previewSourceMap,
-			LM:       w.previewLinkMap,
-			BlockIdx: w.prevBlockIndex,
-		}
-		result, ok := markdown.IncrementalUpdate(old, bodyContent, w.pendingEdits)
-		if ok {
-			content = result.Content
-			sourceMap = result.SM
-			linkMap = result.LM
-			blockIdx = result.BlockIdx
-		}
-	}
-
-	// Full re-parse fallback.
-	if content == nil {
-		content, sourceMap, linkMap, blockIdx = markdown.ParseWithSourceMapAndIndex(bodyContent)
-	}
-
-	// Clear pending edits.
-	w.pendingEdits = w.pendingEdits[:0]
-
-	// Update the rich body content
-	w.richBody.SetContent(content)
-	w.previewSourceMap = sourceMap
-	w.previewLinkMap = linkMap
-	w.prevBlockIndex = blockIdx
-
-	newLen := content.Len()
-
-	if followTail {
-		// Scroll to the end of the new content so the latest output is visible.
-		w.richBody.SetOrigin(newLen)
-		w.richBody.SetOriginYOffset(0)
-	} else {
-		// Restore the previous scroll position, clamped to new content length.
-		if currentOrigin > newLen {
-			currentOrigin = newLen
-		}
-		w.richBody.SetOrigin(currentOrigin)
-		w.richBody.SetOriginYOffset(currentYOffset)
-	}
-}
 
 // isNearEnd reports whether the scroll origin is close enough to the end of
 // the rendered content to be considered "following the tail". This is used
@@ -1290,214 +898,15 @@ func isNearEnd(origin, contentLen int) bool {
 	return contentLen-origin <= tailThreshold
 }
 
-// UpdatePreview updates the preview content from the body buffer.
-// This should be called when the body buffer changes and the window is in preview mode.
-// It re-parses the markdown and updates the richBody, preserving the scroll position.
-// When edit position information is available (from pendingEdits), it attempts an
-// incremental re-parse of only the affected blocks. Falls back to full re-parse
-// when the incremental path cannot determine the affected region.
-func (w *Window) UpdatePreview() {
-	if !w.previewMode || w.richBody == nil {
-		return
-	}
 
-	// Cancel any pending debounce render since we're doing a full update.
-	w.cancelPreviewDebounce()
 
-	w.updatePreviewModel()
 
-	// Map the body's source selection to a rendered position so the
-	// insertion point follows external writes (e.g. shell output via
-	// the data pseudo-file).
-	if w.previewSourceMap != nil {
-		rendStart, rendEnd := w.previewSourceMap.ToRendered(w.body.q0, w.body.q1)
-		if rendStart >= 0 {
-			w.richBody.SetSelection(rendStart, rendEnd)
-		} else {
-			contentLen := w.richBody.Content().Len()
-			w.richBody.SetSelection(contentLen, contentLen)
-		}
-	}
-
-	// Render the preview using body.all as the canonical geometry
-	w.richBody.Render(w.body.all)
-	if w.display != nil {
-		w.display.Flush()
-	}
-}
-
-// PreviewSnarf returns the text that would be snarfed (copied) when in preview mode.
-// It uses the source map to convert the selection in the rendered rich text back to
-// positions in the source markdown, then extracts that range from the body buffer.
-// Returns empty slice if not in preview mode, no rich body, no selection, or no source map.
-func (w *Window) PreviewSnarf() []byte {
-	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
-		return nil
-	}
-
-	// Get selection from the rich text frame
-	p0, p1 := w.richBody.Selection()
-	if p0 == p1 {
-		return nil // No selection
-	}
-
-	// Map rendered positions to source positions
-	srcStart, srcEnd := w.previewSourceMap.ToSource(p0, p1)
-
-	// Clamp to body buffer bounds
-	srcStart, srcEnd = clampToBuffer(srcStart, srcEnd, w.body.file.Nr())
-	if srcStart >= srcEnd {
-		return nil
-	}
-
-	// Read the source text from the body buffer
-	buf := make([]rune, srcEnd-srcStart)
-	w.body.file.Read(srcStart, buf)
-
-	return []byte(string(buf))
-}
-
-// PreviewLookText returns the selected text from the preview for a Look (B3) operation.
-// In preview mode, this returns the rendered text (not the source markdown).
-// Returns empty string if not in preview mode or no selection.
-func (w *Window) PreviewLookText() string {
-	if !w.previewMode || w.richBody == nil {
-		return ""
-	}
-
-	// Get selection from the rich text frame
-	p0, p1 := w.richBody.Selection()
-	if p0 == p1 {
-		return "" // No selection
-	}
-
-	// Get the plain text from the rendered content
-	content := w.richBody.Content()
-	if content == nil {
-		return ""
-	}
-
-	plainText := content.Plain()
-	if p0 < 0 || p1 < 0 || p0 > p1 || p1 > len(plainText) {
-		return ""
-	}
-
-	return string(plainText[p0:p1])
-}
-
-// PreviewExecText returns the selected text from the preview for an Exec (B2) operation.
-// In preview mode, this returns the rendered text (not the source markdown).
-// Returns empty string if not in preview mode or no selection.
-func (w *Window) PreviewExecText() string {
-	// Exec and Look use the same text extraction logic
-	return w.PreviewLookText()
-}
-
-// PreviewExpandWord expands a click position to the full word in preview mode.
-// Given a position in the rendered text, returns the word containing that position
-// along with its start and end positions. Used for B3 Look when there's no selection.
-func (w *Window) PreviewExpandWord(pos int) (word string, start, end int) {
-	if !w.previewMode || w.richBody == nil {
-		return "", pos, pos
-	}
-
-	content := w.richBody.Content()
-	if content == nil {
-		return "", pos, pos
-	}
-
-	plainText := content.Plain()
-	if pos < 0 || pos >= len(plainText) {
-		return "", pos, pos
-	}
-
-	start, end = w.richBody.Frame().ExpandWordAtPos(pos)
-	if start >= end {
-		return "", pos, pos
-	}
-
-	return string(plainText[start:end]), start, end
-}
 
 // isWordChar returns true if the rune is part of a word (alphanumeric or underscore).
-func isWordChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
-}
-
-// clampToBuffer clamps start and end positions to [0, bufLen].
-// If clamping causes start > end, start is set to end.
-func clampToBuffer(start, end, bufLen int) (int, int) {
-	if start < 0 {
-		start = 0
-	}
-	if end < 0 {
-		end = 0
-	}
-	if start > bufLen {
-		start = bufLen
-	}
-	if end > bufLen {
-		end = bufLen
-	}
-	if start > end {
-		start = end
-	}
-	return start, end
-}
-
-// syncSourceSelection maps the current preview selection to the corresponding
-// positions in the source body buffer. This keeps body.q0 and body.q1 in sync
-// with the rendered preview selection, enabling Snarf and other Acme operations
-// to work correctly in preview mode.
-func (w *Window) syncSourceSelection() {
-	if !w.previewMode || w.richBody == nil || w.previewSourceMap == nil {
-		return
-	}
-
-	// Get selection from the rich text frame
-	p0, p1 := w.richBody.Selection()
-
-	// Map rendered positions to source positions
-	srcStart, srcEnd := w.previewSourceMap.ToSource(p0, p1)
-
-	// Clamp to body buffer bounds
-	srcStart, srcEnd = clampToBuffer(srcStart, srcEnd, w.body.file.Nr())
-
-	// Update the body's selection to match
-	w.body.q0 = srcStart
-	w.body.q1 = srcEnd
-}
 
 
 
 
-
-// renderPreview performs the actual render+flush for preview mode.
-func (w *Window) renderPreview() {
-	w.Draw()
-	if w.display != nil {
-		w.display.Flush()
-	}
-	w.previewLastRender = time.Now()
-	w.previewRenderPending = false
-}
-
-// cancelPreviewDebounce stops any pending debounce timer.
-func (w *Window) cancelPreviewDebounce() {
-	if w.previewDebounceTimer != nil {
-		w.previewDebounceTimer.Stop()
-		w.previewDebounceTimer = nil
-	}
-}
-
-// flushPreviewDebounce cancels any pending timer and immediately renders
-// if a render was deferred. Used by tests to synchronize.
-func (w *Window) flushPreviewDebounce() {
-	w.cancelPreviewDebounce()
-	if w.previewRenderPending && w.previewMode {
-		w.renderPreview()
-	}
-}
 
 // resolveImagePath resolves an image path relative to the markdown file's directory.
 // If the image path is absolute (starts with /), it is returned unchanged.
@@ -1570,9 +979,9 @@ func (w *Window) getOrBuildFontTable(fontPath string) *richFontTable {
 
 // initStyledMode switches the window from plain text to styled rendering mode.
 // It initializes a RichText renderer for span-styled content. No-op if already
-// in styled or preview mode.
+// in styled mode.
 func (w *Window) initStyledMode() {
-	if w.styledMode || w.previewMode {
+	if w.styledMode {
 		return
 	}
 
@@ -1882,109 +1291,6 @@ func (w *Window) rebuildStyledFont() {
 	}
 }
 
-// rebuildPreviewFont tears down and rebuilds the preview richBody with
-// the current w.body.font, preserving scroll position and content.
-// Called when the user changes the font while in preview mode.
-func (w *Window) rebuildPreviewFont() {
-	if !w.previewMode || w.richBody == nil {
-		return
-	}
-
-	display := w.display
-	if display == nil {
-		display = global.row.display
-	}
-	if display == nil {
-		return
-	}
-
-	// Save scroll position.
-	savedOrigin := w.richBody.Origin()
-	savedYOffset := w.richBody.GetOriginYOffset()
-
-	// Resolve font path.
-	fontPath := w.body.font
-	if fontPath == "" {
-		fontPath = global.tagfont
-	}
-
-	// Load base font and variants.
-	font := fontget(fontPath, display)
-	if font == nil {
-		return
-	}
-	boldFont := tryLoadFontVariant(display, fontPath, "bold")
-	italicFont := tryLoadFontVariant(display, fontPath, "italic")
-	boldItalicFont := tryLoadFontVariant(display, fontPath, "bolditalic")
-	codeFont := tryLoadCodeFont(display, fontPath)
-	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
-	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
-	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
-
-	// Build new rich text renderer with preview colors.
-	rt := NewRichText()
-
-	bgImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0xFFFFFFFF)
-	if err != nil {
-		return
-	}
-	textImage, err := display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, 0x000000FF)
-	if err != nil {
-		return
-	}
-
-	rtOpts := []RichTextOption{
-		WithRichTextBackground(bgImage),
-		WithRichTextColor(textImage),
-		WithRichTextSelectionColor(global.textcolors[frame.ColHigh]),
-		WithScrollbarColors(global.textcolors[frame.ColBord], global.textcolors[frame.ColBack]),
-	}
-	if boldFont != nil {
-		rtOpts = append(rtOpts, WithRichTextBoldFont(boldFont))
-	}
-	if italicFont != nil {
-		rtOpts = append(rtOpts, WithRichTextItalicFont(italicFont))
-	}
-	if boldItalicFont != nil {
-		rtOpts = append(rtOpts, WithRichTextBoldItalicFont(boldItalicFont))
-	}
-	if codeFont != nil {
-		rtOpts = append(rtOpts, WithRichTextCodeFont(codeFont))
-	}
-	if h1Font != nil {
-		rtOpts = append(rtOpts, WithRichTextScaledFont(2.0, h1Font))
-	}
-	if h2Font != nil {
-		rtOpts = append(rtOpts, WithRichTextScaledFont(1.5, h2Font))
-	}
-	if h3Font != nil {
-		rtOpts = append(rtOpts, WithRichTextScaledFont(1.25, h3Font))
-	}
-
-	// Image-related options (cache + onImageLoaded callback +
-	// basePath) — shared with initStyledMode so the two paths
-	// stay in lockstep. See addImageRichTextOptions.
-	rtOpts = w.addImageRichTextOptions(rtOpts, func() bool { return w.previewMode })
-
-	rt.Init(display, font, rtOpts...)
-
-	// Re-parse markdown and set content.
-	mdContent := w.body.file.String()
-	content, sourceMap, linkMap := markdown.ParseWithSourceMap(mdContent)
-	rt.SetContent(content)
-
-	w.richBody = rt
-	w.SetPreviewSourceMap(sourceMap)
-	w.SetPreviewLinkMap(linkMap)
-
-	// Restore scroll position.
-	rt.SetOrigin(savedOrigin)
-	rt.SetOriginYOffset(savedYOffset)
-	rt.Render(w.body.all)
-	if w.display != nil {
-		w.display.Flush()
-	}
-}
 
 // UpdateStyledView rebuilds and re-renders the styled content.
 // Called after editing operations that modify the body buffer while
@@ -2460,8 +1766,8 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 
 		// Double-click detection.
 		prevP0, prevP1 := rt.Selection()
-		if w.previewClickRT == rt &&
-			m.Msec-w.previewClickMsec < 500 &&
+		if w.richClickRT == rt &&
+			m.Msec-w.richClickMsec < 500 &&
 			prevP0 == prevP1 && selectq == prevP0 {
 
 			p0, p1 = fr.ExpandAtPos(selectq)
@@ -2470,7 +1776,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			if w.display != nil {
 				w.display.Flush()
 			}
-			w.previewClickRT = nil
+			w.richClickRT = nil
 
 			x, y := m.Point.X, m.Point.Y
 			for {
@@ -2505,11 +1811,11 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 			}
 
 			if p0 == p1 {
-				w.previewClickRT = rt
-				w.previewClickPos = p0
-				w.previewClickMsec = m.Msec
+				w.richClickRT = rt
+				w.richClickPos = p0
+				w.richClickMsec = m.Msec
 			} else {
-				w.previewClickRT = nil
+				w.richClickRT = nil
 			}
 		}
 
@@ -2564,7 +1870,7 @@ func (w *Window) HandleStyledMouse(m *draw.Mouse, mc *draw.Mousectl) bool {
 				me := <-mc.C
 				lastButtons = me.Buttons
 			}
-			w.previewClickRT = nil
+			w.richClickRT = nil
 		}
 
 		w.Draw()

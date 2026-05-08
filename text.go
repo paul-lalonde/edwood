@@ -18,7 +18,6 @@ import (
 	"github.com/rjkroege/edwood/draw/drawutil"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
-	"github.com/rjkroege/edwood/markdown"
 	"github.com/rjkroege/edwood/runes"
 	"github.com/rjkroege/edwood/util"
 )
@@ -479,14 +478,6 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 		t.q0 += nr
 	}
 
-	// In preview mode, don't update the text frame directly.
-	// Record the edit for incremental update; the caller is responsible
-	// for calling UpdatePreview() when the editing operation is complete.
-	if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
-		t.logInsert(oq0, b, nr)
-		t.w.recordEdit(markdown.EditRecord{Pos: q0, OldLen: 0, NewLen: nr})
-		return
-	}
 
 	// In styled mode, adjust span and region positions for the
 	// insertion. Falls through to normal frame update.
@@ -647,15 +638,6 @@ func (t *Text) Deleted(oq0, oq1 file.OffsetTuple) {
 	}
 	if q0 < t.q1 {
 		t.q1 -= util.Min(n, t.q1-q0)
-	}
-
-	// In preview mode, don't update the text frame directly.
-	// Record the edit for incremental update; the caller is responsible
-	// for calling UpdatePreview() when the editing operation is complete.
-	if t.what == Body && t.w != nil && t.w.IsPreviewMode() {
-		t.logInsertDelete(q0, q1)
-		t.w.recordEdit(markdown.EditRecord{Pos: q0, OldLen: q1 - q0, NewLen: 0})
-		return
 	}
 
 	// In styled mode, adjust span and region positions for the
@@ -1220,14 +1202,9 @@ func getP1(fr frame.Frame) int {
 // drawing, dirty caching, and scratch-image lifecycle; this method
 // keeps only the body-only and preview-mode guards. Both guards
 // must remain at the call site (not in the widget) because the
-// widget does not know which Text it is attached to or whether the
-// window is in preview mode.
+// widget does not know which Text it is attached to.
 func (t *Text) ScrDraw() {
 	if t.w == nil || t != &t.w.body {
-		return
-	}
-	if t.w.IsPreviewMode() {
-		// In preview mode, the RichText handles its own scrollbar.
 		return
 	}
 	if t.scrollbar == nil {
@@ -1467,8 +1444,7 @@ func (t *Text) ReadC(q int) rune {
 }
 
 func (t *Text) logSelectChange(q0, q1 int) {
-	if t.w != nil && t.w.owner != 0 &&
-		(t.w.styledMode || t.w.previewMode) {
+	if t.w != nil && t.w.owner != 0 && t.w.styledMode {
 		c := 's'
 		if t.what == Body {
 			c = 'S'

@@ -538,9 +538,6 @@ func get(et *Text, _ *Text, argt *Text, flag1 bool, _ bool, arg string) {
 	if samename {
 		t.file.Clean()
 	}
-	if w.IsPreviewMode() {
-		w.UpdatePreview()
-	}
 	xfidlog(w, "get")
 }
 
@@ -875,8 +872,6 @@ func fontx(et *Text, _ *Text, argt *Text, _, _ bool, arg string) {
 
 		if t.w.styledMode {
 			t.w.rebuildStyledFont()
-		} else if t.w.previewMode {
-			t.w.rebuildPreviewFont()
 		} else {
 			t.fr.Init(t.w.r, frame.OptFont(newfont), frame.OptBackground(global.row.display.ScreenImage()))
 
@@ -1198,17 +1193,13 @@ func dump(et *Text, _ *Text, argt *Text, isdump bool, _ bool, arg string) {
 }
 
 
-// plaincmd toggles between styled and plain text rendering for windows
-// with span data. No-op if the window has no spans or is in preview mode.
+// plaincmd toggles between styled and plain text rendering for
+// windows with span data. No-op if the window has no spans.
 func plaincmd(et *Text, _ *Text, _ *Text, _, _ bool, _ string) {
 	if et == nil || et.w == nil {
 		return
 	}
 	w := et.w
-
-	if w.IsPreviewMode() {
-		return
-	}
 
 	if w.spanStore == nil || w.spanStore.TotalLen() == 0 {
 		return
