@@ -332,43 +332,41 @@ behavior.
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Empty package with `doc.go`. **Per Tier 1 lesson 2:** also audit `wind/`, `command/`, `internal/` for spans-related types that might need to follow or be deleted as vestigial. Tier 1 found two vestigial subpackages this way; Tier 2 should not assume the audit is unnecessary. | `wind/`, `command/`, `internal/` | If any vestigial spans-related code is found, file as a row before 2.2 to delete it cleanly. |
-| [ ] Tests | n/a. | — | — |
-| [ ] Iterate | Add `spans/doc.go`; record any subpackage-audit findings here. | — | — |
-| [ ] Commit | — | — | `spans: add empty package + subpackage audit` |
+| [x] Design | Audit clean. doc.go added. | — | — |
+| [x] Tests | n/a. | — | — |
+| [x] Iterate | `spans/doc.go` describes scope; subpackage audit recorded clean in 2.0. | — | — |
+| [x] Commit | — | `ec3d97f` | `spans: add empty package` |
 
-### Tier 2.2: Move parse.go + tests
+### Tier 2.2 + 2.3: Move parse + store + region (combined)
 
-| Stage | Description | Read | Notes |
-|---|---|---|---|
-| [ ] Design | Verify `spanparse.go` has zero edwood-specific imports beyond `rich/`. **Per Tier 1 lesson 6:** check by call graph, not by godoc — any helper that LOOKS spans-only but is called from elsewhere needs special handling (rename or split). | `spanparse.go` | The existing imports are limited based on Tier 1's earlier inspection. Worth a fresh check post-Tier-1. |
-| [ ] Tests | Existing `spanparse_test.go` should continue passing after move. | `spanparse_test.go` | — |
-| [ ] Iterate | `git mv spanparse.go spans/parse.go && git mv spanparse_test.go spans/parse_test.go`; rename package; update imports in main package. | — | Use `git mv` to preserve history. |
-| [ ] Commit | — | — | `spans: move spanparse to spans package` |
-
-### Tier 2.3: Move store + region
+The leaf files were inseparable in practice — `spanparse.go`
+references types defined in `spanstore.go`/`region.go`, so a
+stagewise split would have required temporary cross-package
+references that the next commit immediately undoes. Combined
+into one commit per the row-level CODING-PROCESS Stage 4 rule
+"Wrong design — update plan first."
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Same import + call-graph audit for `spanstore.go` and `region.go`. | `spanstore.go`, `region.go` | The `region.go` file has helpers like `tryAddRegion`, `ancestorsOuterFirst` that may or may not move — check during design. |
-| [ ] Tests | Existing tests carry over. | `spanstore_test.go`, `region_test.go` | — |
-| [ ] Iterate | Move files; rename package; update imports. | — | — |
-| [ ] Commit | — | — | `spans: move store and region to spans package` |
+| [x] Design | Combined-move. `parseSpanMessage` exposed as `spans.Parse` with internal format-detection dispatch (covers prefixed + legacy). `SpanStore` → `spans.Store` (drop redundant prefix). | — | Decided during execution; plan revised. |
+| [x] Tests | Existing tests carried over. | — | — |
+| [x] Iterate | `git mv` of all six files, package decl, public-API renames, qualifying refs in main pkg. | — | — |
+| [x] Commit | — | `a71ec67` | `spans: move parse + store + region to spans package` |
 
 ### Tier 2.4: Extract render bridge from `wind.go`
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | Move `buildStyledContent`, `styleSubRun`, and the `apply*Region` family (`applyEnclosingRegions`, `applyCodeRegion`, `applyBlockquoteRegion`, `applyListitemRegion`, `applyTableRegion`, `applyTableRowRegion`, `applyTableCellRegion`, `ancestorsOuterFirst`), `styleAttrsToRichStyle`, `boxStyleToRichStyle`, `applyImagePayload`. **Per Tier 1.0 spec choice:** `Render([]rune body, *Store, *RegionStore) rich.Content`. | `wind.go` post-Tier-1 | These functions reach into `Window` for `body.file.Read`. The cleanest signature is to take a `[]rune` body slice (read once at call site) rather than an interface. |
-| [ ] Tests | New `spans/render_test.go` covering the conversion paths. Existing tests at the Window level either move (if pure data-driven) or stay (if exercising the wider styled-mode flow). | — | Tier 1 didn't preserve test counts here; review existing wind_styled_test.go for tests that should move. |
-| [ ] Iterate | Move functions; replace Window-side callers with `spans.Render(body, w.spanStore, w.regionStore)`. | — | — |
-| [ ] Commit | — | — | `spans: move render bridge from wind.go to spans package` |
+| [x] Design | `spans.Render(body []rune, *Store, *RegionStore) rich.Content` chosen over a BodyReader interface — body is small, copy-once is simpler. `spans.TryAddRegion` exposed for `applyParsedSpans`. Apply-* family + style translators stay private. | — | — |
+| [x] Tests | 26 unit tests for the helpers moved alongside their code into `spans/render_test.go`. Integration tests for the wider styled-mode flow stayed in `wind_styled_test.go`. | — | — |
+| [x] Iterate | Bridge functions moved; wind.go's `buildStyledContent` reduces to a one-line call to `spans.Render`. wind.go shrinks 1942 → 1559 LOC. | — | — |
+| [x] Commit | — | `06d15cb` | `spans: move render bridge from wind.go to spans package` |
 
 ### Tier 2.5: Final cleanup + documentation
 
 | Stage | Description | Read | Notes |
 |---|---|---|---|
-| [ ] Design | **Per Tier 1 lessons 4 & 5:** after extraction, audit `wind.go` for orphan helpers whose only callers were the moved functions, and grep stale doc-comments mentioning moved symbols (`buildStyledContent`, `styleSubRun`, etc.) for cleanup. Decide whether to optionally migrate `cmd/*` tools to import `spans/` types (recommended: defer to a separate change). | — | — |
-| [ ] Tests | Full `go test ./...` green. | — | — |
-| [ ] Iterate | Remove dead code; clean up stale comments; update `docs/designs/spans-protocol.md` references. | — | — |
-| [ ] Commit | — | — | `spans: final cleanup after tier-2 extraction` |
+| [x] Design | Stale comments in wind.go updated (two refs to `styleAttrsToRichStyle` rewritten to point at `spans.Render`). Orphan `isNearEnd` deleted (preview-mode tail-follow helper, unreferenced after Tier 1.5). `docs/designs/spans-protocol.md` paths refreshed. cmd/* migration deferred. | — | — |
+| [x] Tests | Full `go test ./...` green; `spans/` package tests pass. | — | — |
+| [x] Iterate | Stale-comment fixes + `isNearEnd` delete + spans-protocol.md path refresh. | — | — |
+| [ ] Commit | — | — | `spans: tier 2 final cleanup — stale comments + orphan helper + doc refresh` |

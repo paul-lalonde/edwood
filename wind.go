@@ -882,20 +882,6 @@ func (w *Window) scrollRichToMatch(rt *RichText, rendStart int) {
 
 
 
-// isNearEnd reports whether the scroll origin is close enough to the end of
-// the rendered content to be considered "following the tail". This is used
-// to auto-scroll win windows when new shell output is appended.
-func isNearEnd(origin, contentLen int) bool {
-	// Empty or brand-new content — treat as following.
-	if contentLen == 0 {
-		return true
-	}
-	// "Near the end" means the content after the origin fits in roughly
-	// one screen worth of text. 500 runes is a generous approximation
-	// (typical 80-col terminal × 6 lines ≈ 480 chars).
-	const tailThreshold = 500
-	return contentLen-origin <= tailThreshold
-}
 
 
 
@@ -1008,8 +994,8 @@ func (w *Window) initStyledMode() {
 	// Scaled fonts for headings. Without these, fontForStyle in
 	// rich.Frame falls through to the base font for any Scale > 1,
 	// so spans-protocol scale=N directives (Phase 3 round 1) would
-	// render at body size despite the spans.StyleAttrs.Scale field being
-	// plumbed through styleAttrsToRichStyle correctly.
+	// render at body size despite spans.Render plumbing the
+	// StyleAttrs.Scale field through to rich.Style correctly.
 	h1Font := tryLoadScaledFont(display, fontPath, 2.0)
 	h2Font := tryLoadScaledFont(display, fontPath, 1.5)
 	h3Font := tryLoadScaledFont(display, fontPath, 1.25)
@@ -1018,8 +1004,8 @@ func (w *Window) initStyledMode() {
 	// fontForStyle returns the base font for any span with
 	// Code=true, so spans-protocol family=code directives
 	// (Phase 3 round 2) would render in the proportional body
-	// font despite spans.StyleAttrs.Family="code" being plumbed
-	// through styleAttrsToRichStyle correctly.
+	// font despite spans.Render plumbing StyleAttrs.Family="code"
+	// through to rich.Style correctly.
 	codeFont := tryLoadCodeFont(display, fontPath)
 
 	rt := NewRichText()

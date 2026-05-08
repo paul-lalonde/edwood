@@ -11,7 +11,7 @@ place — the body text itself is not modified by the protocol.
 
 This document is the authoritative specification. The producer
 (`cmd/edcolor`, `cmd/md2spans`) and the consumer
-(`spanparse.go:parseSpanMessage`, `xfid.go:xfidspanswrite`) MUST
+(`spans.Parse`, `xfid.go:xfidspanswrite`) MUST
 agree on every rule here. Drift between them is a bug.
 
 ## Status
@@ -48,7 +48,7 @@ Clears all spans for the window. The body text is unchanged.
 **Constraints**:
 - A `c` directive must be the only line in its Twrite. Mixing
   `c` with `s` or `b` lines in one write is an error
-  (`spanparse.go:53`).
+  (`spans/parse.go:53`).
 
 **Side effects** (consumer-side, `xfid.go:606-614`):
 - The window's `spanStore` is cleared.
@@ -283,7 +283,7 @@ is COMPUTED, not declared. The protocol does NOT carry a
 that emit nested blockquotes do so by emitting nested
 `begin region blockquote` / `end region` pairs at the
 appropriate offsets; the consumer's bridge counts
-blockquote ancestors during the `applyEnclosingRegions`
+blockquote ancestors during the spans-package's `applyEnclosingRegions`
 walk. A producer that wants to emit `depth=N` as a hint is
 free to (it's a recognized but unenforced parameter); the
 bridge ignores it (the count is authoritative).
@@ -337,7 +337,7 @@ The store is cleared by the protocol's `c` directive
 alongside the `spanStore`.
 
 **Rendering** (round 5 of the bridge): for each per-rune
-StyleAttrs, the consumer's `buildStyledContent` consults
+StyleAttrs, the consumer's `spans.Render` consults
 `regionStore.EnclosingAt(offset)` and ORs the enclosing
 region's kind-specific flags into the per-rune
 `rich.Style`. v1 case for `code`: `Style.Block=true,
@@ -517,7 +517,7 @@ Within a single Twrite:
 
 2. **`s` and `b` directives must be contiguous.** Within a
    write, the offset of each `s` / `b` must equal the previous
-   directive's `offset + length` (`spanparse.go:72`). Gaps in
+   directive's `offset + length` (`spans/parse.go:72`). Gaps in
    the styled regions must be filled with default-styled `s`
    directives (fg "-", no flags).
 
@@ -531,7 +531,7 @@ Within a single Twrite:
 
 4. **Out-of-range tolerance.** A directive whose `offset`
    exceeds the body's rune count is silently dropped
-   (`spanparse.go:64`). A directive whose
+   (`spans/parse.go:64`). A directive whose
    `offset + length` exceeds the body bound is clamped via
    `clampRunsToBuffer`. Producers SHOULD NOT rely on these
    behaviors; they exist as defensive clamps.
@@ -555,7 +555,7 @@ Within a single Twrite:
    order they should be applied; consumers MUST process
    them in input order. The two-pointer merge in
    `cmd/md2spans/emit.go:FormatSpans` and the stack-based
-   parser in `spanparse.go:parseSpanMessage` both honor
+   parser in `spans.Parse` both honor
    this contract.
 
 ## Side effects of `s` / `b` writes
@@ -687,7 +687,7 @@ document apply only to today's protocol surface.
 
 - Producer: `cmd/edcolor/main.go:writeSpans` (line ~457),
   `cmd/md2spans/main.go:writeSpans` (line ~194).
-- Consumer parser: `spanparse.go:parseSpanMessage`,
+- Consumer parser: `spans.Parse`,
   `parseSpanLine`, `parseBoxLine`.
 - Consumer write handler: `xfid.go:xfidspanswrite` (line 565).
 - Side-effect flag: `wind.go:96` (`styledSuppressed`),
