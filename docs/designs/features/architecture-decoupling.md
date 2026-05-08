@@ -208,3 +208,114 @@ not on the critical path of the architecture cleanup.
 | Slide deck rendering changes are unacceptable | 1 | Inspect `slides.md` rendered through md2spans before merging Tier 1. Keep clean-mode option open via the future-work path if disliked. |
 | Hidden coupling between preview-mode tests and styled-mode tests | 1 | Run the full test suite after each deletion sub-step, not just at the end. |
 | `spans/` extraction surfaces a function that secretly needed `markdown` types | 2 | Tier 2 starts with an audit row that checks all extracted functions' import requirements. Caught early, fixed by promoting types to `spans/`. |
+
+## Addendum — Tier 1 deletion targets (enumerated)
+
+Produced 2026-05-08 from a code sweep on commit `86d05c1`. Line numbers are
+authoritative for that snapshot; they shift as deletions land. The
+intermediate row commits below correspond to plan rows 1.2–1.6.
+
+### Whole-file deletes
+- `wind/preview.go` — 87 LOC.
+- `markdown/` package — 13 `.go` files; ~3,805 impl + ~11,511 tests
+  (per the count we did earlier).
+
+### `Window` struct fields (in `wind.go`, ~line 74–93)
+1. `previewMode bool`
+2. `previewSourceMap *markdown.SourceMap`
+3. `previewLinkMap *markdown.LinkMap`
+4. `previewClickPos int`
+5. `previewClickMsec uint32`
+6. `previewClickRT *RichText`
+7. `prevBlockIndex *markdown.BlockIndex`
+8. `pendingEdits []markdown.EditRecord`
+9. `previewLastRender time.Time`
+10. `previewRenderPending bool`
+11. `previewDebounceTimer *time.Timer`
+
+`imageCache *rich.ImageCache` **stays** — used by both `initStyledMode` and
+`previewcmd`. (The doc-comment claiming "preview mode" is stale; the cache
+is shared with styled mode through `addImageRichTextOptions`.)
+
+### `Window` methods to delete (in `wind.go`)
+1. `IsPreviewMode` (line 932)
+2. `SetPreviewMode` (line 939)
+3. `TogglePreviewMode` (line 959)
+4. `HandlePreviewMouse` (line 990)
+5. `previewHScrollLatch` (line 1523) — verify whether styled-mode
+   `HandleStyledMouse` calls it; if so, **rename instead of delete**.
+6. `ShowInPreview` (line 1592)
+7. `scrollPreviewToMatch` (line 1631)
+8. `SetPreviewSourceMap` (line 1694)
+9. `PreviewSourceMap` (line 1699)
+10. `SetPreviewLinkMap` (line 1705)
+11. `PreviewLinkMap` (line 1710)
+12. `PreviewLookLinkURL` (line 1718)
+13. `recordEdit` (line 1726)
+14. `updatePreviewModel` (line 1733)
+15. `UpdatePreview` (line 1826)
+16. `PreviewSnarf` (line 1860)
+17. `PreviewLookText` (line 1890)
+18. `PreviewExecText` (line 1918)
+19. `PreviewExpandWord` (line 1926)
+20. `HandlePreviewKey` (line 2003)
+21. `HandlePreviewType` (line 2093)
+22. `previewTypeFinish` (line 2204)
+23. `previewRenderInterval` const (line 2197 area)
+
+### Top-level functions to delete (in `exec.go`)
+1. `previewExecute` (line 290)
+2. `previewcmd` (line 1204)
+3. `pickPlainViewportAnchor` (line 1419)
+4. `pickRichViewportAnchor` (line 1435 area) — preview-only sibling.
+
+Plus the `Markdown` row in `globalexectab` (line 80).
+
+### Conditional preview branches in shared code
+- `wind.go:365` — `Resize` `noredraw` flag uses `w.previewMode || w.styledMode`
+  → simplifies to `w.styledMode`.
+- `wind.go:371` — `Resize` post-resize redraw guard, same simplification.
+- `wind.go:431–432` — `Free` resets `previewRenderPending` and `previewMode`;
+  both lines deleted.
+- `wind.go:797` — preview-only render path in `addressMode` or similar; whole
+  branch deleted.
+- `wind.go:971` — `RedrawIfNeeded` check, same simplification as 365/371.
+- `text.go:487` — `Inserted`'s `recordEdit` call → deleted.
+- `text.go:657` — `Deleted`'s `recordEdit` call → deleted.
+- `text.go:1479` — `(t.w.styledMode || t.w.previewMode)` → simplifies to
+  `t.w.styledMode`.
+
+### `import` statements to remove
+- `wind.go`: `"github.com/rjkroege/edwood/markdown"` (only after deleting all
+  the methods that reference it).
+- `text.go`: same.
+- `exec.go`: same.
+- `wind/preview.go`: file gone.
+- All test files that import `markdown` for fixtures.
+
+### Tests to delete (matching `^func Test(Preview|Markdown|SourceMap|LinkMap|Stitch|Incremental)`)
+- 122 test functions across:
+  - `wind_test.go` (bulk)
+  - `wind_async_image_test.go` (`TestPreviewAsyncImage*`, ~7 tests)
+  - `wind_selection_test.go` (`TestPreviewSnarf*`, `TestPreviewLookText*`, ~12 tests)
+  - `wind_incremental_test.go` (`TestIncrementalPreview*`, ~10 tests)
+  - `richtext_test.go` (~3 tests including `TestPreviewMouseAfterResize`)
+  - `wind/window_test.go` (preview-side)
+- Plus `markdown/*_test.go` — gone with the package.
+
+Also any test helpers (`makePlainTestWindow`, builders that set up preview
+state) only used by deleted tests.
+
+### Per-row scope (cross-references plan)
+| Plan row | Files touched | Approx LOC removed |
+|---|---|---|
+| 1.2 Markdown builtin + previewcmd | `exec.go` (only) | ~270 (3 funcs + 1 builtin row) |
+| 1.3 Preview tests | the test files above | ~7,650 |
+| 1.4 Preview mouse path | `acme.go`, `wind.go` (HandlePreviewMouse + 4 helpers) | ~620 |
+| 1.5 Preview Window state | `wind.go`, `wind/preview.go`, `text.go` | ~990 + 87 |
+| 1.6 markdown/ package | `markdown/` | ~3,805 + ~11,511 |
+| **Total** | | **~25,000 LOC** |
+
+Matches the rough estimate from the earlier counting exercise (~5k impl +
+~18k tests = ~23k) within tolerance; the extra ~2k is the
+non-`markdown/`-package preview-side test code in `wind_test.go` etc.
