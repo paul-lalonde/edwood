@@ -1837,9 +1837,14 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 	}
 	t.org = org
 	t.fill(fr)
-	t.ScrDraw()
 
+	// When invoked from frame.Frame.Select's drag-scroll callback, f.lk is
+	// held; ScrDraw → Scrollbar.Draw → textScrollModel.Geometry would call
+	// frameimpl.GetFrameFillStatus and try to relock f.lk → deadlock. Skip
+	// the scrollbar redraw on the drag-scroll path; it'll redraw when the
+	// drag ends. (Plain plan9 acme behaved similarly.)
 	if !calledfromscroll {
+		t.ScrDraw()
 		t.SetSelect(t.q0, t.q1)
 	}
 }
