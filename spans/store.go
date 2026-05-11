@@ -41,11 +41,19 @@ type Store interface {
 
 	// SetRegion replaces (or creates) styling on the range
 	// [p0, p1) with s. SetRegion with a plain s is equivalent
-	// to ClearRegion.
+	// to ClearRegion. Triggers all Observe callbacks with
+	// (p0, p1).
 	SetRegion(p0, p1 int, s frame.Style)
 
 	// ClearRegion restores the runes in [p0, p1) to plain style.
+	// Triggers all Observe callbacks with (p0, p1).
 	ClearRegion(p0, p1 int)
+
+	// Observe registers fn for style-only updates — calls to
+	// SetRegion or ClearRegion. fn receives the rune range that
+	// was re-styled. Buffer-driven shifts (Inserted / Deleted)
+	// are bookkeeping and do NOT fire fn.
+	Observe(fn func(p0, p1 int))
 
 	// Snapshot returns a copy of the current regions, sorted
 	// by Start and covering the buffer's full rune range.
@@ -81,9 +89,26 @@ func newStoreWithLen(n int) *store {
 }
 
 type store struct {
-	buf      *file.ObservableEditableBuffer
-	regions  []Region
-	totalLen int
+	buf       *file.ObservableEditableBuffer
+	regions   []Region
+	totalLen  int
+	observers []func(p0, p1 int)
+}
+
+// Observe registers fn for style-only update callbacks. See the
+// Store interface for the contract.
+func (s *store) Observe(fn func(p0, p1 int)) {
+	if fn == nil {
+		return
+	}
+	s.observers = append(s.observers, fn)
+}
+
+// notify dispatches a style-only update to all observers.
+func (s *store) notify(p0, p1 int) {
+	for _, fn := range s.observers {
+		fn(p0, p1)
+	}
 }
 
 func (s *store) Empty() bool {
@@ -136,6 +161,7 @@ func (s *store) SetRegion(p0, p1 int, style frame.Style) {
 		s.regions[j].Style = style
 	}
 	s.coalesce()
+	s.notify(p0, p1)
 }
 
 func (s *store) ClearRegion(p0, p1 int) {

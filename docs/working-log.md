@@ -224,6 +224,14 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   region's Start ended up one short. Fixed by always shifting
   regions[1+] when region 0 grows. 12 new tests covering the
   algorithm's branches plus a real-buffer integration test.
+- A3.3 — `Observe(fn)` callback dispatch. Store keeps an
+  `observers []func(p0, p1 int)` slice; SetRegion (and ClearRegion
+  via delegation) calls `notify(p0, p1)` after the mutation +
+  coalesce. Buffer-driven Inserted/Deleted do NOT notify per
+  §6.1's "style-only updates" wording. Empty-range SetRegion is
+  a no-op and does not fire. 5 tests cover the contract: fires
+  on SetRegion, fires on ClearRegion, NOT fired by Inserted /
+  Deleted, supports multiple observers, no fire on empty range.
 
 ## Next-session candidates
 
