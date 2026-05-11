@@ -180,6 +180,28 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   implementation arrives in Slice C row C2 alongside replaced
   elements and `Text.computeTallElementYOffset`. Tests pin the
   stub contract.
+- A3.1 — introduced the `spans/` package with the public Store
+  interface and an in-memory implementation. During design we
+  flipped from a sparse internal layout (only non-plain regions
+  stored; plain runs synthesized) to a *dense* layout (full-
+  coverage `[]Region` covering `[0, totalLen)`, plain runs
+  stored explicitly). Reason: dense `GetStyleRuns` walks a
+  single uniform slice with one clip branch, vs. sparse's
+  three-way "gap-before / overlap / gap-after" synthesis; the
+  §6.2 trailing/leading-edge rule (A3.2) likewise applies
+  uniformly to every run. The dense path costs one extra
+  invariant — every region's `Start+Length` must equal the
+  next region's `Start`, with `regions[last].Start+Length ==
+  totalLen` — but the simpler reads were worth it. The design
+  doc's external contract (Empty, GetStyleRuns, SetRegion,
+  ClearRegion, Snapshot) is unchanged. NewStore accepts the
+  `*file.ObservableEditableBuffer`; for Slice A it stashes the
+  pointer but doesn't yet `AddObserver` (A3.2 wires that up).
+  A package-internal `newStoreWithLen(n)` helper lets tests
+  seed a plain run without a real buffer. 13 tests covering
+  Empty/Snapshot defaults, plain-coverage Empty, SetRegion/
+  ClearRegion equivalence, single/multi region GetStyleRuns,
+  full-coverage invariant, overlap-wins, partial-clear splits.
 
 ## Next-session candidates
 

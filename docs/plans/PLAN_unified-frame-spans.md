@@ -55,7 +55,7 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| A3.1 | [ ] §6.1, §6.3 (`Store`, `GetStyleRuns` shape) | [ ] Empty store, single region, multi-region, full coverage of `[p0,p1)`, Len-sum invariant | [ ] In-memory store with sorted regions, binary search | [ ] `spans: introduce Store with GetStyleRuns` | |
+| A3.1 | [x] §6.1, §6.3 (`Store`, `GetStyleRuns` shape); switched internal layout from sparse to dense full-coverage | [x] Empty defaults, plain coverage still Empty, SetRegion makes non-empty, ClearRegion + SetRegion(plain) restore Empty, single/multi region, full-coverage invariant table-test, overlap, partial clear splits, Snapshot sorted | [x] `spans/` package; sorted `[]Region` covering `[0, totalLen)`; `Empty`/`GetStyleRuns`/`SetRegion`/`ClearRegion`/`Snapshot`; `newStoreWithLen` test helper | [x] (pending commit) — `spans: introduce Store with GetStyleRuns` | Dense full-coverage chosen over sparse for simpler GetStyleRuns synthesis and uniform observer rule (per design discussion). |
 | A3.2 | [ ] §6.2 `Inserted` / `Deleted` observer rules | [ ] Trailing-edge extension, leading-edge no-extension, deletion clipping / merging / erasing, post-delete shift | [ ] Implement observer attach + index maintenance | [ ] `spans: maintain index across buffer mutations` | The trailing-edge rule (§6.2 rationale) is the subtle bit. |
 | A3.3 | [ ] §6.1 `Observe` API | [ ] Callback fires on `SetRegion` / `ClearRegion`; not fired by buffer-driven shifts | [ ] Add observer slice + dispatch | [ ] `spans: add style-change Observe callback` | Buffer-driven shifts are bookkeeping only. |
 
