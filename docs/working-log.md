@@ -262,6 +262,31 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   3 new A4.1 tests pin the behavior: body has non-nil spans,
   tag has nil spans, spans registered before Text on the
   observer chain.
+- A4.2 — Text.Inserted now routes through frame.InsertWithStyle
+  when `t.spans != nil && !t.spans.Empty()`. The §8.1 ordering
+  guarantee means spans has already shifted/extended its regions
+  by the time Text.Inserted runs, so `t.spans.GetStyleRuns(q0,
+  q0+nr)` returns the post-insert styles for the new runes.
+  When spans is nil or Empty (fast path), the existing
+  `t.fr.InsertByte(b, framePos)` call stays intact — no byte→
+  rune conversion, no spans query. `Deleted` requires no change
+  because the frame's per-box style data is removed alongside
+  the runes by the existing Delete path.
+  Tests use a `recordingFrame` that embeds MockFrame and
+  records the args passed to InsertByte / InsertWithStyle.
+  Five cases pin the routing: nil spans, empty spans, mid-
+  colored insert, multi-rune mid-colored insert (styles slice
+  correctness), and "spans non-empty but inserted range is in
+  a plain area" (still routes via InsertWithStyle since
+  Empty() is false; the styles slice happens to be all plain).
+  Subtlety: MockFrame's GetFrameFillStatus reports Nchars=0,
+  which would gate every test insert out of the visibility
+  check. The recording frame overrides GetFrameFillStatus to
+  report a large Nchars. Tests bypass the buffer entirely and
+  call Text.Inserted directly (with a manual call to
+  spans.Inserted first to simulate the buffer-driven ordering)
+  to keep the tag-status observer chain (UpdateTag, setTag1,
+  Resize) out of scope.
 
 ## Next-session candidates
 

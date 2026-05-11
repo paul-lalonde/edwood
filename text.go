@@ -521,7 +521,18 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 		t.org += nr
 	} else {
 		if t.fr != nil && q0 <= t.org+(t.fr.GetFrameFillStatus().Nchars) {
-			t.fr.InsertByte(b, q0-t.org)
+			framePos := q0 - t.org
+			if t.spans != nil && !t.spans.Empty() {
+				// Styled path: spans observer fired before this
+				// callback (§8.1), so GetStyleRuns reflects the
+				// post-insert state. Convert bytes → runes so
+				// InsertWithStyle can index by rune offset.
+				runes := []rune(string(b))
+				styles := t.spans.GetStyleRuns(q0, q0+nr)
+				t.fr.InsertWithStyle(runes, framePos, styles)
+			} else {
+				t.fr.InsertByte(b, framePos)
+			}
 		}
 	}
 
