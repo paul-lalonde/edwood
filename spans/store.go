@@ -54,7 +54,8 @@ type Store interface {
 
 // NewStore creates a Store. If buf is non-nil and already
 // contains runes, the store is seeded with a single plain region
-// covering them. Buffer observer attachment is wired up in A3.2.
+// covering them and registers itself on buf's observer chain so
+// that Inserted/Deleted edits keep the store's offsets aligned.
 func NewStore(buf *file.ObservableEditableBuffer) Store {
 	s := &store{buf: buf}
 	if buf != nil {
@@ -62,6 +63,7 @@ func NewStore(buf *file.ObservableEditableBuffer) Store {
 			s.regions = []Region{{Start: 0, Length: n, Style: frame.Style{}}}
 			s.totalLen = n
 		}
+		buf.AddObserver(s)
 	}
 	return s
 }

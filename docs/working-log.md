@@ -202,6 +202,28 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   Empty/Snapshot defaults, plain-coverage Empty, SetRegion/
   ClearRegion equivalence, single/multi region GetStyleRuns,
   full-coverage invariant, overlap-wins, partial-clear splits.
+- A3.2 — `Inserted` / `Deleted` observer methods on `*store`.
+  `NewStore` now calls `buf.AddObserver(s)` so buffer edits keep
+  the store's offsets aligned. Under the dense layout the §6.2
+  trailing/leading-edge rule applies uniformly: leading-edge at
+  a region boundary makes the *previous* region's trailing edge
+  extend (and the right region shifts); mid-region insertion
+  extends; end-of-buffer insertion extends the last region.
+  Empty-store insertion seeds a plain region. The plain-region-0
+  case observably matches "prepend a plain region of length nr"
+  because coalescing absorbs the new plain content into the
+  existing plain run.
+  Deleted clips intersecting regions per the five cases (entirely
+  contained, straddles-left, straddles-right, wraps, after-shift)
+  then runs `coalesce` so adjacent same-Style regions merge.
+  Initial implementation had a subtle bug: in the "plain region
+  0 leading-edge extension" branch I extended region 0's length
+  but forgot to shift the subsequent regions' Starts. That broke
+  the dense invariant and was caught by the integration test
+  (`TestObserver_Integration_BufferDrivesStore`) — a colored
+  region's Start ended up one short. Fixed by always shifting
+  regions[1+] when region 0 grows. 12 new tests covering the
+  algorithm's branches plus a real-buffer integration test.
 
 ## Next-session candidates
 
