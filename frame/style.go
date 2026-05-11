@@ -12,24 +12,49 @@ type StyleRun struct {
 }
 
 // Style is the per-run attribute bundle the frame consumes during
-// layout and rendering. The field set is the Slice A subset
-// (coloring only); Slices B and C grow the struct with font and
-// replaced-element fields. IsZero() is kept in sync with the
-// current field set.
+// layout and rendering. Kind is the bitmask discriminator; the
+// data fields are meaningful iff their corresponding Kind bit is
+// set.
+//
+// The field set is the Slice A subset (Kind, Fg, Bg). Slice B
+// adds FontIdx and the bold/italic/underline/font-idx bits to
+// Kind. Slice C adds the replaced-element fields, block-context
+// bits, and HOffset.
 type Style struct {
+	Kind Kind
+
+	// Meaningful iff Kind & KindColored != 0.
 	Fg draw.Image
 	Bg draw.Image
 }
 
-// IsZero reports whether s is the default style. Callers use this
-// to detect plain text and take the fast path.
-func (s Style) IsZero() bool {
-	return s.Fg == nil && s.Bg == nil
-}
+// Kind is a bitmask of active style attributes. KindPlain is the
+// zero value and means "upstream defaults" — IsPlain() returns
+// true for any Style whose Kind is KindPlain. Bit positions are
+// stable across slices; later slices add the bits they need.
+type Kind uint
 
-// ReplacedKind classifies a replaced element (image, code block,
-// table, fixed box). Declared in Slice A so the type is available
-// for forward references; consumed in Slice C.
+const KindPlain Kind = 0
+
+const (
+	// KindColored signals that Fg/Bg carry overrides.
+	KindColored Kind = 1 << iota
+	// Slice B will add KindBold, KindItalic, KindUnderline,
+	// KindFontIdx; Slice C will add KindReplaced,
+	// KindBlockquote, KindInCodeBlock, KindInTable. Each takes
+	// the next iota step in this block.
+)
+
+// IsPlain reports whether s carries no styling — i.e., a frame
+// asked to render this Style produces output identical to
+// upstream's plain Insert. Equivalent to s.Kind == KindPlain.
+// Callers use this to take the fast path.
+func (s Style) IsPlain() bool { return s.Kind == KindPlain }
+
+// ReplacedKind classifies a replaced element. The Replaced*
+// fields (added in Slice C) are gated by Kind & KindReplaced;
+// this enum names the subtype. Declared in Slice A so the type
+// is available for forward references; consumed in Slice C.
 type ReplacedKind int
 
 const (

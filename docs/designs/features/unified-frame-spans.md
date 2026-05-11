@@ -228,69 +228,116 @@ to minimize call-site churn in upstream Text.
 
 ### 5.3 Data types
 
-The `Style` struct shown below is the final v1 surface. The field set
-is introduced across the three implementation slices in §12: Slice A
-adds `Fg`/`Bg`; Slice B adds the font and emphasis fields; Slice C
-adds the replaced-element, block-context, and horizontal-scroll
-fields. Each slice ships a struct containing only the fields it
-needs; later slices grow the struct. `IsZero()` is kept in sync with
-the current field set on every slice.
+The `Style` struct and `Kind` bitmask shown below are the final v1
+surface. Both grow across the three implementation slices in §12:
+Slice A adds `Kind`/`Fg`/`Bg` and the `KindColored` bit; Slice B
+adds `FontIdx` and the bold/italic/underline/font-index bits;
+Slice C adds the replaced-element fields, block-context bits, and
+horizontal-scroll field. Each slice ships only the bits and fields
+it consumes; later slices grow both.
+
+`Kind` is the primary discriminator. `KindPlain` (the zero value)
+means "upstream defaults" — runes with a plain `Style` render
+identically to upstream `Insert`, and `IsPlain()` exists exactly to
+let the frame and producers detect that fast path. Non-plain bits
+identify which other `Style` fields the frame should consult.
+Producers are responsible for keeping `Kind` consistent with the
+data fields (e.g., setting `Fg` must come with `Kind |= KindColored`;
+a `Style` with `Fg != nil` but `Kind == KindPlain` is treated as
+plain and its colors are ignored).
 
 ```go
 package frame
 
-// StyleRun is a contiguous run of N runes that share a Style.
+// StyleRun is a contiguous run of Len runes that share a Style.
 // A slice of StyleRuns whose Lens sum to K applies to K runes.
 type StyleRun struct {
     Len   int
     Style Style
 }
 
-// Style is the per-run attribute bundle. The implementer should
-// keep this lean — only fields the frame consumes during layout
-// and rendering belong here.
+// Style is the per-run attribute bundle the frame consumes during
+// layout and rendering. Kind is the bitmask discriminator; the
+// data fields are meaningful iff their corresponding Kind bit is
+// set. The implementer should keep this lean — only fields the
+// frame consumes belong here.
 type Style struct {
-    // Font flags
-    Bold      bool
-    Italic    bool
-    Underline bool
-    FontIdx   int       // 0 = default; rest are caller-defined
+    // Kind is a bitmask of which attributes are active. The zero
+    // value (KindPlain) means "upstream defaults"; non-zero bits
+    // gate the data fields below.
+    Kind Kind
 
-    // Colors (nil = default from frame options)
+    // Colors. Meaningful iff Kind & KindColored != 0.
+    // nil means use the frame's default for that role.
     Fg draw.Image
     Bg draw.Image
 
-    // Replaced-element marker
-    //
-    // A rune whose style has Replaced=true is rendered as a
-    // single fat box of the given dimensions. The buffer still
-    // contains exactly one rune at this position; the frame
-    // renders it as a block instead of as a glyph. Tab and
-    // newline are NOT replaced elements — they remain regular
-    // characters whose layout is handled by the line-breaker.
-    Replaced       bool
-    ReplacedWidth  int  // px; 0 = use intrinsic from ReplacedRef
-    ReplacedHeight int  // px; 0 = use intrinsic
-    ReplacedKind   ReplacedKind
-    ReplacedRef    string // image URL, code-block id, etc.
+    // Font index. Meaningful iff Kind & KindFontIdx != 0.
+    // 0 = default; rest are caller-defined.
+    FontIdx int
 
-    // Per-element horizontal scroll offset for wide replaced
-    // elements (tables, code blocks, oversized images) whose
-    // intrinsic width exceeds the frame width. The frame
-    // consults HOffset during render. Wheel events over the
-    // element update it; the optional per-element horizontal
-    // scrollbar (§ 10.2) updates it too. Ignored when
-    // Replaced=false.
+    // Replaced element. Meaningful iff Kind & KindReplaced != 0.
+    // The buffer still contains exactly one rune at this
+    // position; the frame renders it as a single fat box of the
+    // given dimensions instead of as a glyph. Tab and newline
+    // are NOT replaced elements — they remain regular characters
+    // whose layout is handled by the line-breaker.
+    ReplacedWidth  int           // px; 0 = use intrinsic from ReplacedRef
+    ReplacedHeight int           // px; 0 = use intrinsic
+    ReplacedKind   ReplacedKind  // subtype classifier; see below
+    ReplacedRef    string        // image URL, code-block id, etc.
+
+    // Per-element horizontal scroll for wide replaced elements
+    // (tables, code blocks, oversized images) whose intrinsic
+    // width exceeds the frame width. Meaningful iff Kind &
+    // KindReplaced != 0. Wheel events over the element update
+    // it; the optional per-element horizontal scrollbar (§10.2)
+    // updates it too.
     HOffset int
 
-    // Block context that influences layout indentation but not
-    // glyph rendering. The frame consumes these during line
-    // breaking; they are not styling per se.
+    // Block context: layout indentation, not glyph styling.
+    // BlockquoteDepth meaningful iff Kind & KindBlockquote != 0.
+    // KindInCodeBlock and KindInTable are bool-equivalents
+    // expressed entirely via the bitmask.
     BlockquoteDepth int
-    InCodeBlock     bool
-    InTable         bool
 }
 
+// Kind is a bitmask of active style attributes. KindPlain is the
+// zero value and means "upstream defaults" — IsPlain() returns
+// true for any Style whose Kind is KindPlain. The bits are
+// introduced across slices; bit positions are stable.
+type Kind uint
+
+// KindPlain is the zero value; it sits in its own const so the
+// bit-position iota counter in the block below starts at 0.
+const KindPlain Kind = 0
+
+const (
+    // Slice A
+    KindColored Kind = 1 << iota  // = 1, Fg / Bg meaningful
+
+    // Slice B
+    KindBold       // = 2,  bold weight
+    KindItalic     // = 4,  italic angle
+    KindUnderline  // = 8,  underline decoration
+    KindFontIdx    // = 16, FontIdx field meaningful
+
+    // Slice C
+    KindReplaced    // = 32,  Replaced* and HOffset meaningful
+    KindBlockquote  // = 64,  BlockquoteDepth meaningful
+    KindInCodeBlock // = 128
+    KindInTable     // = 256
+)
+
+// IsPlain reports whether s carries no styling — i.e., a frame
+// asked to render this Style will produce output identical to
+// upstream's plain Insert. Equivalent to s.Kind == KindPlain.
+// Callers use this to take the fast path.
+func (s Style) IsPlain() bool { return s.Kind == KindPlain }
+
+// ReplacedKind classifies a replaced element. The Replaced*
+// fields are gated by Kind & KindReplaced; this enum names the
+// subtype.
 type ReplacedKind int
 const (
     ReplacedNone ReplacedKind = iota
@@ -312,9 +359,12 @@ frame uses `Style` to render; nothing else should touch it.
 - **Contract.** Insert `len(r)` runes at frame-relative offset `p0`,
   associating each rune with a style determined by the parallel
   `styles` slice. If `styles == nil` *or* every `StyleRun` in
-  `styles` has `Style{} == frame.DefaultStyle`, the implementation
-  takes the fast path: no per-rune style storage, no replaced-
-  element check, equivalent to upstream `Insert`.
+  `styles` has `Style.IsPlain()`, the implementation takes the
+  fast path: no per-rune style storage, no replaced-element
+  check, equivalent to upstream `Insert`. Under the §5.3 Kind
+  bitmask model, `IsPlain()` is exactly `Kind == KindPlain`, which
+  means "upstream defaults" — so plain runs by construction need
+  no styling work.
 - **Style assignment.** `styles[0]` applies to runes `[0,
   styles[0].Len)`; `styles[1]` to `[styles[0].Len, styles[0].Len +
   styles[1].Len)`; etc. The sum of `Len` fields must equal `len(r)`
@@ -375,9 +425,10 @@ package spans
 // file.ObservableEditableBuffer *before* any UI observers
 // (Text), so that UI callbacks see post-update spans.
 type Store interface {
-    // Empty reports whether any non-default-style region
-    // exists. Callers can short-circuit style-query work
-    // entirely when Empty() is true (most files in plain mode).
+    // Empty reports whether any non-plain region exists (any
+    // region whose Style.IsPlain() is false). Callers can
+    // short-circuit style-query work entirely when Empty() is
+    // true (most files in plain mode).
     Empty() bool
 
     // GetStyleRuns returns the styling for rune range [p0, p1).
@@ -400,7 +451,7 @@ type Store interface {
     SetRegion(p0, p1 int, s frame.Style)
 
     // ClearRegion removes any styling in [p0, p1), restoring
-    // the runes to default style. Triggers Observe callbacks.
+    // the runes to plain style. Triggers Observe callbacks.
     ClearRegion(p0, p1 int)
 
     // Snapshot returns a copy of the current store state, for
@@ -911,9 +962,12 @@ grow.
 
 #### Phase A1 — Frame data types (color-only)
 
-- Add `frame.StyleRun`, `frame.Style{Fg, Bg draw.Image}`,
+- Add `frame.StyleRun`, `frame.Style{Kind, Fg, Bg}`, `frame.Kind`
+  (bitmask with `KindPlain = 0` in its own const, and
+  `KindColored = 1 << iota = 1` opening the bit-position block),
   `frame.ReplacedKind` (declared, no consumer yet).
-- Add `Style.IsZero()` so callers can detect default style cheaply.
+- Add `Style.IsPlain()` (`return s.Kind == KindPlain`) so callers
+  can detect upstream-defaults styles in a single integer compare.
 - No interface changes yet. Just types.
 
 #### Phase A2 — Frame styled methods (color-only impl)
@@ -990,13 +1044,17 @@ learn to recompute line height when font flags change.
 
 #### Phase B1 — Font fields on Style
 
-- Extend `frame.Style` with `Bold`, `Italic`, `Underline`,
-  `FontIdx`.
-- Update `IsZero()` to include the new fields in its zero
-  comparison.
+- Extend `frame.Kind` with `KindBold`, `KindItalic`,
+  `KindUnderline`, `KindFontIdx` bits.
+- Extend `frame.Style` with the `FontIdx` value field (gated by
+  `KindFontIdx`); bold/italic/underline are expressed entirely
+  through the bitmask, no bool fields.
+- `IsPlain()` requires no change — it already covers any
+  non-`KindPlain` Kind value, including the new bits.
 - Update the 9P directive parser to recognize `bold=`, `italic=`,
-  `underline=`, `font=`.
-- No consumer of the new fields yet; producers can emit them but
+  `underline=`, `font=` keys; producers set the corresponding
+  Kind bits.
+- No consumer of the new bits yet; producers can emit them but
   no shipping producer does in this phase.
 
 #### Phase B2 — Frame variable-height line breaking
@@ -1260,8 +1318,16 @@ The following are deliberately left to the implementer:
   Reference producers: md2spans, edcolor, dirthumb.
 - **Viewport-only**: the property that the frame holds runes only
   for the visible window, never the full document.
-- **Default style**: `Style{}`. The zero value. Runes carrying
-  default style render with the frame's default font and colors.
+- **Plain style**: a `Style` with `Kind == KindPlain` (= 0).
+  Renders with the frame's default font and colors, exactly as
+  upstream `Insert`. The zero value `Style{}` is a plain style.
+  See `Style.IsPlain()`.
+- **Kind**: a `Style` field carrying a bitmask of which other
+  `Style` fields are meaningful. `KindPlain = 0` is the zero
+  value and means "no styling, render as upstream default";
+  non-zero bits (`KindColored`, `KindBold`, `KindReplaced`, …)
+  gate the data fields. See §5.3 for the full bit set and §12
+  for the per-slice schedule.
 - **'S' event**: the single new event-file character this
   design adds to upstream's vocabulary. Emitted by Text on body
   selection change when the body has spans attached and an

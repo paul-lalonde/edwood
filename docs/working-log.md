@@ -105,9 +105,30 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   (A: coloring, B: typographic variation, C: replaced elements +
   block context) rather than the original nine sequential phases.
   Slice A's `Style` carries only `Fg`/`Bg`. Rewrote design §12 and
-  plan to match. Working tree at session end has uncommitted
-  modifications to `docs/designs/features/unified-frame-spans.md`,
-  `docs/plans/PLAN_unified-frame-spans.md`, and this file.
+  plan to match. Landed as `4b8af5c`.
+- Slice A test-reuse scout (`docs/scouts/slice-A-test-reuse.md`)
+  surveying `/Users/paul/dev/edwood` (`simplification` branch,
+  `a6b8846`). Most A1 reuse is nil — types layer is new
+  territory; high yield in A3 (spans.Store) and A5 (parser).
+  Landed as `8abf15b`.
+- A1.1 first pass: `frame.StyleRun`, `frame.Style{Fg, Bg}`,
+  `Style.IsZero()`, `frame.ReplacedKind` enum. Landed as
+  `927a34a`.
+- A1.2 rework (Stage-4 "wrong design"): replaced `IsZero()` with
+  `IsPlain()`; introduced `frame.Kind` as a bitmask.
+  `KindPlain = 0` sits in its own `const` declaration; the
+  bit-position block beneath it starts at `iota = 0`, so
+  `KindColored = 1 << iota = 1`. Later slices add `KindBold = 2`,
+  `KindItalic = 4`, `KindUnderline = 8`, `KindFontIdx = 16`,
+  `KindReplaced = 32`, `KindBlockquote = 64`, `KindInCodeBlock = 128`,
+  `KindInTable = 256` — each picking up the next iota step in the
+  same block. `IsPlain()` is exactly `Kind == KindPlain`, which
+  means "upstream defaults" — the fast-path predicate. The
+  design's `Style` struct lost its `Bold`/`Italic`/`Underline`
+  bool fields (subsumed by Kind bits). Design §5.3/§5.4/§6.1/§12
+  A1+B1/§17 updated accordingly. Landed and re-amended twice to
+  refine the bitmask declaration into the two-const-block iota
+  pattern that yields the expected bit positions.
 
 ## Next-session candidates
 

@@ -40,7 +40,8 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| A1.1 | [ ] §5.3 (color subset) | [ ] `IsZero()` returns true on `Style{}` and false on any non-default field; round-trip test | [ ] Add `frame.StyleRun`, `frame.Style{Fg, Bg}`, `frame.ReplacedKind` enum (declared, unused) | [ ] `frame: introduce StyleRun, Style (color subset), ReplacedKind` | Resist non-color fields (Risk row 5). They come in Slice B/C. |
+| A1.1 | [x] §5.3 (initial color subset) | [x] `IsZero()` returns true on `Style{}` and false on any non-default field | [x] Add `frame.StyleRun`, `frame.Style{Fg, Bg}`, `frame.ReplacedKind` enum (declared, unused) | [x] `927a34a` — `frame: introduce StyleRun, Style (color subset), ReplacedKind` | Superseded by A1.2 (Stage-4 "wrong design"): `IsZero()` rolled into Kind-bitmask model. |
+| A1.2 | [x] §5.3 reworked (Kind bitmask, IsPlain semantics) | [x] `IsPlain()` reflects Kind alone; KindColored distinct; any non-zero Kind is non-plain | [x] Add `Kind` bitmask (`KindPlain=0`, `KindColored=1<<0`); replace `IsZero` with `IsPlain`; update §5.3/§5.4/§6.1/§12 A1+B1/§17 in design doc | [x] (pending commit) — `frame: rework Style with Kind bitmask and IsPlain` | Producer sets `Kind` to declare which fields are meaningful; `Kind==KindPlain` == upstream defaults. |
 
 ## Phase A2 — Frame styled methods (color-only impl)
 
