@@ -228,6 +228,14 @@ to minimize call-site churn in upstream Text.
 
 ### 5.3 Data types
 
+The `Style` struct shown below is the final v1 surface. The field set
+is introduced across the three implementation slices in §12: Slice A
+adds `Fg`/`Bg`; Slice B adds the font and emphasis fields; Slice C
+adds the replaced-element, block-context, and horizontal-scroll
+fields. Each slice ships a struct containing only the fields it
+needs; later slices grow the struct. `IsZero()` is kept in sync with
+the current field set on every slice.
+
 ```go
 package frame
 
@@ -857,10 +865,38 @@ file. Their *protocol* (which directives they emit, what fields
 of `Style` they use) is part of the upstream-able contract; their
 *implementation* is unconstrained.
 
-## 12. Implementation Plan (Phased)
+## 12. Implementation Plan (Three Vertical Slices)
 
-Each phase produces a working tree. Phases can be developed in
-order with no large rewrites mid-stream.
+The implementation lands in three vertical slices. Each slice is
+shippable end-to-end: at the close of a slice, the editor works,
+the regression suite is green, and a real producer can exercise
+the slice's surface. Every prior slice must keep working after the
+next slice lands.
+
+- **Slice A — Coloring.** Minimum wiring to make a clean-room
+  `edcolor` work. Same-height lines, no font variation, no
+  replaced elements. End state: `edcolor` syntax-colors a source
+  file and highlights matches of the current selection via the
+  `S` event.
+
+- **Slice B — Typographic variation.** Adds the font/emphasis
+  fields (`Bold`, `Italic`, `Underline`, `FontIdx`) and the
+  variable line-height recompute that varied-size text demands.
+  End state: a producer can emit body text with mixed bold,
+  italic, underline, and size, and the frame lays it out
+  correctly.
+
+- **Slice C — Replaced elements and block context.** Adds the
+  rest of the §5.3 `Style` surface: replaced-element fields,
+  block-context fields (`BlockquoteDepth`, `InCodeBlock`,
+  `InTable`), and the horizontal-scroll field (`HOffset`). End
+  state: `md2spans` and `dirthumb` ship; full markdown rendering
+  works.
+
+The `Style` struct grows monotonically across slices. Interface
+signatures (`InsertWithStyle`, `SetStyleRange`,
+`SetOriginYOffset`) are final from Slice A; their implementations
+grow.
 
 ### Phase 0 — Setup
 
@@ -869,81 +905,196 @@ order with no large rewrites mid-stream.
   test suite as a regression baseline. Every subsequent phase
   must keep it green.
 
-### Phase 1 — Frame data types
+---
 
-- Add `frame.StyleRun`, `frame.Style`, `frame.ReplacedKind`.
-- Add the upstream-facing predicate `Style.IsZero()` (or
-  equivalent) so callers can detect default style cheaply.
+### Slice A — Coloring
+
+#### Phase A1 — Frame data types (color-only)
+
+- Add `frame.StyleRun`, `frame.Style{Fg, Bg draw.Image}`,
+  `frame.ReplacedKind` (declared, no consumer yet).
+- Add `Style.IsZero()` so callers can detect default style cheaply.
 - No interface changes yet. Just types.
 
-### Phase 2 — Frame styled methods (additive)
+#### Phase A2 — Frame styled methods (color-only impl)
 
-- Add `Frame.InsertWithStyle`. Implementation: dispatch to
-  upstream `Insert` when styles is nil or all-default; otherwise
-  the new styled path.
-- Add `Frame.SetStyleRange`. Implementation: no-op stub initially
-  — store nothing — followed by per-rune-style storage and
-  layout/render updates.
-- Add `Frame.SetOriginYOffset`/`GetOriginYOffset`. Stub
-  implementation (no-op): always 0. Real implementation comes in
-  Phase 6.
-- Plain-text behavior is identical to upstream. All upstream tests
-  remain green.
+- Add `Frame.InsertWithStyle`. Fast path when `styles == nil` or
+  every run is `Style{}` matches upstream `Insert`. Styled path
+  stores per-rune Fg/Bg and applies them at render time.
+- Add `Frame.SetStyleRange`. Color-only behavior: update per-rune
+  Fg/Bg storage, repaint affected region. *No line-height
+  recompute* (line height is invariant across Slice A).
+- Add `Frame.SetOriginYOffset` / `GetOriginYOffset` as stubs
+  (always 0, no-op). Real behavior arrives in Slice C.
+- Plain-text behavior identical to upstream; regression suite
+  stays green.
 
-### Phase 3 — Spans package
+#### Phase A3 — Spans package
 
-- Implement `spans.Store` against upstream's observer interface.
-- Unit tests: `GetStyleRuns` with various region layouts;
-  observer-fired `Inserted`/`Deleted` shifting; `Observe`
-  callbacks.
-- No integration with Text yet.
+- Implement `spans.Store` against the buffer observer interface.
+- `Inserted` / `Deleted` rules per §6.2, trailing-edge extension
+  included from the start (the rule is the same across all
+  slices; only the `Style` shape grows).
+- Implement `GetStyleRuns`, `SetRegion`, `ClearRegion`,
+  `Observe`, `Snapshot`.
+- Unit tests cover the full §6.2 / §6.3 surface.
 
-### Phase 4 — Text wiring (no producers)
+#### Phase A4 — Text wiring (no producers)
 
 - Add `Text.spans` field, `attachSpans` helper.
 - Modify `Text.Inserted`, `Text.fill`, `Text.setorigin` to query
   spans when present.
-- Wire spans construction into Window setup.
-- With no producer writing to spans, every body behaves
-  identically to upstream. Verify regression suite.
+- Wire spans construction into Window setup; assert the §8.1
+  observer-order invariant.
+- With no producer writing to spans, every body is
+  byte-identical to upstream.
 
-### Phase 5 — 9P spans file
+#### Phase A5 — 9P spans file (color-only directives)
 
 - Add `QWspans` qid in `xfid.go`.
-- Implement read (snapshot dump) and write (directive parser).
-- Manual test with a hand-written test producer that writes
-  directives over 9P; observe spans changes propagate to Text
-  and onto the frame.
+- Directive parser/serializer for `s` (set style) and `c` (clear).
+- Style encoding restricted to `fg=` and `bg=` for Slice A; `b`
+  directives and font/replaced encodings come in B and C.
+- Read path dumps Snapshot in the same line format.
+- Manual integration test: hand-written producer writes directives;
+  visible styling matches.
 
-### Phase 6 — Replaced elements
+#### Phase A6 — 'S' event
 
-- Implement Style.Replaced rendering in the frame.
-- Implement `SetOriginYOffset` real behavior for tall elements.
-- Implement `Text.computeTallElementYOffset` and `tallY` state.
-- Test fixtures: image inline; image taller than viewport;
-  image at viewport boundary.
+- Implement emission in `Text.SetSelect` per §9.3 (body-only;
+  spans attached; event listener present; selection actually
+  changed).
+- Tests cover all four gating conditions: spans nil suppresses,
+  no event listener suppresses, tag emission suppresses,
+  unchanged selection suppresses.
 
-### Phase 7 — Image cache
+#### Phase A7 — `edcolor` clean-room rewrite
 
-- A simple LRU image cache, owned per-window or globally.
-- Frame consults cache during `Replaced=true` rendering.
-- Decoupled from frame: cache is set via an option/field on the
-  frame at Init.
+- 9P client of the `spans` file. Per-language syntax coloring.
+- Watches `S` events to highlight matches of the current
+  selection.
+- Golden-output tests on representative source files.
 
-### Phase 8 — Producer rewrites
+**Exit criterion for Slice A.** `edcolor` syntax-colors a Go (or
+other supported-language) file in an acme window, and
+highlights-on-selection behave correctly. Plain-text bodies and
+tag bars are byte-identical to upstream. Regression suite green.
 
-- `md2spans`, `edcolor`, `dirthumb` reimplemented as clean-room
-  9P clients of the spans file. Each shipped with its own tests.
+---
 
-### Phase 9 — Polish
+### Slice B — Typographic variation
+
+Builds on Slice A. Same `frame.Frame` interface signatures; the
+`Style` struct grows; `SetStyleRange` and the frame's line breaker
+learn to recompute line height when font flags change.
+
+#### Phase B1 — Font fields on Style
+
+- Extend `frame.Style` with `Bold`, `Italic`, `Underline`,
+  `FontIdx`.
+- Update `IsZero()` to include the new fields in its zero
+  comparison.
+- Update the 9P directive parser to recognize `bold=`, `italic=`,
+  `underline=`, `font=`.
+- No consumer of the new fields yet; producers can emit them but
+  no shipping producer does in this phase.
+
+#### Phase B2 — Frame variable-height line breaking
+
+- Frame's line-breaker consults per-rune font flags to compute
+  glyph advances and per-line height.
+- `SetStyleRange` recomputes line height for affected lines when
+  font-flag deltas change glyph metrics; repaint includes the
+  reflowed lines.
+- Tests: range flips bold/non-bold (same height); range flips to
+  larger `FontIdx` (height increases); wrap behavior with mixed
+  fonts on a line; scroll math correctness when line heights
+  vary.
+
+#### Phase B3 — (optional) heading-only `md2spans`
+
+- A minimal `md2spans` that emits heading and emphasis directives
+  only. Enough to demonstrate Slice B end-to-end on a markdown
+  file before Slice C lands the full producer.
+- Skip this phase if the team wants to consolidate `md2spans` in
+  Slice C.
+
+**Exit criterion for Slice B.** Body text can carry mixed bold,
+italic, underline, and font sizes; line heights adapt; selection,
+cursor behavior, and Slice A producers (`edcolor`) all still
+work. Regression suite green.
+
+---
+
+### Slice C — Replaced elements and block context
+
+Builds on Slices A and B. Adds the remaining §5.3 `Style` fields
+and the layout machinery they require.
+
+#### Phase C1 — Replaced rendering
+
+- Extend `Style` with `Replaced`, `ReplacedWidth`,
+  `ReplacedHeight`, `ReplacedKind`, `ReplacedRef`.
+- Frame renders `Replaced=true` runes as boxes of the given
+  dimensions; line breaking treats them as unbreakable single
+  characters.
+- 9P directive parser learns the `b` directive.
+
+#### Phase C2 — Tall-element y-offset
+
+- Implement `SetOriginYOffset` real behavior (replaces the Slice A
+  stub).
+- Add `Text.computeTallElementYOffset` and `tallY` state per §7.5.
+- Test fixtures: image inline; image taller than viewport; image
+  at viewport boundary.
+
+#### Phase C3 — Image cache
+
+- Simple LRU cache (per-window or global; implementer's call per
+  §15 item 4).
+- Frame consults cache during Replaced render.
+- Decoupled: cache injected via an Init option, not hard-coded.
+
+#### Phase C4 — Block context
+
+- Extend `Style` with `BlockquoteDepth`, `InCodeBlock`,
+  `InTable`.
+- Frame's line breaker honors blockquote/table indent on line
+  start.
+- Tests: blockquote nesting, code block continuation across
+  lines, table layout.
+
+#### Phase C5 — Horizontal scroll for wide replaced elements
+
+- Add `HOffset` to `Style`.
+- `Frame.HScrollAt(pt) (q, ok)` for hit-testing.
+- Text routes wheel events over wide elements to update
+  `HOffset` (§10.2).
+- Optional thin widget at the element's bottom edge.
+
+#### Phase C6 — Producer rewrites (`md2spans`, `dirthumb`)
+
+- Full `md2spans`: headings, emphasis, lists, code blocks,
+  images, tables, blockquotes.
+- `dirthumb`: directory listings → clickable thumbnails via `b`
+  directives.
+- Both shipped with golden tests.
+
+#### Phase C7 — Polish
 
 - Drag-scroll past frame edge in styled mode (the work done on
-  this branch's `unify-frame-interface` was rich-side; in the
-  unified design it lives in Text and is shared with plain
+  the prior branch's `unify-frame-interface` was rich-side; in
+  the unified design it lives in Text and is shared with plain
   text).
 - Sub-element drag scroll for very tall images (deliberately
-  *not* in v1 per § 9.2; reconsider only if real workflows demand
+  *not* in v1 per §9.2; reconsider only if real workflows demand
   it).
+- Performance baselines from §13.3 measured and recorded.
+
+**Exit criterion for Slice C.** Markdown bodies render with the
+full §5.3 `Style` surface. `md2spans` and `dirthumb` ship with
+golden tests. Slice A and B producers still work. Regression
+suite green and §13.3 baselines met.
 
 ## 13. Test Strategy
 

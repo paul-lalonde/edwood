@@ -41,14 +41,17 @@ preserved as the dozens of branches already in this repo (see
 ## Commit graph
 
 ```
-e6ccb75 (cleanroom, upstream/master)  ← Phase 0 base
+dc5fae9 (cleanroom)  chore: phase 0 -- design, plan, working log, regression runner
+230d818              docs: add CLAUDE.md and CODING-PROCESS.md
+e6ccb75 (upstream/master)  Delete the rest of gozen  ← Phase 0 base
 ```
 
-No commits have been added on the `cleanroom` branch yet beyond the
-upstream base. Untracked at session 1 end: `CLAUDE.md`,
-`CODING-PROCESS.md`, `docs/`, `regression.sh`. These are
-project-level setup, not yet committed (pending user approval to
-commit).
+Working tree is clean at session 1 end. The two Phase 0 commits land
+all of: project instruction docs, the design doc, the plan, this
+working log, and `regression.sh`. The working-log update reflecting
+those commits is itself an unstaged change at the moment of writing
+— commit it with the first Phase 1 work, or as its own small commit
+at session start.
 
 ## Test status
 
@@ -91,17 +94,33 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   two lint tools to avoid `$GOPATH/bin` installs.
 - Wrote `docs/working-log.md` (this file) and
   `docs/plans/PLAN_unified-frame-spans.md`.
-- Did **not** commit; nothing on the branch is staged. Awaiting
-  user direction on whether/when to land the Phase 0 setup as a
-  commit.
+- Landed two commits on `cleanroom`:
+  - `230d818` — project instruction docs (`CLAUDE.md`,
+    `CODING-PROCESS.md`).
+  - `dc5fae9` — Phase 0 deliverables (design doc, plan, this log,
+    regression runner).
+- Also updated `~/CLAUDE.md` "Known logs" index to point at this
+  file (outside the repo; not part of either commit).
+- Re-phased the design: §12 now describes three vertical slices
+  (A: coloring, B: typographic variation, C: replaced elements +
+  block context) rather than the original nine sequential phases.
+  Slice A's `Style` carries only `Fg`/`Bg`. Rewrote design §12 and
+  plan to match. Working tree at session end has uncommitted
+  modifications to `docs/designs/features/unified-frame-spans.md`,
+  `docs/plans/PLAN_unified-frame-spans.md`, and this file.
 
 ## Next-session candidates
 
-1. Decide commit shape for Phase 0 (one commit for `regression.sh` +
-   working log + plan; CLAUDE.md / CODING-PROCESS.md left untracked
-   if they are user-only).
-2. Begin Phase 1 (frame data types: `StyleRun`, `Style`,
-   `ReplacedKind`, `Style.IsZero()`). No interface changes yet.
-3. As prep for Phase 1, scout the prior `frame/` package work on
+1. Commit the working-log + plan housekeeping edits (the
+   re-phasing update on top of `dc5fae9`) — or fold them into the
+   first Phase A1 commit.
+2. Begin Phase A1 (frame data types, color subset only: `StyleRun`,
+   `Style{Fg, Bg}`, `ReplacedKind` declared, `Style.IsZero()`).
+   No interface changes yet. See plan `PLAN_unified-frame-spans.md`
+   row A1.1.
+3. As prep for Phase A1, scout the prior `frame/` package work on
    branches like `unify-frame-interface` for tests that qualify
    under §13.1 reuse criteria — *read-only*; do not cherry-pick.
+4. Slice A's exit point is `edcolor` working end-to-end. Keep
+   Slice A's `Style` minimal (Fg, Bg only); resist pulling in
+   font or replaced-element fields until B / C.
