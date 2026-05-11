@@ -43,7 +43,18 @@ func (up *selectscrollupdaterimpl) Insert(r []rune, p0 int) bool {
 func (up *selectscrollupdaterimpl) InsertByte(b []byte, p0 int) bool {
 	// log.Println("selectscrollupdaterimpl.InsertByte")
 	f := (*frameimpl)(up)
-	return f.insertbyteimpl(b, p0)
+	return f.insertbyteimpl(b, p0, nil)
+}
+
+func (up *selectscrollupdaterimpl) InsertWithStyle(r []rune, p0 int, styles []StyleRun) bool {
+	f := (*frameimpl)(up)
+	if styles != nil {
+		validateStyleRunsLen(styles, len(r))
+	}
+	if allPlain(styles) {
+		return f.insertimpl(r, p0)
+	}
+	return f.insertbyteimpl([]byte(string(r)), p0, expandStyles(styles, len(r)))
 }
 
 func (up *selectscrollupdaterimpl) IsLastLineFull() bool {

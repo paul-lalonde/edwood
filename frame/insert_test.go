@@ -68,7 +68,7 @@ func TestBxscan(t *testing.T) {
 				rect:              image.Rect(10, 15, 10+57, 15+57),
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("本"), 0, 0)
+				return f.bxscan([]byte("本"), 0, 0, nil)
 			},
 			1,
 			[]*frbox{makeBox("本")},
@@ -84,7 +84,7 @@ func TestBxscan(t *testing.T) {
 				box:               []*frbox{makeBox("abc")},
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("本"), 4, 1)
+				return f.bxscan([]byte("本"), 4, 1, nil)
 			},
 			1,
 			[]*frbox{makeBox("本")},
@@ -100,7 +100,7 @@ func TestBxscan(t *testing.T) {
 				box:               []*frbox{makeBox("abcde")},
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("本"), 5, 1)
+				return f.bxscan([]byte("本"), 5, 1, nil)
 			},
 			1,
 			[]*frbox{makeBox("本")},
@@ -116,7 +116,7 @@ func TestBxscan(t *testing.T) {
 				box:               []*frbox{makeBox("abcd")},
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("本a"), 4, 1)
+				return f.bxscan([]byte("本a"), 4, 1, nil)
 			},
 			2,
 			[]*frbox{
@@ -134,7 +134,7 @@ func TestBxscan(t *testing.T) {
 				rect:              image.Rect(10, 15, 10+57, 15+57),
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte(bigstring), 0, 0)
+				return f.bxscan([]byte(bigstring), 0, 0, nil)
 			},
 			3,
 			[]*frbox{makeBox("a本ポポポ"), makeBox("ポポhel"), makeBox("lo")},
@@ -150,7 +150,7 @@ func TestBxscan(t *testing.T) {
 				maxtab:            8,
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("\ta\n"), 0, 0)
+				return f.bxscan([]byte("\ta\n"), 0, 0, nil)
 			},
 			3,
 			[]*frbox{makeBox("\t"), makeBox("a"), makeBox("\n")},
@@ -170,7 +170,7 @@ func TestBxscan(t *testing.T) {
 				},
 			},
 			func(f *frameimpl) (image.Point, image.Point, *frameimpl) {
-				return f.bxscan([]byte("\n"), 5, 1)
+				return f.bxscan([]byte("\n"), 5, 1, nil)
 			},
 			1,
 			[]*frbox{

@@ -24,9 +24,15 @@ func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
 	return nil
 }
 
-// bxscan divides inby into single-line, nl and tab boxes. bxscan assumes that
-// it has ownership of inby
-func (f *frameimpl) bxscan(inby []byte, p, bn int) (image.Point, image.Point, *frameimpl) {
+// bxscan divides inby into single-line, nl and tab boxes. bxscan
+// assumes that it has ownership of inby.
+//
+// runeStyles, when non-nil, supplies a Style per input rune. Boxes
+// produced for those runes carry their Style, and runs are split
+// at every Style boundary (in addition to the tab/newline splits).
+// When runeStyles is nil, the styled hooks are no-ops and behavior
+// is identical to upstream's plain Insert path.
+func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Point, image.Point, *frameimpl) {
 	frame := &frameimpl{
 		rect:              f.rect,
 		display:           f.display,
@@ -43,14 +49,17 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int) (image.Point, image.Point, *f
 
 	nl := 0
 
-	// TODO(rjk): There are no boxes allocated?
-	// log.Println("boxes are allocated?", "nalloc", f.nalloc, "box len", len(frame.box))
-
 	var wipbox *frbox
+	runeIdx := 0
 
 	for i := 0; i < len(inby); frame.nchars++ {
 		if nl > f.maxlines {
 			break
+		}
+
+		var curStyle Style
+		if runeStyles != nil && runeIdx < len(runeStyles) {
+			curStyle = runeStyles[runeIdx]
 		}
 
 		switch inby[i] {
@@ -62,9 +71,11 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int) (image.Point, image.Point, *f
 				Wid:    10000,
 				Minwid: byte(frame.font.StringWidth(" ")),
 				Nrune:  -1,
+				Style:  curStyle,
 			})
 
 			i++
+			runeIdx++
 		case '\n':
 			wipbox = frame.addifnonempty(wipbox, inby[i+1:i+1])
 
@@ -73,21 +84,35 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int) (image.Point, image.Point, *f
 				Wid:    10000,
 				Minwid: 0,
 				Nrune:  -1,
+				Style:  curStyle,
 			})
 
 			i++
 			nl++
+			runeIdx++
 		default:
 			_, n := utf8.DecodeRune(inby[i:])
+			if runeStyles != nil && wipbox != nil && wipbox.Nrune > 0 && wipbox.Style != curStyle {
+				// Style boundary — flush the current run with a
+				// fresh subslice anchored at the new run's start.
+				wipbox = frame.addifnonempty(wipbox, inby[i:i])
+			}
 			if wipbox == nil {
 				wipbox = &frbox{
-					Ptr: inby[i : i+n],
+					Ptr:   inby[i : i+n],
+					Style: curStyle,
 				}
 			} else {
+				if runeStyles != nil && wipbox.Nrune == 0 {
+					// Fresh wipbox from addifnonempty: inherit
+					// the new run's style.
+					wipbox.Style = curStyle
+				}
 				wipbox.Ptr = wipbox.Ptr[:len(wipbox.Ptr)+n]
 			}
 			wipbox.Nrune++
 			i += n
+			runeIdx++
 		}
 	}
 	frame.addifnonempty(wipbox, []byte{})
@@ -144,16 +169,19 @@ func (f *frameimpl) Insert(r []rune, p0 int) bool {
 func (f *frameimpl) InsertByte(b []byte, p0 int) bool {
 	f.lk.Lock()
 	defer f.lk.Unlock()
-	return f.insertbyteimpl(b, p0)
+	return f.insertbyteimpl(b, p0, nil)
 }
 
 func (f *frameimpl) insertimpl(r []rune, p0 int) bool {
 	// TODO(rjk): Ick. But we'll get rid of this soon.
 	inby := []byte(string(r))
-	return f.insertbyteimpl(inby, p0)
+	return f.insertbyteimpl(inby, p0, nil)
 }
 
-func (f *frameimpl) insertbyteimpl(inby []byte, p0 int) bool {
+// insertbyteimpl inserts inby at rune offset p0. runeStyles, when
+// non-nil, supplies a Style per input rune; produced boxes carry
+// it. nil runeStyles is the upstream plain path.
+func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool {
 	//log.Printf("frame.Insert. Start: %q", string(inby))
 	//defer log.Println("frame.Insert end")
 	//f.Logboxes("at very start of insert")
@@ -185,7 +213,7 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int) bool {
 	// ppt0 and ppt1 are start and end of insertion as they will appear when
 	// insertion is complete. pt0 is current location of insertion position.
 	// (p0); pt1 is terminal point (without line wrap) of insertion.
-	pt0, pt1, nframe := f.bxscan(inby, p0, n0)
+	pt0, pt1, nframe := f.bxscan(inby, p0, n0, runeStyles)
 
 	// TODO(rjk): Figure out why opt0 needs to exist.
 	opt0 := pt0

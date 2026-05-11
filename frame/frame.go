@@ -50,6 +50,14 @@ type SelectScrollUpdater interface {
 	Insert([]rune, int) bool
 	InsertByte([]byte, int) bool
 
+	// InsertWithStyle inserts r at p0 with per-rune styling. If
+	// styles is nil or every StyleRun in styles is Style.IsPlain(),
+	// the implementation takes the fast path identical to Insert.
+	// Otherwise each StyleRun applies to that many consecutive
+	// runes; the sum of Lens must equal len(r) (panics on
+	// mismatch). See style.go for the Style/StyleRun shape.
+	InsertWithStyle([]rune, int, []StyleRun) bool
+
 	IsLastLineFull() bool
 	Rect() image.Rectangle
 
@@ -231,6 +239,11 @@ type frbox struct {
 	Ptr    []byte // UTF-8 string in this box.
 	Bc     rune   // The kind of special layout box: '\n' or '\t'
 	Minwid byte
+	// Style is the per-box attribute bundle. Box equality (via
+	// reflect.DeepEqual) requires Style equality, so plain boxes
+	// continue to compare equal across the upstream and styled
+	// insert paths. See style.go for the field's semantics.
+	Style Style
 }
 
 // Helpful code for debugging reentrancy.

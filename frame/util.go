@@ -138,6 +138,7 @@ func (f *frameimpl) clean(pt image.Point, n0, n1 int) {
 		for f.box[nb].Nrune >= 0 &&
 			nb < n1-1 &&
 			f.box[nb+1].Nrune >= 0 &&
+			f.box[nb].Style == f.box[nb+1].Style &&
 			pt.X+f.box[nb].Wid+f.box[nb+1].Wid < c {
 			f.mergebox(nb)
 			n1--

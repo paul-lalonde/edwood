@@ -129,19 +129,37 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   A1+B1/§17 updated accordingly. Landed and re-amended twice to
   refine the bitmask declaration into the two-const-block iota
   pattern that yields the expected bit positions.
+- A2.1 — `InsertWithStyle` color-only impl. Added `Style` field to
+  `frbox`; added `InsertWithStyle` to `Frame` /
+  `SelectScrollUpdater` interfaces (plus the proxy in
+  `unlockedproxy.go`) and to `MockFrame`. `bxscan` and
+  `insertbyteimpl` were unified to take an optional
+  `runeStyles []Style` — nil is the upstream plain path, non-nil
+  drives the same code with style-boundary splits in `bxscan` and
+  per-box `Style` stamping. No sibling styled twin functions
+  (initial draft had `bxscanstyled` / `insertbyteimplstyled`;
+  collapsed before commit to avoid ~230 LOC of duplication).
+  `drawtext` honors `box.Style` — `KindColored` runs use
+  `Style.Fg` for text and repaint `Style.Bg` as the box
+  background. `clean()` only merges adjacent boxes when their
+  Styles are equal (otherwise a colored run gets folded back into
+  a neighboring plain run). Tests cover the §5.4 contract: nil
+  styles ≡ Insert, all-IsPlain ≡ fast path, color applied to
+  boxes, split at style boundary, Len mismatch panics, return
+  value matches Insert. Selection rendering on styled text
+  intentionally deferred — drawsel0 still uses frame defaults
+  when clearing, so per-box colors are momentarily lost until the
+  next redraw. To be revisited as a Slice A polish row.
 
 ## Next-session candidates
 
-1. Commit the working-log + plan housekeeping edits (the
-   re-phasing update on top of `dc5fae9`) — or fold them into the
-   first Phase A1 commit.
-2. Begin Phase A1 (frame data types, color subset only: `StyleRun`,
-   `Style{Fg, Bg}`, `ReplacedKind` declared, `Style.IsZero()`).
-   No interface changes yet. See plan `PLAN_unified-frame-spans.md`
-   row A1.1.
-3. As prep for Phase A1, scout the prior `frame/` package work on
-   branches like `unify-frame-interface` for tests that qualify
-   under §13.1 reuse criteria — *read-only*; do not cherry-pick.
+1. Row A2.2 — `SetStyleRange` (color-only; no line-height
+   recompute, since Slice A line height is uniform). Re-style
+   boxes already in the frame; repaint affected region.
+2. Row A2.3 — `SetOriginYOffset` / `GetOriginYOffset` stubs (real
+   behavior in Slice C2).
+3. Selection rendering on styled text fix-up (see A2.1 deferral
+   note above). Probably its own commit between A2 and A3.
 4. Slice A's exit point is `edcolor` working end-to-end. Keep
-   Slice A's `Style` minimal (Fg, Bg only); resist pulling in
-   font or replaced-element fields until B / C.
+   Slice A's `Style` minimal (`Kind`, `Fg`, `Bg`); resist pulling
+   in font or replaced-element fields until B / C.

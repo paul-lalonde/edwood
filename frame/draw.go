@@ -13,7 +13,23 @@ func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 		// log.Printf("box [%d] %#v pt %v NoRedraw %v nrune %d\n",  nb, string(b.Ptr), pt, f.NoRedraw, b.Nrune)
 
 		if !f.noredraw && b.Nrune >= 0 {
-			f.background.Bytes(pt, text, image.Point{}, f.font, b.Ptr)
+			t := text
+			// Per-box style override (Slice A: colors only). When
+			// KindColored is set, Fg/Bg if non-nil substitute for
+			// the frame-default text color and repaint the box's
+			// background rect, respectively. fillNonGlyphAreas
+			// already painted the run-wide background with the
+			// frame default.
+			if b.Style.Kind&KindColored != 0 {
+				if b.Style.Fg != nil {
+					t = b.Style.Fg
+				}
+				if b.Style.Bg != nil {
+					rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
+					f.background.Draw(rect, b.Style.Bg, nil, image.Point{})
+				}
+			}
+			f.background.Bytes(pt, t, image.Point{}, f.font, b.Ptr)
 		}
 		pt.X += b.Wid
 	}
