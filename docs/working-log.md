@@ -173,6 +173,13 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
     perturbed the existing TestInsert SVG goldens (extra fill ops
     per box). Walked back to the `repaintBoxRange` shape during
     Stage 3 — clean separation, no upstream test churn.
+- A2.3 — `SetOriginYOffset` / `GetOriginYOffset` stubs. Added to
+  the `Frame` interface (not `SelectScrollUpdater`) and to
+  `MockFrame`. For Slice A both are no-ops: `Set` accepts any
+  argument and discards it; `Get` always returns 0. Real
+  implementation arrives in Slice C row C2 alongside replaced
+  elements and `Text.computeTallElementYOffset`. Tests pin the
+  stub contract.
 
 ## Next-session candidates
 

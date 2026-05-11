@@ -176,6 +176,14 @@ type Frame interface {
 	// selection. The affected region is repainted synchronously;
 	// the caller is responsible for display.Flush().
 	SetStyleRange(p0, p1 int, styles []StyleRun)
+
+	// SetOriginYOffset clips the top of the frame's first visible
+	// line by yPx pixels. Meaningful only when the first visible
+	// rune is a tall replaced element; in Slice A this is a stub
+	// — Set is a no-op and Get always returns 0. Real behavior
+	// arrives in Slice C alongside replaced-element rendering.
+	SetOriginYOffset(yPx int)
+	GetOriginYOffset() int
 }
 
 // TODO(rjk): Consider calling this SetMaxtab?
