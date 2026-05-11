@@ -15,7 +15,7 @@ import (
 // in BufferObserver.
 type ObservableEditableBuffer struct {
 	currobserver    BufferObserver
-	observers       map[BufferObserver]struct{}
+	observers       []BufferObserver
 	statusobservers map[TagStatusObserver]struct{}
 
 	f *Buffer
@@ -63,22 +63,30 @@ func (e *ObservableEditableBuffer) SetInfo(info os.FileInfo) {
 }
 
 // AddObserver adds e as an observer for edits to this File.
+// Observers are notified of Inserted/Deleted in registration
+// order. Registering the same observer twice is a no-op.
 func (e *ObservableEditableBuffer) AddObserver(observer BufferObserver) {
-	if e.observers == nil {
-		e.observers = make(map[BufferObserver]struct{})
+	for _, o := range e.observers {
+		if o == observer {
+			return
+		}
 	}
-	e.observers[observer] = struct{}{}
+	e.observers = append(e.observers, observer)
 	e.currobserver = observer
 }
 
 // DelObserver removes e as an observer for edits to this File.
 func (e *ObservableEditableBuffer) DelObserver(observer BufferObserver) error {
-	if _, exists := e.observers[observer]; exists {
-		delete(e.observers, observer)
+	for i, o := range e.observers {
+		if o != observer {
+			continue
+		}
+		e.observers = append(e.observers[:i], e.observers[i+1:]...)
 		if observer == e.currobserver {
-			for k := range e.observers {
-				e.currobserver = k
-				break
+			if len(e.observers) > 0 {
+				e.currobserver = e.observers[0]
+			} else {
+				e.currobserver = nil
 			}
 		}
 		return nil
@@ -97,9 +105,10 @@ func (e *ObservableEditableBuffer) GetCurObserver() BufferObserver {
 	return e.currobserver
 }
 
-// AllObservers preforms tf(all observers...).
+// AllObservers preforms tf(all observers...) in registration
+// order.
 func (e *ObservableEditableBuffer) AllObservers(tf func(i interface{})) {
-	for t := range e.observers {
+	for _, t := range e.observers {
 		tf(t)
 	}
 }
@@ -438,20 +447,20 @@ func (e *ObservableEditableBuffer) RedoSeq() int {
 
 // inserted is a package-only entry point from the underlying
 // buffer (file.Buffer or file.File) to run the registered observers
-// on a change in the buffer.
+// on a change in the buffer. Observers fire in AddObserver order.
 func (e *ObservableEditableBuffer) inserted(q0 OffsetTuple, b []byte, nr int) {
 	e.treatasclean = false
-	for observer := range e.observers {
+	for _, observer := range e.observers {
 		observer.Inserted(q0, b, nr)
 	}
 }
 
 // deleted is a package-only entry point from the underlying
 // buffer (file.Buffer or file.File) to run the registered observers
-// on a change in the buffer.
+// on a change in the buffer. Observers fire in AddObserver order.
 func (e *ObservableEditableBuffer) deleted(q0, q1 OffsetTuple) {
 	e.treatasclean = false
-	for observer := range e.observers {
+	for _, observer := range e.observers {
 		observer.Deleted(q0, q1)
 	}
 }
