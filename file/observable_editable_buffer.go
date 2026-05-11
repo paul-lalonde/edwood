@@ -134,9 +134,23 @@ func (e *ObservableEditableBuffer) GetObserverSize() int {
 	return len(e.observers)
 }
 
-// HasMultipleObservers returns true if their are multiple observers to the File.
+// HasMultipleObservers returns true if more than one *primary*
+// observer is registered. Observers that implement
+// AuxiliaryObserver with IsAuxiliary() == true (e.g.
+// spans.Store) are excluded so callers can continue to use this
+// as a "is this buffer shared by multiple Texts/clones?" check.
 func (e *ObservableEditableBuffer) HasMultipleObservers() bool {
-	return len(e.observers) > 1
+	n := 0
+	for _, o := range e.observers {
+		if a, ok := o.(AuxiliaryObserver); ok && a.IsAuxiliary() {
+			continue
+		}
+		n++
+		if n > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // MakeObservableEditableBuffer is a constructor wrapper for NewFile() to abstract File from the main program.

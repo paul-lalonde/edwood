@@ -11,6 +11,7 @@ import (
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
+	"github.com/rjkroege/edwood/spans"
 	"github.com/rjkroege/edwood/util"
 )
 
@@ -108,12 +109,18 @@ func (w *Window) initHeadless(clone *Window) *Window {
 	f.AddObserver(w)
 	w.tag.file = f
 
-	// Body setup.
+	// Body setup. Per design §8.1, the spans store must register
+	// itself on the body buffer's observer chain BEFORE the body
+	// Text registers — so that Text's Inserted/Deleted callbacks
+	// see post-update spans. spans.NewStore performs its own
+	// AddObserver internally, so building the store before adding
+	// the Text observer is enough.
 	f = file.MakeObservableEditableBuffer("", nil)
 	if clone != nil {
 		f = clone.body.file
 		w.body.org = clone.body.org
 	}
+	w.body.attachSpans(spans.NewStore(f))
 	f.AddObserver(&w.body)
 	w.body.file = f
 	w.filemenu = true

@@ -232,6 +232,36 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   a no-op and does not fire. 5 tests cover the contract: fires
   on SetRegion, fires on ClearRegion, NOT fired by Inserted /
   Deleted, supports multiple observers, no fire on empty range.
+- Prep commit `9c5262f`: changed
+  `file.ObservableEditableBuffer.observers` from
+  `map[BufferObserver]struct{}` to `[]BufferObserver`. Map
+  iteration was non-deterministic; A4.1's §8.1 ordering invariant
+  needs deterministic firing order so spans (registered first)
+  updates before Text (registered second). AddObserver dedupes,
+  DelObserver removes; AllObservers / inserted / deleted iterate
+  the slice. Three tests pin the new contract.
+- A4.1 — `Text.spans` field + `attachSpans` helper added to
+  text.go; `wind.initHeadless` body setup now creates the spans
+  store via `spans.NewStore(f)` BEFORE registering w.body as an
+  observer on the body buffer (so spans is observer 1 and Text
+  is observer 2). Tags get nil spans. The body-spans Insert and
+  Delete propagation will be wired up in A4.2.
+  Mid-implementation gotcha: after wiring spans onto the body
+  buffer, `TestComplexEditActions/firstCloseMutatedWindow`
+  panicked with `body.file == nil` inside `Window.Lock`. Root
+  cause: `D1` (and 5 other call sites) use
+  `file.HasMultipleObservers()` as a proxy for "is this buffer
+  shared by multiple Texts/clones?" With spans added,
+  `len(observers) > 1` even on an un-cloned buffer, so D1
+  thought a clone existed and closed the window, nilling
+  body.file. Fix: added an optional `file.AuxiliaryObserver`
+  interface (`IsAuxiliary() bool`); `HasMultipleObservers`
+  now excludes observers that mark themselves auxiliary;
+  `spans.Store` implements `IsAuxiliary() bool { return true }`.
+  Existing six call sites of HasMultipleObservers unchanged.
+  3 new A4.1 tests pin the behavior: body has non-nil spans,
+  tag has nil spans, spans registered before Text on the
+  observer chain.
 
 ## Next-session candidates
 

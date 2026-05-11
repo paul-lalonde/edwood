@@ -7,8 +7,18 @@ import (
 	"github.com/rjkroege/edwood/frame"
 )
 
-// Compile-time check that *store satisfies file.BufferObserver.
-var _ file.BufferObserver = (*store)(nil)
+// Compile-time check that *store satisfies file.BufferObserver
+// (so it can be AddObserver'd) and file.AuxiliaryObserver (so
+// HasMultipleObservers ignores it when counting primary views).
+var (
+	_ file.BufferObserver    = (*store)(nil)
+	_ file.AuxiliaryObserver = (*store)(nil)
+)
+
+// IsAuxiliary marks *store as a sidecar buffer observer (see
+// file.AuxiliaryObserver). spans is not a primary view of the
+// buffer; it's bookkeeping for per-rune styling.
+func (s *store) IsAuxiliary() bool { return true }
 
 // Inserted handles buffer.Inserted notifications. It applies the
 // §6.2 trailing/leading-edge rule under the dense full-coverage

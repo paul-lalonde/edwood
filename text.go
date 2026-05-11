@@ -19,8 +19,17 @@ import (
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
 	"github.com/rjkroege/edwood/runes"
+	"github.com/rjkroege/edwood/spans"
 	"github.com/rjkroege/edwood/util"
 )
+
+// attachSpans installs s as this Text's spans sidecar. For A4.1
+// this is just field assignment; A4.4 extends the helper to
+// register a style-change Observe callback that re-styles the
+// visible region of the frame.
+func (t *Text) attachSpans(s spans.Store) {
+	t.spans = s
+}
 
 const (
 	Ldot   = "."
@@ -64,6 +73,12 @@ type Text struct {
 	file    *file.ObservableEditableBuffer
 	fr      frame.Frame
 	font    string
+
+	// spans is the styled-text sidecar for this Text. nil means
+	// "no styling tracked" — the path for tag bars and for body
+	// Texts when no producer has attached. See spans.Store and
+	// design §7.1.
+	spans spans.Store
 
 	org       int // Origin of the frame within the buffer
 	q0        int
