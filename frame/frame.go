@@ -168,6 +168,14 @@ type Frame interface {
 	// multiple calls to DrawSel with highlighted false will be cheap.
 	// TODO(rjk): DrawSel does more drawing work than necessary.
 	DrawSel(image.Point, int, int, bool)
+
+	// SetStyleRange re-styles the runes already in the frame at
+	// rune offsets [p0, p1) using styles. Sum of StyleRun.Lens
+	// must equal p1-p0; panics on mismatch or on out-of-range
+	// arguments. SetStyleRange does not move sp0/sp1 of the
+	// selection. The affected region is repainted synchronously;
+	// the caller is responsible for display.Flush().
+	SetStyleRange(p0, p1 int, styles []StyleRun)
 }
 
 // TODO(rjk): Consider calling this SetMaxtab?

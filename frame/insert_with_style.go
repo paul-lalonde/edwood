@@ -67,3 +67,74 @@ func expandStyles(styles []StyleRun, total int) []Style {
 	}
 	return out
 }
+
+// SetStyleRange re-styles runes already in the frame at rune
+// offsets [p0, p1) using styles. See §5.4 of the design.
+func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
+	if p0 == p1 {
+		return
+	}
+	f.lk.Lock()
+	defer f.lk.Unlock()
+
+	if p0 < 0 || p0 > p1 || p1 > f.nchars {
+		panic(fmt.Sprintf("frame.SetStyleRange: out-of-range p0=%d p1=%d nchars=%d", p0, p1, f.nchars))
+	}
+	validateStyleRunsLen(styles, p1-p0)
+
+	runeStyles := expandStyles(styles, p1-p0)
+
+	// Split at the [p0, p1) boundaries so the affected runes
+	// occupy a contiguous box range.
+	nb0 := f.findbox(0, 0, p0)
+	nb1 := f.findbox(nb0, p0, p1)
+
+	// Walk boxes, applying styles. When the style changes mid-box,
+	// splitbox is called and nb1 grows.
+	runeIdx := 0
+	nb := nb0
+	for nb < nb1 {
+		b := f.box[nb]
+		boxRunes := nrune(b)
+		if boxRunes <= 0 {
+			// Special box (tab or newline): exactly one rune.
+			b.Style = runeStyles[runeIdx]
+			runeIdx++
+			nb++
+			continue
+		}
+		// Compute run of identical style within this box.
+		curStyle := runeStyles[runeIdx]
+		n := 1
+		for n < boxRunes && runeStyles[runeIdx+n] == curStyle {
+			n++
+		}
+		if n == boxRunes {
+			b.Style = curStyle
+			runeIdx += boxRunes
+			nb++
+			continue
+		}
+		f.splitbox(nb, n)
+		f.box[nb].Style = curStyle
+		runeIdx += n
+		nb++
+		nb1++
+	}
+
+	// Repaint the affected box range.
+	if f.background != nil {
+		col := f.cols[ColBack]
+		tcol := f.cols[ColText]
+		pt := f.ptofcharptb(p0, f.rect.Min, 0)
+		f.repaintBoxRange(pt, nb0, nb1, tcol, col)
+	}
+
+	// Merge adjacent same-Style boxes within the affected range.
+	// clean's per-pair guard already requires equal Style.
+	cleanEnd := nb1 + 1
+	if cleanEnd > len(f.box) {
+		cleanEnd = len(f.box)
+	}
+	f.clean(f.ptofcharptb(p0, f.rect.Min, 0), nb0, cleanEnd)
+}

@@ -150,6 +150,29 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   intentionally deferred — drawsel0 still uses frame defaults
   when clearing, so per-box colors are momentarily lost until the
   next redraw. To be revisited as a Slice A polish row.
+- A2.2 — `SetStyleRange` color-only impl. Added to the `Frame`
+  interface (not `SelectScrollUpdater`, per §5.2) and to
+  `MockFrame`. Implementation:
+  - `findbox` splits boxes at `p0` and `p1` so the affected runes
+    sit in a contiguous box range `[nb0, nb1)`.
+  - The box walk applies styles in-place; when a box's runes
+    span a style boundary, `splitbox` divides it and the loop
+    continues, growing `nb1`.
+  - Repaint uses a new `repaintBoxRange(pt, nb0, nb1, ...)` helper
+    that always clears each box's bg rect before drawing the
+    glyph (so old colored glyphs don't bleed through under the
+    new ones). This is *separate* from `drawtext`: the upstream
+    Insert path uses `drawtext` (which only paints non-default
+    `Bg`) so existing SVG-baselined tests stay green.
+  - `clean` merges adjacent same-Style boxes after the splits.
+  Tests cover the §5.4 contract: simple recolor, partial range,
+  mid-box split, Len mismatch and out-of-range panics, empty
+  range no-op, selection bounds unchanged. Selection-overlap
+  repaint deferred (consistent with A2.1).
+  - Stage-1 design picked "always clear in drawtext" but it
+    perturbed the existing TestInsert SVG goldens (extra fill ops
+    per box). Walked back to the `repaintBoxRange` shape during
+    Stage 3 — clean separation, no upstream test churn.
 
 ## Next-session candidates
 

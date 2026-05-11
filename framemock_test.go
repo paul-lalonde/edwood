@@ -26,6 +26,7 @@ func (mf *MockFrame) InsertByte([]byte, int) bool { return false }
 func (mf *MockFrame) InsertWithStyle([]rune, int, []frame.StyleRun) bool {
 	return false
 }
+func (mf *MockFrame) SetStyleRange(int, int, []frame.StyleRun)     {}
 func (mf *MockFrame) IsLastLineFull() bool                         { return false }
 func (mf *MockFrame) Rect() image.Rectangle                        { return image.Rect(0, 0, 0, 0) }
 func (mf *MockFrame) TextOccupiedHeight(r image.Rectangle) int     { return 0 }

@@ -19,7 +19,8 @@ func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 			// the frame-default text color and repaint the box's
 			// background rect, respectively. fillNonGlyphAreas
 			// already painted the run-wide background with the
-			// frame default.
+			// frame default, so the per-box Bg paint here is only
+			// needed for non-default backgrounds.
 			if b.Style.Kind&KindColored != 0 {
 				if b.Style.Fg != nil {
 					t = b.Style.Fg
@@ -29,6 +30,43 @@ func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 					f.background.Draw(rect, b.Style.Bg, nil, image.Point{})
 				}
 			}
+			f.background.Bytes(pt, t, image.Point{}, f.font, b.Ptr)
+		}
+		pt.X += b.Wid
+	}
+}
+
+// repaintBoxRange repaints boxes [nb0, nb1) starting at pt. Each
+// box's background rect is always cleared (using its effective bg
+// — Style.Bg if KindColored with Bg, else back) before the glyph
+// is drawn, so the function is safe to call over a styled range
+// that previously rendered with a different style. Used by
+// SetStyleRange; the upstream Insert path uses drawtext, which
+// relies on fillNonGlyphAreas having already painted the run-wide
+// background.
+func (f *frameimpl) repaintBoxRange(pt image.Point, nb0, nb1 int, text draw.Image, back draw.Image) {
+	if nb0 < 0 {
+		nb0 = 0
+	}
+	if nb1 > len(f.box) {
+		nb1 = len(f.box)
+	}
+	for nb := nb0; nb < nb1; nb++ {
+		b := f.box[nb]
+		pt = f.cklinewrap(pt, b)
+		if !f.noredraw && b.Nrune >= 0 {
+			bg := back
+			t := text
+			if b.Style.Kind&KindColored != 0 {
+				if b.Style.Fg != nil {
+					t = b.Style.Fg
+				}
+				if b.Style.Bg != nil {
+					bg = b.Style.Bg
+				}
+			}
+			rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
+			f.background.Draw(rect, bg, nil, image.Point{})
 			f.background.Bytes(pt, t, image.Point{}, f.font, b.Ptr)
 		}
 		pt.X += b.Wid
