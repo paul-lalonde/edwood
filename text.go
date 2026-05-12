@@ -23,12 +23,33 @@ import (
 	"github.com/rjkroege/edwood/util"
 )
 
-// attachSpans installs s as this Text's spans sidecar. For A4.1
-// this is just field assignment; A4.4 extends the helper to
-// register a style-change Observe callback that re-styles the
-// visible region of the frame.
+// attachSpans installs s as this Text's spans sidecar and
+// registers a style-change Observe callback. The callback
+// (per design §7.6) clips the changed rune range [p0, p1) to
+// the visible window [t.org, t.org+Nchars) and calls
+// t.fr.SetStyleRange with frame-relative offsets so the
+// producer-driven style update shows up immediately.
 func (t *Text) attachSpans(s spans.Store) {
 	t.spans = s
+	s.Observe(func(p0, p1 int) {
+		if t.fr == nil {
+			return
+		}
+		v0 := t.org
+		v1 := t.org + t.fr.GetFrameFillStatus().Nchars
+		if p1 <= v0 || p0 >= v1 {
+			// Change entirely outside the visible window.
+			return
+		}
+		if p0 < v0 {
+			p0 = v0
+		}
+		if p1 > v1 {
+			p1 = v1
+		}
+		runs := s.GetStyleRuns(p0, p1)
+		t.fr.SetStyleRange(p0-t.org, p1-t.org, runs)
+	})
 }
 
 const (

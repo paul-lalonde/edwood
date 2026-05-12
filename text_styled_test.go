@@ -38,6 +38,11 @@ type recordingFrame struct {
 
 	setOriginYOffsetCalls int
 	lastSetOriginYPx      int
+
+	setStyleRangeCalls   int
+	lastStyleRangeP0     int
+	lastStyleRangeP1     int
+	lastStyleRangeStyles []frame.StyleRun
 }
 
 func newRecordingFrame() *recordingFrame {
@@ -81,6 +86,13 @@ func (rf *recordingFrame) InsertWithStyle(r []rune, p0 int, styles []frame.Style
 func (rf *recordingFrame) SetOriginYOffset(yPx int) {
 	rf.setOriginYOffsetCalls++
 	rf.lastSetOriginYPx = yPx
+}
+
+func (rf *recordingFrame) SetStyleRange(p0, p1 int, styles []frame.StyleRun) {
+	rf.setStyleRangeCalls++
+	rf.lastStyleRangeP0 = p0
+	rf.lastStyleRangeP1 = p1
+	rf.lastStyleRangeStyles = append([]frame.StyleRun(nil), styles...)
 }
 
 // setupBodyForInsertedTest builds a Window via initHeadless, then
@@ -231,10 +243,12 @@ func setupTextForFillTest(t *testing.T, content string) (*Window, *recordingFram
 	w := NewWindow().initHeadless(nil)
 
 	// Replace the body buffer with one carrying our test content,
-	// and build a fresh spans.Store keyed off it.
+	// and build a fresh spans.Store keyed off it. attachSpans
+	// registers the Observe callback that the A4.4 tests assert
+	// on.
 	buf := file.MakeObservableEditableBuffer("test", []rune(content))
 	w.body.file = buf
-	w.body.spans = spans.NewStore(buf)
+	w.body.attachSpans(spans.NewStore(buf))
 
 	rf := newRecordingFrame()
 	w.body.fr = rf
@@ -353,5 +367,80 @@ func TestA42_Inserted_StyledSpans_PlainRangeStillRoutesThroughInsertWithStyle(t 
 		if !sr.Style.IsPlain() {
 			t.Errorf("styles[%d].Style = %+v, want plain (inserted Z is in a plain area)", i, sr.Style)
 		}
+	}
+}
+
+// =====================================================================
+// A4.4 — attachSpans Observe callback
+// =====================================================================
+
+func TestA44_AttachSpans_SetRegionCallsSetStyleRange(t *testing.T) {
+	// A SetRegion within the visible window triggers SetStyleRange
+	// on the frame, with frame-relative offsets.
+	w, rf := setupTextForFillTest(t, "hello world")
+	rf.nchars = 11 // frame shows all runes
+	w.body.org = 0
+
+	colored := frame.Style{Kind: frame.KindColored}
+	w.body.spans.SetRegion(2, 7, colored)
+
+	if rf.setStyleRangeCalls != 1 {
+		t.Fatalf("SetStyleRange calls = %d, want 1", rf.setStyleRangeCalls)
+	}
+	if rf.lastStyleRangeP0 != 2 || rf.lastStyleRangeP1 != 7 {
+		t.Errorf("SetStyleRange args = (%d,%d), want (2,7)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
+	}
+}
+
+func TestA44_AttachSpans_OutOfVisibleWindow_SkipsSetStyleRange(t *testing.T) {
+	// A SetRegion entirely outside [t.org, t.org+Nchars) does NOT
+	// fire SetStyleRange — there's no visible region to repaint.
+	w, rf := setupTextForFillTest(t, "hello world")
+	rf.nchars = 5 // frame shows runes [0, 5)
+	w.body.org = 0
+
+	colored := frame.Style{Kind: frame.KindColored}
+	w.body.spans.SetRegion(7, 10, colored) // entirely outside visible
+
+	if rf.setStyleRangeCalls != 0 {
+		t.Errorf("SetStyleRange calls = %d, want 0 (range outside visible)", rf.setStyleRangeCalls)
+	}
+}
+
+func TestA44_AttachSpans_ClipsToVisibleWindow(t *testing.T) {
+	// A SetRegion partially overlapping the visible window gets
+	// clipped before SetStyleRange.
+	w, rf := setupTextForFillTest(t, "hello world")
+	rf.nchars = 5 // visible window is [0, 5) (runes "hello")
+	w.body.org = 0
+
+	colored := frame.Style{Kind: frame.KindColored}
+	w.body.spans.SetRegion(3, 8, colored) // overlaps; clip to [3, 5)
+
+	if rf.setStyleRangeCalls != 1 {
+		t.Fatalf("SetStyleRange calls = %d, want 1", rf.setStyleRangeCalls)
+	}
+	if rf.lastStyleRangeP0 != 3 || rf.lastStyleRangeP1 != 5 {
+		t.Errorf("SetStyleRange args = (%d,%d), want (3,5)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
+	}
+}
+
+func TestA44_AttachSpans_NonZeroOrigin_ConvertsToFrameRelative(t *testing.T) {
+	// With t.org > 0, the visible window starts at some
+	// document-absolute offset. SetStyleRange is called with
+	// FRAME-relative offsets (p0 - t.org).
+	w, rf := setupTextForFillTest(t, "hello world")
+	rf.nchars = 8
+	w.body.org = 3 // visible window: [3, 11) — runes "lo world"
+
+	colored := frame.Style{Kind: frame.KindColored}
+	w.body.spans.SetRegion(5, 9, colored) // doc-absolute [5, 9)
+
+	if rf.setStyleRangeCalls != 1 {
+		t.Fatalf("SetStyleRange calls = %d, want 1", rf.setStyleRangeCalls)
+	}
+	// Frame-relative: (5-3, 9-3) = (2, 6).
+	if rf.lastStyleRangeP0 != 2 || rf.lastStyleRangeP1 != 6 {
+		t.Errorf("SetStyleRange args = (%d,%d), want frame-relative (2,6)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
 	}
 }

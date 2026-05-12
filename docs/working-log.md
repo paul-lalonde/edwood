@@ -308,6 +308,18 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   itself. Made the reported Nchars configurable per-test
   (A4.2 needs it large for the visibility check; A4.3 starts
   at 0 so fill sees a fresh frame).
+- A4.4 — `attachSpans` grew an `Observe` callback (§7.6). When
+  a producer calls SetRegion / ClearRegion on the spans store,
+  the callback receives (p0, p1) in document-absolute rune
+  offsets. It clips to the visible window
+  `[t.org, t.org+Nchars)` — if the change is entirely outside
+  the window, returns early; otherwise calls
+  `t.fr.SetStyleRange(p0-t.org, p1-t.org, runs)` with frame-
+  relative offsets and the styles for the clipped range from
+  `GetStyleRuns`. 4 tests pin the contract: in-window →
+  SetStyleRange called with full range; out-of-window → no
+  call; partial overlap → clipped; non-zero t.org → frame-
+  relative offsets correct.
 
 ## Next-session candidates
 
