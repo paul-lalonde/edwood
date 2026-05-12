@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rjkroege/edwood/draw"
+	"github.com/rjkroege/edwood/edwoodtest"
 )
 
 func TestSetStyleRange_SimpleRecolor(t *testing.T) {
@@ -162,5 +163,48 @@ func TestSetStyleRange_DoesNotMoveSelection(t *testing.T) {
 
 	if fi.sp0 != 1 || fi.sp1 != 4 {
 		t.Errorf("selection moved: sp0=%d sp1=%d, want sp0=1 sp1=4", fi.sp0, fi.sp1)
+	}
+}
+
+func TestSetStyleRange_PreservesHighlightOverOverlap(t *testing.T) {
+	// Regression: when a producer reacts to the `S` event by
+	// re-styling the just-selected token, SetStyleRange's
+	// repaintBoxRange overwrites the highlight pixels. The
+	// flicker manifests on B3-click identifiers (visible
+	// selection → edcolor re-styles → highlight gone).
+	//
+	// Fix sentinel: with an active highlight overlapping the
+	// styled range, SetStyleRange must produce MORE drawops
+	// than the same call on a non-overlapping range — the
+	// extra ops are the highlight re-paint.
+	getOps := func(disp draw.Display) []string {
+		if g, ok := disp.(edwoodtest.GettableDrawOps); ok {
+			return g.DrawOps()
+		}
+		return nil
+	}
+
+	// Variant A: highlight overlaps the styled range.
+	frA, dispA := setupStyledFrame(t)
+	frA.Insert([]rune("hello world"), 0)
+	fiA := frA.(*frameimpl)
+	// Establish a real highlight via drawselimpl so highlighton
+	// is set; sp0/sp1 are populated.
+	fiA.drawselimpl(fiA.ptofcharptb(0, fiA.rect.Min, 0), 0, 5, true)
+	baseA := len(getOps(dispA))
+	frA.SetStyleRange(2, 4, []StyleRun{{Len: 2, Style: Style{}}})
+	overlapOps := len(getOps(dispA)) - baseA
+
+	// Variant B: highlight does NOT overlap the styled range.
+	frB, dispB := setupStyledFrame(t)
+	frB.Insert([]rune("hello world"), 0)
+	fiB := frB.(*frameimpl)
+	fiB.drawselimpl(fiB.ptofcharptb(0, fiB.rect.Min, 0), 0, 5, true)
+	baseB := len(getOps(dispB))
+	frB.SetStyleRange(8, 10, []StyleRun{{Len: 2, Style: Style{}}})
+	nonOverlapOps := len(getOps(dispB)) - baseB
+
+	if overlapOps <= nonOverlapOps {
+		t.Errorf("expected extra drawops for highlight re-paint when SetStyleRange overlaps the selection; overlap=%d non-overlap=%d", overlapOps, nonOverlapOps)
 	}
 }

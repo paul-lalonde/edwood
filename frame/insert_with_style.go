@@ -128,6 +128,27 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		tcol := f.cols[ColText]
 		pt := f.ptofcharptb(p0, f.rect.Min, 0)
 		f.repaintBoxRange(pt, nb0, nb1, tcol, col)
+
+		// Preserve the user's selection highlight if it overlaps
+		// the styled range. repaintBoxRange has just painted
+		// with style/default colors over the selection's pixels;
+		// without this re-paint the highlight would visibly
+		// flicker off when a producer (edcolor, md2spans, …)
+		// reacts to the S event by re-styling the just-selected
+		// token.
+		if f.highlighton && f.sp0 < f.sp1 {
+			ov0, ov1 := f.sp0, f.sp1
+			if ov0 < p0 {
+				ov0 = p0
+			}
+			if ov1 > p1 {
+				ov1 = p1
+			}
+			if ov0 < ov1 {
+				hpt := f.ptofcharptb(ov0, f.rect.Min, 0)
+				f.drawsel0(hpt, ov0, ov1, f.cols[ColHigh], f.cols[ColHText])
+			}
+		}
 	}
 
 	// Merge adjacent same-Style boxes within the affected range.
