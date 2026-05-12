@@ -92,6 +92,23 @@ func TestA52_WriteSpansToStore_NonContiguousErrors(t *testing.T) {
 	}
 }
 
+func TestA52_WriteSpansToStore_AcceptsKnownFlagsSilently(t *testing.T) {
+	// Prior `edcolor` emits `s ... <fg> bold` and similar
+	// flag-tagged lines. Slice A's parser accepts these silently
+	// (ignoring the flag); the directive still applies the color.
+	w := setupWindowForSpansWriteTest(t)
+	if err := writeSpansToStore(w, "s 0 5 #ff0000 bold"); err != nil {
+		t.Fatalf("writeSpansToStore: %v", err)
+	}
+	runs := w.body.spans.GetStyleRuns(0, 5)
+	if len(runs) == 0 {
+		t.Fatalf("no runs returned")
+	}
+	if runs[0].Style.Kind&frame.KindColored == 0 || runs[0].Style.Fg == nil {
+		t.Errorf("color must still apply when a known flag is present; got %+v", runs[0])
+	}
+}
+
 func TestA52_WriteSpansToStore_BadDirectiveErrors(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
 	if err := writeSpansToStore(w, "b 0 1 100 50 - - image:/x"); err == nil {

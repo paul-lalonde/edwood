@@ -539,11 +539,16 @@ s <off> <len> <fg> [<bg>]          # styled run; positional colors
   (default). `<bg>` is optional.
 - Producers fill gaps in the styled region with default-styled
   lines (`s <off> <len> -`).
-- The flag tokens (`bold`, `italic`, `scale=N.N`, `family=NAME`,
-  `hrule`) and the `b` / `begin region` / `end region`
-  directives are part of the protocol but rejected by the
-  Slice A parser. Slice B (typographic variation) and Slice C
-  (replaced elements, regions) extend coverage.
+- The published protocol's flag tokens (`bold`, `italic`,
+  `hidden`, `hrule`, `scale=N.N`, `family=NAME`) are
+  **silently accepted** in Slice A — the parser recognises and
+  discards them so producers like the prior `edcolor` work
+  unmodified, but the styling they convey does not yet apply.
+  Slice B and Slice C will translate them into real
+  rendering. Unknown flag spellings remain errors.
+- The `b` directive (replaced elements) and `begin region` /
+  `end region` directives are rejected entirely in Slice A;
+  Slice C wires them up.
 
 **Per-write rules** (the parser enforces these):
 

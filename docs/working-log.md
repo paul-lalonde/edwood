@@ -394,6 +394,17 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   to point at the published spec and describe the Slice A
   subset accurately. 20 parser tests + 10 xfid tests now
   exercise the real protocol shape.
+- Follow-up to the protocol rework: the published `s` directive
+  carries flag tokens — `bold`, `italic`, `hidden`, `hrule`,
+  `scale=N.N`, `family=NAME` — that Slice A can't yet honor.
+  Rather than make every producer omit them, the parser now
+  silently accepts these as no-ops (the Directive's observable
+  fields are unchanged). Slice B / C will translate them into
+  rendering. Unknown flag spellings still error, so producers
+  mis-typing a flag get a loud failure. With this change the
+  prior `edcolor`'s bold-tagged lines parse cleanly; one less
+  obstacle to running it as a smoke test once we finish A6
+  (the S event it needs to react to selection changes).
 
 ## Next-session candidates
 

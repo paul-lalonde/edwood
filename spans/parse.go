@@ -138,7 +138,7 @@ func parseClear(rest []string) (Directive, error) {
 
 func parseSet(rest []string) (Directive, error) {
 	if len(rest) < 3 {
-		return Directive{}, fmt.Errorf("spans: `s` requires <off> <len> <fg> [<bg>]")
+		return Directive{}, fmt.Errorf("spans: `s` requires <off> <len> <fg> [<bg>] [<flag>...]")
 	}
 	off, err := parseUint(rest[0])
 	if err != nil {
@@ -154,22 +154,32 @@ func parseSet(rest []string) (Directive, error) {
 		return Directive{}, fmt.Errorf("spans: `s` fg: %w", err)
 	}
 	d.Fg = fg
-	if len(rest) == 3 {
-		return d, nil
+
+	i := 3
+	// Optional bg, discriminated by appearance: a color-shaped
+	// 4th token (`#rrggbb` or `-`) is bg; anything else is the
+	// start of the flag block.
+	if i < len(rest) && looksLikeColor(rest[i]) {
+		bg, err := parseColorToken(rest[i])
+		if err != nil {
+			return Directive{}, fmt.Errorf("spans: `s` bg: %w", err)
+		}
+		d.Bg = bg
+		i++
 	}
-	// Discriminate the fourth field by appearance: a color-shaped
-	// token (`#...` or `-`) is the optional bg; anything else is
-	// a flag — Slice A rejects all flags.
-	if !looksLikeColor(rest[3]) {
-		return Directive{}, fmt.Errorf("spans: `s` flag %q not supported in Slice A", rest[3])
-	}
-	bg, err := parseColorToken(rest[3])
-	if err != nil {
-		return Directive{}, fmt.Errorf("spans: `s` bg: %w", err)
-	}
-	d.Bg = bg
-	if len(rest) > 4 {
-		return Directive{}, fmt.Errorf("spans: `s` flag %q not supported in Slice A", rest[4])
+
+	// Remaining tokens are flags. Slice A silently accepts the
+	// protocol's defined flag set (bold, italic, hidden, hrule,
+	// scale=N.N, family=NAME) so producers that emit the full
+	// protocol — like the prior `edcolor` — work without
+	// modification. The semantics will arrive in Slice B/C;
+	// today the flags don't influence the produced Directive.
+	// Unknown flag spellings remain errors per the published
+	// spec.
+	for ; i < len(rest); i++ {
+		if !isKnownFlag(rest[i]) {
+			return Directive{}, fmt.Errorf("spans: `s` unknown flag %q", rest[i])
+		}
 	}
 	return d, nil
 }
@@ -179,6 +189,23 @@ func parseSet(rest []string) (Directive, error) {
 // trailing flag without parsing.
 func looksLikeColor(s string) bool {
 	return s == "-" || (len(s) == 7 && s[0] == '#')
+}
+
+// isKnownFlag reports whether tok is one of the spans-protocol
+// flag tokens documented in the published spec: bold, italic,
+// hidden, hrule, scale=N.N, family=NAME. Slice A accepts and
+// ignores these; later slices will interpret them. The function
+// validates only the *spelling*, not the value (scale=foo and
+// family=anything are accepted; Slice B will tighten this).
+func isKnownFlag(tok string) bool {
+	switch tok {
+	case "bold", "italic", "hidden", "hrule":
+		return true
+	}
+	if strings.HasPrefix(tok, "scale=") || strings.HasPrefix(tok, "family=") {
+		return true
+	}
+	return false
 }
 
 // parseColorToken decodes a protocol color token: `-` returns

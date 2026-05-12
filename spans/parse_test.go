@@ -127,19 +127,45 @@ func TestParseDirective_RejectsRegionDirectives(t *testing.T) {
 	}
 }
 
-func TestParseDirective_RejectsFlags(t *testing.T) {
-	// Per protocol Slice B/C: bold, italic, scale=, family=, hrule.
-	// All rejected in Slice A.
-	for _, line := range []string{
+func TestParseDirective_AcceptsKnownFlagsSilently(t *testing.T) {
+	// Slice A doesn't yet implement bold / italic / hidden /
+	// hrule / scale= / family= rendering, but the parser MUST
+	// accept them so producers that emit the full published
+	// protocol (e.g. the prior `edcolor`) work unmodified. The
+	// flags don't change the Directive's observable fields;
+	// rendering semantics arrive in Slice B and C.
+	cases := []string{
 		"s 0 5 #ff0000 bold",
 		"s 0 5 #ff0000 italic",
-		"s 0 5 #ff0000 #00ff00 bold",
+		"s 0 5 #ff0000 hidden",
 		"s 0 5 #ff0000 hrule",
+		"s 0 5 #ff0000 #00ff00 bold",
+		"s 0 5 - bold italic",
 		"s 0 5 #ff0000 scale=2.0",
 		"s 0 5 #ff0000 family=code",
+		"s 0 5 - - bold scale=1.5 family=code",
+	}
+	for _, line := range cases {
+		d, err := ParseDirective(line)
+		if err != nil {
+			t.Errorf("expected silent accept for %q, got error: %v", line, err)
+			continue
+		}
+		if d.Op != OpSetStyle {
+			t.Errorf("%q: Op = %v, want OpSetStyle", line, d.Op)
+		}
+	}
+}
+
+func TestParseDirective_RejectsUnknownFlags(t *testing.T) {
+	for _, line := range []string{
+		"s 0 5 #ff0000 wibble",
+		"s 0 5 #ff0000 wobble=42",
+		"s 0 5 #ff0000 #00ff00 unknown",
+		"s 0 5 - badflag",
 	} {
 		if _, err := ParseDirective(line); err == nil {
-			t.Errorf("expected error for flag in %q, got nil", line)
+			t.Errorf("expected error for unknown flag in %q, got nil", line)
 		}
 	}
 }
