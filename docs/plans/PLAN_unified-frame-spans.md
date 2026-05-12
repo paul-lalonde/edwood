@@ -80,7 +80,7 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| A6.1 | [ ] §9.3 emission conditions | [ ] Emitted when body + spans-attached + listener + selection-changed; suppressed when *any* condition fails | [ ] Wire emit in `Text.SetSelect` | [ ] `text: emit S event on selection change` | New event-file char; minimal vocabulary addition. |
+| A6.1 | [x] §9.3 emission conditions | [x] Fires on body selection change with spans attached and listener open; suppressed on tag, nil spans, no listener, unchanged selection; fires again on subsequent change | [x] `Text.SetSelect` saves old (q0, q1), then after the update calls `t.w.Eventf("S%d %d 0 0 \n", q0, q1)` if `t.what == Body && t.spans != nil && selection changed`. The listener gate (`nopen[QWevent] > 0`) is enforced by Eventf itself | [x] (pending commit) — `text: emit S event on selection change` | Format matches the published event-file vocabulary (single-char prefix + four space-separated fields). |
 
 ## Phase A7 — `edcolor` clean-room rewrite
 

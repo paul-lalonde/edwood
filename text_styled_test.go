@@ -230,6 +230,103 @@ func TestA42_Inserted_StyledSpans_PropagatesCorrectStyles(t *testing.T) {
 }
 
 // =====================================================================
+// A6 — `S` event emission on body selection change (§9.3)
+// =====================================================================
+
+// enableEventReader configures w so Eventf actually appends to
+// w.events (otherwise it returns early). nopen[QWevent] > 0 is
+// the "is anyone listening" gate; owner != 0 is the same
+// precondition acme has for any per-window event emission.
+func enableEventReader(w *Window) {
+	w.nopen[QWevent] = 1
+	w.owner = 'E'
+}
+
+func TestA6_S_FiresOnBodySelectionChange(t *testing.T) {
+	w, _ := setupBodyForInsertedTest(t)
+	enableEventReader(w)
+
+	w.body.SetSelect(2, 5)
+
+	if len(w.events) == 0 {
+		t.Fatalf("no S event recorded")
+	}
+	// w.events[0] is the owner byte; the rest is the payload.
+	payload := string(w.events[1:])
+	if payload != "S2 5 0 0 \n" {
+		t.Errorf("event payload = %q, want %q", payload, "S2 5 0 0 \n")
+	}
+}
+
+func TestA6_S_NotFiredOnTag(t *testing.T) {
+	w, _ := setupBodyForInsertedTest(t)
+	enableEventReader(w)
+	// Wire the tag with the same recording frame so SetSelect on
+	// the tag doesn't NPE in DrawSel.
+	w.tag.fr = w.body.fr
+	w.tag.display = w.body.display
+	w.tag.what = Tag
+
+	w.tag.SetSelect(2, 5)
+
+	if len(w.events) != 0 {
+		t.Errorf("tag selection fired an event: %q", string(w.events))
+	}
+}
+
+func TestA6_S_NotFiredWithNilSpans(t *testing.T) {
+	w, _ := setupBodyForInsertedTest(t)
+	enableEventReader(w)
+	w.body.spans = nil
+
+	w.body.SetSelect(2, 5)
+
+	if len(w.events) != 0 {
+		t.Errorf("event fired with nil spans: %q", string(w.events))
+	}
+}
+
+func TestA6_S_NotFiredWithoutListener(t *testing.T) {
+	// No call to enableEventReader: nopen[QWevent] stays 0,
+	// Eventf returns early.
+	w, _ := setupBodyForInsertedTest(t)
+
+	w.body.SetSelect(2, 5)
+
+	if len(w.events) != 0 {
+		t.Errorf("event fired with no listener: %q", string(w.events))
+	}
+}
+
+func TestA6_S_NotFiredWhenSelectionUnchanged(t *testing.T) {
+	w, _ := setupBodyForInsertedTest(t)
+	enableEventReader(w)
+	w.body.q0 = 2
+	w.body.q1 = 5
+
+	w.body.SetSelect(2, 5)
+
+	if len(w.events) != 0 {
+		t.Errorf("event fired on unchanged selection: %q", string(w.events))
+	}
+}
+
+func TestA6_S_FiresOnSubsequentChange(t *testing.T) {
+	w, _ := setupBodyForInsertedTest(t)
+	enableEventReader(w)
+
+	w.body.SetSelect(2, 5)
+	// One event captured so far. A second SetSelect with new
+	// bounds should fire another event.
+	beforeLen := len(w.events)
+	w.body.SetSelect(3, 7)
+
+	if len(w.events) <= beforeLen {
+		t.Errorf("second SetSelect did not fire; events=%q", string(w.events))
+	}
+}
+
+// =====================================================================
 // A4.3 — style-aware fill and setorigin
 // =====================================================================
 

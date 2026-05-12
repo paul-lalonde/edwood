@@ -405,6 +405,19 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   prior `edcolor`'s bold-tagged lines parse cleanly; one less
   obstacle to running it as a smoke test once we finish A6
   (the S event it needs to react to selection changes).
+- A6 — Text.SetSelect now emits the `S` event per §9.3 of the
+  design. Implementation is six lines after the existing q0/q1
+  update: save old (q0, q1), and if t.what == Body and
+  t.spans != nil and t.w != nil and (oldQ0 != q0 ||
+  oldQ1 != q1), call `t.w.Eventf("S%d %d 0 0 \n", q0, q1)`.
+  The "listener open" gate is enforced by Eventf itself
+  (`nopen[QWevent] > 0`). Format is `S<q0> <q1> 0 0 \n` —
+  matches the published acme event-file vocabulary (single
+  char prefix + four space-separated fields, no text payload).
+  Six tests pin the four gates plus a "subsequent change
+  fires again" case. Smoke test with prior `edcolor` should
+  now work end-to-end: edcolor reacts to S events to
+  re-colorize matches of the current selection.
 
 ## Next-session candidates
 

@@ -1399,8 +1399,21 @@ func (t *Text) SetSelect(q0, q1 int) {
 	// log.Println("Text SetSelect Start", q0, q1)
 	// defer log.Println("Text SetSelect End", q0, q1)
 
+	oldQ0, oldQ1 := t.q0, t.q1
 	t.q0 = q0
 	t.q1 = q1
+
+	// `S` event emission (§9.3). Fires only when all four
+	// conditions hold: this Text is a body (not a tag), it has
+	// an attached spans store (producer present), the event-file
+	// listener is open (w.Eventf gates on nopen[QWevent]), and
+	// the selection actually changed. Body-only and the
+	// spans-store check are explicit here; the listener gate is
+	// applied inside Eventf.
+	if t.what == Body && t.spans != nil && t.w != nil &&
+		(oldQ0 != q0 || oldQ1 != q1) {
+		t.w.Eventf("S%d %d 0 0 \n", q0, q1)
+	}
 	// compute desired p0,p1 from q0,q1
 	p0 := q0 - t.org
 	p1 := q1 - t.org
