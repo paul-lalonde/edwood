@@ -140,6 +140,13 @@ func (f *frameimpl) clean(pt image.Point, n0, n1 int) {
 			nb < n1-1 &&
 			f.box[nb+1].Nrune >= 0 &&
 			f.box[nb].Style == f.box[nb+1].Style &&
+			// Phase B5: preserve word/space boundaries.
+			// Merging a word box with an adjacent space box
+			// (or vice versa) would defeat cklinewrap's
+			// word-boundary soft-wrap. Two adjacent
+			// space-only boxes still merge with each other,
+			// as do two adjacent non-space boxes.
+			isSpaceOnlyBox(f.box[nb]) == isSpaceOnlyBox(f.box[nb+1]) &&
 			pt.X+f.box[nb].Wid+f.box[nb+1].Wid < c {
 			f.mergebox(nb)
 			n1--

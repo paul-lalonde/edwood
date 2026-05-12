@@ -24,6 +24,26 @@ func (f *frameimpl) boxWid(b *frbox) int {
 	return f.fontFor(b.Style).BytesWidth(b.Ptr)
 }
 
+// isSpaceOnlyBox reports whether b is a content box whose Ptr
+// contains only U+0020 spaces. Used by clean's merge predicate
+// (Phase B5) to preserve the word/space boundary that bxscan
+// introduced: merging a word box with an adjacent space box
+// would defeat cklinewrap's word-boundary soft-wrap.
+//
+// Special boxes (Nrune < 0) and empty boxes are not
+// space-only.
+func isSpaceOnlyBox(b *frbox) bool {
+	if b.Nrune <= 0 {
+		return false
+	}
+	for _, by := range b.Ptr {
+		if by != ' ' {
+			return false
+		}
+	}
+	return true
+}
+
 // addbox adds  n boxes after bn and shifts the rest up: * box[bn+n]==box[bn]
 func (f *frameimpl) addbox(bn, n int) {
 	if bn > len(f.box) {

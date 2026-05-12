@@ -7,6 +7,15 @@ import (
 	"unicode/utf8"
 )
 
+// wipboxIsSpace reports whether the in-flight wipbox is a
+// space-run box. wipbox is homogeneous in space-vs-non-space
+// because bxscan flushes at every transition; reading the
+// first byte is sufficient. The caller is responsible for
+// only calling this on a non-empty content wipbox.
+func wipboxIsSpace(b *frbox) bool {
+	return len(b.Ptr) > 0 && b.Ptr[0] == ' '
+}
+
 func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
 	if box == nil {
 		return &frbox{
@@ -96,9 +105,17 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 			runeIdx++
 		default:
 			_, n := utf8.DecodeRune(inby[i:])
-			if runeStyles != nil && wipbox != nil && wipbox.Nrune > 0 && wipbox.Style != curStyle {
-				// Style boundary — flush the current run with a
-				// fresh subslice anchored at the new run's start.
+			// Phase B5: split content at word/space transitions.
+			// A "transition" is a content rune whose space-vs-
+			// non-space class differs from wipbox's last rune.
+			// Flushing here yields one box per word (run of
+			// non-spaces) and one box per space-run; cklinewrap
+			// then naturally wraps at the word boundary in front
+			// of any box that doesn't fit.
+			runeIsSpace := inby[i] == ' '
+			styleBoundary := runeStyles != nil && wipbox != nil && wipbox.Nrune > 0 && wipbox.Style != curStyle
+			wordBoundary := wipbox != nil && wipbox.Nrune > 0 && wipboxIsSpace(wipbox) != runeIsSpace
+			if styleBoundary || wordBoundary {
 				wipbox = frame.addifnonempty(wipbox, inby[i:i])
 			}
 			if wipbox == nil {
