@@ -287,6 +287,27 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   spans.Inserted first to simulate the buffer-driven ordering)
   to keep the tag-status observer chain (UpdateTag, setTag1,
   Resize) out of scope.
+- A4.3 — Text.fill and Text.setorigin now query spans before
+  pushing runes into the frame. fill: when spans is non-empty,
+  the call to `fr.Insert(rp[:i], framePos)` becomes
+  `fr.InsertWithStyle(rp[:i], framePos, t.spans.GetStyleRuns(
+  t.org+framePos, t.org+framePos+i))`; the plain path uses
+  fr.Insert unchanged. setorigin's scroll-forward branch (when
+  the new origin sits before the current org) does the same.
+  After fill, setorigin calls `t.fr.SetOriginYOffset(0)` — the
+  A2.3 stub returns 0 in Slice A; Slice C C2 will compute the
+  real tall-element y-offset via Text.computeTallElementYOffset.
+  Tests: nil spans → Insert; empty spans → Insert; styled spans
+  → InsertWithStyle with correct styles slice (sum of Lens
+  matches rune count). The setorigin test verifies the
+  SetOriginYOffset(0) call.
+  Test infrastructure: extended `recordingFrame` to intercept
+  `Insert` (rune-based, for fill) and `SetOriginYOffset` (for
+  setorigin), and bump its reported Nchars on each insert so
+  fill's loop terminates instead of feeding the buffer back to
+  itself. Made the reported Nchars configurable per-test
+  (A4.2 needs it large for the visibility check; A4.3 starts
+  at 0 so fill sees a fresh frame).
 
 ## Next-session candidates
 

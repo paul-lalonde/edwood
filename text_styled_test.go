@@ -7,6 +7,7 @@ import (
 	"github.com/rjkroege/edwood/edwoodtest"
 	"github.com/rjkroege/edwood/file"
 	"github.com/rjkroege/edwood/frame"
+	"github.com/rjkroege/edwood/spans"
 )
 
 // recordingFrame embeds MockFrame and additionally records the
@@ -15,32 +16,56 @@ import (
 type recordingFrame struct {
 	*MockFrame
 
+	// nchars is the Nchars value GetFrameFillStatus reports.
+	// Tests adjust this to model how much content the frame is
+	// currently displaying — large for visibility-gated paths
+	// (Text.Inserted), zero for fill tests that want fill to see
+	// the whole buffer as "not yet drawn."
+	nchars int
+
 	insertByteCalls int
 	lastByteData    []byte
 	lastByteP0      int
+
+	insertCalls     int
+	lastInsertRunes []rune
+	lastInsertP0    int
 
 	insertWithStyleCalls int
 	lastWithStyleRunes   []rune
 	lastWithStyleP0      int
 	lastWithStyleStyles  []frame.StyleRun
+
+	setOriginYOffsetCalls int
+	lastSetOriginYPx      int
 }
 
 func newRecordingFrame() *recordingFrame {
 	return &recordingFrame{MockFrame: &MockFrame{}}
 }
 
-// GetFrameFillStatus reports a large Nchars so Text.Inserted's
-// visibility check (`q0 <= t.org + Nchars`) always succeeds in
-// tests. The MockFrame default of 0 would gate every test insert
-// out of the InsertByte / InsertWithStyle branch.
+// GetFrameFillStatus reports rf.nchars so tests can model the
+// frame's current display state. Maxlines is reported large so
+// fill loops see room to add content.
 func (rf *recordingFrame) GetFrameFillStatus() frame.FrameFillStatus {
-	return frame.FrameFillStatus{Nchars: 1 << 30}
+	return frame.FrameFillStatus{Nchars: rf.nchars, Maxlines: 1 << 20}
 }
 
 func (rf *recordingFrame) InsertByte(b []byte, p0 int) bool {
 	rf.insertByteCalls++
 	rf.lastByteData = append([]byte(nil), b...)
 	rf.lastByteP0 = p0
+	// Model a real frame growing as content is inserted, so
+	// fill loops see Nchars increase.
+	rf.nchars += len([]rune(string(b)))
+	return false
+}
+
+func (rf *recordingFrame) Insert(r []rune, p0 int) bool {
+	rf.insertCalls++
+	rf.lastInsertRunes = append([]rune(nil), r...)
+	rf.lastInsertP0 = p0
+	rf.nchars += len(r)
 	return false
 }
 
@@ -49,7 +74,13 @@ func (rf *recordingFrame) InsertWithStyle(r []rune, p0 int, styles []frame.Style
 	rf.lastWithStyleRunes = append([]rune(nil), r...)
 	rf.lastWithStyleP0 = p0
 	rf.lastWithStyleStyles = append([]frame.StyleRun(nil), styles...)
+	rf.nchars += len(r)
 	return false
+}
+
+func (rf *recordingFrame) SetOriginYOffset(yPx int) {
+	rf.setOriginYOffsetCalls++
+	rf.lastSetOriginYPx = yPx
 }
 
 // setupBodyForInsertedTest builds a Window via initHeadless, then
@@ -70,6 +101,7 @@ func setupBodyForInsertedTest(t *testing.T) (*Window, *recordingFrame) {
 	global.configureGlobals(display)
 	w := NewWindow().initHeadless(nil)
 	rf := newRecordingFrame()
+	rf.nchars = 1 << 16 // model a frame with plenty of visible content
 	w.body.fr = rf
 	w.body.what = Body
 	return w, rf
@@ -182,6 +214,113 @@ func TestA42_Inserted_StyledSpans_PropagatesCorrectStyles(t *testing.T) {
 		if sr.Style != colored {
 			t.Errorf("styles[%d].Style = %+v, want %+v", i, sr.Style, colored)
 		}
+	}
+}
+
+// =====================================================================
+// A4.3 — style-aware fill and setorigin
+// =====================================================================
+
+// setupTextForFillTest gives the body Text a pre-loaded buffer
+// and a spans store keyed off it. This bypasses initHeadless's
+// empty-buffer setup so fill has runes to read.
+func setupTextForFillTest(t *testing.T, content string) (*Window, *recordingFrame) {
+	t.Helper()
+	display := edwoodtest.NewDisplay(image.Rectangle{})
+	global.configureGlobals(display)
+	w := NewWindow().initHeadless(nil)
+
+	// Replace the body buffer with one carrying our test content,
+	// and build a fresh spans.Store keyed off it.
+	buf := file.MakeObservableEditableBuffer("test", []rune(content))
+	w.body.file = buf
+	w.body.spans = spans.NewStore(buf)
+
+	rf := newRecordingFrame()
+	w.body.fr = rf
+	w.body.display = display
+	w.body.what = Body
+	w.col = &Column{safe: true}
+	w.tag.fr = &MockFrame{}
+	return w, rf
+}
+
+func TestA43_Fill_NilSpans_UsesInsert(t *testing.T) {
+	w, rf := setupTextForFillTest(t, "hello")
+	w.body.spans = nil
+
+	if err := w.body.fill(rf); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if rf.insertCalls != 1 {
+		t.Errorf("Insert calls = %d, want 1", rf.insertCalls)
+	}
+	if rf.insertWithStyleCalls != 0 {
+		t.Errorf("InsertWithStyle calls = %d, want 0", rf.insertWithStyleCalls)
+	}
+	if string(rf.lastInsertRunes) != "hello" {
+		t.Errorf("Insert runes = %q, want %q", string(rf.lastInsertRunes), "hello")
+	}
+}
+
+func TestA43_Fill_EmptySpans_UsesInsert(t *testing.T) {
+	// spans is non-nil but Empty() — fast path.
+	w, rf := setupTextForFillTest(t, "hello")
+	if !w.body.spans.Empty() {
+		t.Fatalf("spans should be empty after seeding from plain buffer")
+	}
+
+	if err := w.body.fill(rf); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if rf.insertCalls != 1 {
+		t.Errorf("Insert calls = %d, want 1 (empty spans)", rf.insertCalls)
+	}
+	if rf.insertWithStyleCalls != 0 {
+		t.Errorf("InsertWithStyle calls = %d, want 0", rf.insertWithStyleCalls)
+	}
+}
+
+func TestA43_Fill_StyledSpans_UsesInsertWithStyle(t *testing.T) {
+	w, rf := setupTextForFillTest(t, "hello")
+	colored := frame.Style{Kind: frame.KindColored}
+	w.body.spans.SetRegion(1, 4, colored) // "ell" colored
+
+	if err := w.body.fill(rf); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if rf.insertWithStyleCalls != 1 {
+		t.Errorf("InsertWithStyle calls = %d, want 1 (styled spans)", rf.insertWithStyleCalls)
+	}
+	if rf.insertCalls != 0 {
+		t.Errorf("Insert calls = %d, want 0", rf.insertCalls)
+	}
+	if string(rf.lastWithStyleRunes) != "hello" {
+		t.Errorf("InsertWithStyle runes = %q, want %q", string(rf.lastWithStyleRunes), "hello")
+	}
+	// Sum-of-Lens invariant.
+	sum := 0
+	for _, sr := range rf.lastWithStyleStyles {
+		sum += sr.Len
+	}
+	if sum != 5 {
+		t.Errorf("sum of styles.Len = %d, want 5; styles=%+v", sum, rf.lastWithStyleStyles)
+	}
+}
+
+func TestA43_Setorigin_CallsSetOriginYOffset(t *testing.T) {
+	// setorigin should call SetOriginYOffset on the frame (Slice A
+	// stub returns 0; Slice C will compute a real tall-element
+	// y-offset).
+	w, rf := setupTextForFillTest(t, "hello world")
+
+	w.body.setorigin(rf, 0, true, false)
+
+	if rf.setOriginYOffsetCalls != 1 {
+		t.Errorf("SetOriginYOffset calls = %d, want 1", rf.setOriginYOffsetCalls)
+	}
+	if rf.lastSetOriginYPx != 0 {
+		t.Errorf("SetOriginYOffset arg = %d, want 0 (Slice A stub)", rf.lastSetOriginYPx)
 	}
 }
 

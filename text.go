@@ -634,7 +634,16 @@ func (t *Text) fill(fr frame.SelectScrollUpdater) error {
 			}
 		}
 
-		if lastlinefull := fr.Insert(rp[:i], fr.GetFrameFillStatus().Nchars); nl == 0 || lastlinefull {
+		framePos := fr.GetFrameFillStatus().Nchars
+		var lastlinefull bool
+		if t.spans != nil && !t.spans.Empty() {
+			docStart := t.org + framePos
+			styles := t.spans.GetStyleRuns(docStart, docStart+i)
+			lastlinefull = fr.InsertWithStyle(rp[:i], framePos, styles)
+		} else {
+			lastlinefull = fr.Insert(rp[:i], framePos)
+		}
+		if nl == 0 || lastlinefull {
 			break
 		}
 	}
@@ -1688,13 +1697,24 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 			n = t.org - org
 			r = make([]rune, n)
 			t.file.Read(org, r)
-			fr.Insert(r, 0)
+			if t.spans != nil && !t.spans.Empty() {
+				styles := t.spans.GetStyleRuns(org, org+n)
+				fr.InsertWithStyle(r, 0, styles)
+			} else {
+				fr.Insert(r, 0)
+			}
 		} else {
 			fr.Delete(0, fr.GetFrameFillStatus().Nchars)
 		}
 	}
 	t.org = org
 	t.fill(fr)
+	// Drive the tall-element y-offset (§7.5). For Slice A the
+	// frame's SetOriginYOffset is a stub returning 0; Slice C C2
+	// will compute a real value from Text.computeTallElementYOffset.
+	if t.fr != nil {
+		t.fr.SetOriginYOffset(0)
+	}
 	t.ScrDraw(fr.GetFrameFillStatus().Nchars)
 
 	if !calledfromscroll {
