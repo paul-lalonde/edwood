@@ -15,7 +15,12 @@ func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
 	}
 
 	if len(box.Ptr) > 0 {
-		box.Wid = frame.font.BytesWidth(box.Ptr)
+		// Use the font variant the box will actually render
+		// with — bold/italic glyphs may be slightly wider than
+		// their regular counterparts even in monospace
+		// families. Without this, adjacent boxes would overlap
+		// because Wid would be sized to the regular font.
+		box.Wid = frame.fontFor(box.Style).BytesWidth(box.Ptr)
 		frame.box = append(frame.box, box)
 		return &frbox{
 			Ptr: inby,

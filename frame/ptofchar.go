@@ -20,10 +20,11 @@ func (f *frameimpl) ptofcharptb(p int, pt image.Point, bn int) image.Point {
 		l := nrune(b)
 		if p < l {
 			if b.Nrune > 0 {
+				font := f.fontFor(b.Style)
 				for s := 0; s < len(b.Ptr) && p > 0; s += w {
 					p--
 					r, w = utf8.DecodeRune(b.Ptr[s:])
-					pt.X += f.font.BytesWidth(b.Ptr[s : s+w])
+					pt.X += font.BytesWidth(b.Ptr[s : s+w])
 					if r == 0 || pt.X > f.rect.Max.X {
 						log.Panicf("frptofchar: r=%v pt.X=%v f.rect.Max.X=%v\n", r, pt.X, f.rect.Max.X)
 					}
@@ -96,13 +97,14 @@ func (f *frameimpl) charofptimpl(pt image.Point) int {
 			if b.Nrune < 0 {
 				qt = f.advance(qt, b)
 			} else {
+				font := f.fontFor(b.Style)
 				s := 0
 				for ; s < len(b.Ptr); s += w {
 					r, w = utf8.DecodeRune(b.Ptr[s:])
 					if r == 0 {
 						panic("end of string in frcharofpt")
 					}
-					qt.X += f.font.BytesWidth(b.Ptr[s : s+w])
+					qt.X += font.BytesWidth(b.Ptr[s : s+w])
 					if qt.X > pt.X {
 						break
 					}

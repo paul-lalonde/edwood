@@ -235,7 +235,7 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 		if b.Nrune < 0 || nr == b.Nrune {
 			w = b.Wid
 		} else {
-			w = f.font.BytesWidth(ptr[0:runeindex(ptr, nr)])
+			w = f.fontFor(b.Style).BytesWidth(ptr[0:runeindex(ptr, nr)])
 		}
 		x = pt.X + w
 		if x > f.rect.Max.X {

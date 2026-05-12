@@ -113,6 +113,48 @@ func TestFontFor_FallsBackToBaseWhenVariantMissing(t *testing.T) {
 	}
 }
 
+func TestBoldFont_BoxWidthMatchesBoldMetrics(t *testing.T) {
+	// Regression: when KindBold runs use a font with a wider
+	// glyph than the regular variant, the produced box's Wid
+	// must be sized to the bold font's BytesWidth — otherwise
+	// adjacent boxes overlap and "type", "struct", "map" get
+	// clipped by the next character.
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	// Bold is 2px wider per glyph than regular.
+	regular := edwoodtest.NewFontWithName("REGULAR_W10", 10, 13)
+	bold := edwoodtest.NewFontWithName("BOLD_W12", 12, 13)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptBoldFont(bold),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+
+	boldStyle := Style{Kind: KindBold}
+	f.InsertWithStyle([]rune("type"), 0, []StyleRun{{Len: 4, Style: boldStyle}})
+
+	// Find the bold box; its Wid should be 4*12 = 48, not 4*10 = 40.
+	for _, b := range f.box {
+		if b == nil || b.Nrune <= 0 || b.Style.Kind&KindBold == 0 {
+			continue
+		}
+		want := 4 * 12
+		if b.Wid != want {
+			t.Errorf("bold box Wid = %d, want %d (4 runes × bold-width 12)", b.Wid, want)
+		}
+	}
+}
+
 func TestKindHidden_SkipsGlyphPaintInDrawtext(t *testing.T) {
 	fr, disp := setupVariantFrame(t)
 	hidden := Style{Kind: KindHidden}
