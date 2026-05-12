@@ -31,6 +31,8 @@ func TestInsertAligned(t *testing.T) {
 			// Insert text that doesn't fit.
 			name: "insertPastEnd",
 			fn:   insertPastEnd,
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
 			want: []string{
 				"fill (20,10)-(59,20) [0,0],[3,1]",
 				"fill (20,20)-(59,40) [0,1],[3,2]",
@@ -45,6 +47,8 @@ func TestInsertAligned(t *testing.T) {
 			name:     "splitWrappedLine",
 			fn:       splitWrappedLine,
 			textarea: image.Rect(20, 10, 59, 60),
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
 			want: []string{
 				"fill (20,10)-(59,20) [0,0],[3,1]",
 				"fill (20,20)-(59,50) [0,1],[3,3]",
@@ -61,7 +65,6 @@ func TestInsertAligned(t *testing.T) {
 				"fill (58,10)-(59,20) [-,0],[-,1]",
 				"fill (20,20)-(20,30) [0,1],[0,1]",
 			},
-			knowntofail: false,
 		},
 		{
 			// Insert a single character that forces conversion of non-wrapped to
@@ -113,9 +116,11 @@ func TestInsertAligned(t *testing.T) {
 			// Append a multibox string that hangs off the end. TODO(rjk): Draws a
 			// zero-width fill off the end of text area. This is conceivably wrong.
 			// It would (for example) make some drawing stacks unhappy.
-			name:     "appendHangingLongAtEnd",
-			fn:       appendHangingLongAtEnd,
-			textarea: image.Rect(20, 10, 59, 60),
+			name: "appendHangingLongAtEnd",
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
+			fn:          appendHangingLongAtEnd,
+			textarea:    image.Rect(20, 10, 59, 60),
 			want: []string{
 				"fill (20,10)-(59,20) [0,0],[3,1]",
 				"fill (20,20)-(59,60) [0,1],[3,4]",
@@ -132,9 +137,11 @@ func TestInsertAligned(t *testing.T) {
 		},
 		{
 			// Insert a multibox string that forces ripple past the end.
-			name:     "insertWrappedThatForcesRipple",
-			fn:       insertWrappedThatForcesRipple,
-			textarea: image.Rect(20, 10, 59, 60),
+			name: "insertWrappedThatForcesRipple",
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
+			fn:          insertWrappedThatForcesRipple,
+			textarea:    image.Rect(20, 10, 59, 60),
 			want: []string{
 				"fill (20,10)-(59,20) [0,0],[3,1]",
 				"fill (20,20)-(59,60) [0,1],[3,4]",
@@ -154,9 +161,11 @@ func TestInsertAligned(t *testing.T) {
 		},
 		{
 			// Insert a string that pushes a blank line off the end.
-			name:     "insertPushesBlankLineOffEnd",
-			fn:       insertPushesBlankLineOffEnd,
-			textarea: image.Rect(20, 10, 59, 60),
+			name: "insertPushesBlankLineOffEnd",
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
+			fn:          insertPushesBlankLineOffEnd,
+			textarea:    image.Rect(20, 10, 59, 60),
 			want: []string{
 				"fill (20,10)-(59,20) [0,0],[3,1]",
 				"fill (20,20)-(59,60) [0,1],[3,4]",

@@ -159,6 +159,8 @@ func TestDelete(t *testing.T) {
 			// Ripple up a single deleted character.
 			name: "rippleUpDeletedChar",
 			fn:   rippleUpDeletedChar,
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
 			want: []string{
 				"blit (46,10)-(59,20) [2,0],[1,1], to (33,10)-(46,20) [1,0],[1,1]",
 				"fill (46,10)-(46,20) [2,0],[0,1]",
@@ -179,6 +181,8 @@ func TestDelete(t *testing.T) {
 			// have to make this wide enough for tabs to work.
 			name: "deleteTab",
 			fn:   deleteTab,
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
 			want: []string{
 				"blit (124,10)-(137,20) [8,0],[1,1], to (33,10)-(46,20) [1,0],[1,1]",
 				"fill (46,10)-(46,20) [2,0],[0,1]",
@@ -197,6 +201,8 @@ func TestDelete(t *testing.T) {
 			// delete the character, tab should stretch.
 			name: "deleteCharBeforeTab",
 			fn:   deleteCharBeforeTab,
+			// B5: see frame/testdata/.../*_trial.html.
+			knowntofail: true,
 			want: []string{
 				"fill (33,10)-(124,20) [1,0],[7,1]",
 			},

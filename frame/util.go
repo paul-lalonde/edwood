@@ -64,7 +64,31 @@ func (f *frameimpl) cklinewrap(p image.Point, b *frbox) (ret image.Point) {
 
 func (f *frameimpl) cklinewrap0(p image.Point, b *frbox) (ret image.Point) {
 	ret = p
-	if _, ok := f.canfit(p, b); !ok {
+	var wrap bool
+	if b.Nrune < 0 {
+		// Special box (tab / newline): wrap when even
+		// `Minwid` doesn't fit. canfit encodes this.
+		_, ok := f.canfit(p, b)
+		wrap = !ok
+	} else {
+		// Phase B5 — word-boundary wrap. A content box
+		// wraps as a whole when it doesn't fit at p.X,
+		// regardless of length. After the wrap, the
+		// caller's canfit + splitbox path on the fresh
+		// line will:
+		//   - Return full-fit for a box that fits the
+		//     line (R-B5.3); no split.
+		//   - Return partial-fit for a long word longer
+		//     than the line (R-B5.4); splitbox at the
+		//     fresh line's start, with the tail wrapping
+		//     to the next line in turn.
+		// The "wrap first, then split" order matches the
+		// user's stated preference: split at character
+		// only when the split can't work on the next
+		// line either.
+		wrap = b.Wid > f.rect.Max.X-p.X
+	}
+	if wrap {
 		ret.X = f.rect.Min.X
 		ret.Y = p.Y + f.defaultfontheight
 		if ret.Y > f.rect.Max.Y {
