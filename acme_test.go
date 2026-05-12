@@ -13,6 +13,57 @@ import (
 	"github.com/rjkroege/edwood/file"
 )
 
+// R-B4.10: tryLoadFontVariant probes for a "code" variant whose
+// directory substitution maps a GoRegular base font to its GoMono
+// cousin (the monospace family). GoMono base → identity, since
+// the user is already in a monospace family.
+
+func TestVariantPathFor_BoldOfGoRegular(t *testing.T) {
+	base := "/usr/share/fonts/Go/GoRegular/Go-Regular.font"
+	want := "/usr/share/fonts/Go/Go-Bold/Go-Regular.font"
+	if got := variantPathFor(base, "bold"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestVariantPathFor_CodeOfGoRegular(t *testing.T) {
+	base := "/usr/share/fonts/Go/GoRegular/Go-Regular.font"
+	want := "/usr/share/fonts/Go/GoMono/Go-Regular.font"
+	if got := variantPathFor(base, "code"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestVariantPathFor_CodeOfGoMono_IsIdentity(t *testing.T) {
+	// A user whose base font is already GoMono asking for the
+	// code variant stays in GoMono — the variant exists, but
+	// it's the same family.
+	base := "/usr/share/fonts/Go/GoMono/GoMono-Regular.font"
+	if got := variantPathFor(base, "code"); got != base {
+		t.Errorf("expected identity path for GoMono+code; got %q, want %q", got, base)
+	}
+}
+
+func TestVariantPathFor_UnknownFamily(t *testing.T) {
+	base := "/usr/share/fonts/Helvetica/12pt.font"
+	if got := variantPathFor(base, "code"); got != "" {
+		t.Errorf("expected empty path for unknown family; got %q", got)
+	}
+}
+
+func TestVariantPathFor_UnknownVariant(t *testing.T) {
+	base := "/usr/share/fonts/Go/GoRegular/Go-Regular.font"
+	if got := variantPathFor(base, "wibble"); got != "" {
+		t.Errorf("expected empty path for unknown variant; got %q", got)
+	}
+}
+
+func TestVariantPathFor_EmptyBase(t *testing.T) {
+	if got := variantPathFor("", "bold"); got != "" {
+		t.Errorf("expected empty path for empty base; got %q", got)
+	}
+}
+
 func TestIsmtpt(t *testing.T) {
 	oldmtpt := mtpt
 	defer func() { mtpt = oldmtpt }()

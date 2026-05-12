@@ -429,15 +429,83 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   in-repo rewrite was always an option, not a requirement.
   Next slice: Slice B (typographic variation).
 
+### 2026-05-12 — Slice B follow-ups + Phase B4 (md2spans compat)
+
+- **Bold-width clipping** (`dce9c08`). Bold glyphs are wider
+  than the regular font in the Go family but box.Wid was
+  computed via `f.font.BytesWidth` at 8+ sites. Adjacent boxes
+  overlapped → "type"/"struct"/"map" tails clipped. Fix:
+  route every whole-Ptr width compute through
+  `f.fontFor(b.Style).BytesWidth(b.Ptr)`. Regression test pins
+  the contract via a mock bold font wider than the base.
+- **SetStyleRange Wid refresh** (`fd390b0` then patched in
+  `01a4af5`). SetStyleRange assigned `b.Style` without
+  recomputing `b.Wid`, so on first paint after edcolor styled a
+  token the next box's background fill started early and the
+  bold glyph's tail got clipped. Same bug class as the
+  bold-width one, different code path. First fix clobbered
+  tab/newline widths because the existing `boxRunes <= 0`
+  guard never triggered for them (`nrune()` returns 1 for
+  specials). Final fix gates Wid refresh on `b.Nrune < 0`
+  directly and updates the new `boxWid` helper landed in
+  B4.1.5. Tagged the result `color-and-style` after a working
+  smoke test in the user's hands.
+
+- **Phase B4 — md2spans compatibility** (4 rows landed
+  `59605e5`, `961fd98`, `5ee0dd0`, plus this row).
+  - B4.1 (`59605e5`) — Parser silently accepts `b`,
+    `begin region`, `end region` as `OpNoOp`; contiguity
+    walks past `OpNoOp`s; flag loop translates `hrule` →
+    `KindHRule` and `family=code` → `KindCodeFamily`. Other
+    `family=NAME` and `scale=N.N` stay silent-accept-no-bit.
+    xfid_spans.go applier ignores `OpNoOp` explicitly.
+  - B4.1.5 (`961fd98`) — Refactor. Extract `paintBox(b, pt,
+    text, back, clearBg)` as the single per-box paint
+    function; drawtext and repaintBoxRange collapse to
+    walk-and-call. Extract `boxWid(b)` as the single
+    content-box width compute; validateboxmodel asserts
+    `b.Wid == f.boxWid(b)` so the SetStyleRange-Wid bug
+    class is structurally prevented. Pure refactor; new
+    tests pin the invariants but no behavior change.
+  - B4.2 (`5ee0dd0`) — Frame renders the new bits.
+    `fontCode` slot + `OptCodeFont`; `fontFor` consults
+    KindCodeFamily before weight/italic (family wins).
+    `paintBox` draws a 1-pixel hrule line at the row's
+    vertical center when KindHRule is set, after the
+    glyph paint (markers stay visible). One-site edit.
+  - B4.3 (this commit) — Text/acme wiring.
+    `tryLoadFontVariant` factored into a pure
+    `variantPathFor` helper; map gains `code` → `GoMono`
+    for `GoRegular` bases (and identity for `GoMono`
+    bases). text.go calls it with variant="code" and
+    threads the result through `frame.OptCodeFont`.
+    Failures degrade gracefully to the base font.
+
+  Smoke test needed: open a markdown file in the rebuilt
+  edwood, add `md2spans` to the tag, run it (with md2spans
+  built from `/Users/paul/dev/edwood/cmd/md2spans`). Expect
+  bold/italic/bold-italic emphasis, inline-link colors,
+  horizontal rules, and `family=code` runs in the monospace
+  cousin. Headings (`scale=N.N`), images (`b`), and block
+  regions (`begin region` / `end region`) stay unstyled —
+  they're Slice C.
+
 ## Next-session candidates
 
-1. Row A2.2 — `SetStyleRange` (color-only; no line-height
-   recompute, since Slice A line height is uniform). Re-style
-   boxes already in the frame; repaint affected region.
-2. Row A2.3 — `SetOriginYOffset` / `GetOriginYOffset` stubs (real
-   behavior in Slice C2).
-3. Selection rendering on styled text fix-up (see A2.1 deferral
-   note above). Probably its own commit between A2 and A3.
-4. Slice A's exit point is `edcolor` working end-to-end. Keep
-   Slice A's `Style` minimal (`Kind`, `Fg`, `Bg`); resist pulling
-   in font or replaced-element fields until B / C.
+1. Smoke-test md2spans against this binary; record visual
+   findings in this log. If hrule or family=code don't look
+   right, return to B4.2 with a classified bug.
+2. Slice C C1 — Replaced-element rendering for the `b`
+   directive (the biggest visible md2spans gap is inline
+   images).
+3. Slice C C4 — Block context (gutter indent, code-block bg,
+   blockquote indent, listitem markers). Needed before
+   md2spans's region directives produce useful output.
+4. Slice C B2.2 — Variable line height for `scale=N.N`
+   (headings). The substantive piece of Slice B that we
+   skipped to get md2spans running with the
+   no-line-height-change subset.
+5. The Externalize-font-variant-map idea (project memory):
+   `fontVariantMap` is currently hard-coded for GoRegular
+   and GoMono. Externalizing it would let non-Go-font users
+   get Slice B / B4 styling visually.

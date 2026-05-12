@@ -194,53 +194,74 @@ func fontget(name string, display draw.Display) draw.Font {
 	return font
 }
 
-// tryLoadFontVariant attempts to find a bold / italic /
-// bold-italic variant of baseFont using filename conventions
-// drawn from the published spans-protocol producer setup.
-// Returns nil silently when no variant is found, in which case
-// the frame falls back to the base font.
+// fontVariantMap names the directory substitution that produces
+// each variant for a base-font family. variantPathFor performs the
+// substitution; tryLoadFontVariant opens the resulting file.
 //
-// The variant map mirrors the prior implementation in upstream's
-// /Users/paul/dev/edwood/acme.go: variants are looked up by
-// known family name embedded in the font path, then probed on
-// the display. New family entries can be added to variantMap
-// without touching the rest of the pipeline.
-func tryLoadFontVariant(display draw.Display, baseFont, variant string) draw.Font {
+//   - "bold", "italic", "bolditalic" stay within the family.
+//   - "code" switches the user to the monospace cousin
+//     (GoRegular → GoMono). For a user whose base is already
+//     monospace (GoMono), the "code" variant resolves to GoMono
+//     itself — same family, no path change — so KindCodeFamily
+//     runs render in the existing font.
+//
+// New family entries can be added without touching the rest of
+// the pipeline.
+var fontVariantMap = map[string]map[string]string{
+	"GoRegular": {
+		"bold":       "Go-Bold",
+		"italic":     "Go-Italic",
+		"bolditalic": "Go-BoldItalic",
+		"code":       "GoMono",
+	},
+	"GoMono": {
+		"bold":       "GoMono-Bold",
+		"italic":     "GoMono-Italic",
+		"bolditalic": "GoMono-BoldItalic",
+		"code":       "GoMono",
+	},
+}
+
+// variantPathFor returns the file path of the named variant of
+// baseFont. Returns "" when baseFont is empty, when the family
+// isn't recognised, or when the requested variant isn't defined
+// for the family. Pure function — testable without a display.
+func variantPathFor(baseFont, variant string) string {
 	if baseFont == "" {
-		return nil
+		return ""
 	}
-	variantMap := map[string]map[string]string{
-		"GoRegular": {
-			"bold":       "Go-Bold",
-			"italic":     "Go-Italic",
-			"bolditalic": "Go-BoldItalic",
-		},
-		"GoMono": {
-			"bold":       "GoMono-Bold",
-			"italic":     "GoMono-Italic",
-			"bolditalic": "GoMono-BoldItalic",
-		},
-	}
-	for family, variants := range variantMap {
+	for family, variants := range fontVariantMap {
 		if !strings.Contains(baseFont, "/"+family+"/") {
 			continue
 		}
-		variantFamily, ok := variants[variant]
+		v, ok := variants[variant]
 		if !ok {
-			return nil
+			return ""
 		}
-		variantPath := strings.Replace(baseFont, "/"+family+"/", "/"+variantFamily+"/", 1)
-		if cached, ok := fontCache[variantPath]; ok {
-			return cached
-		}
-		f, err := display.OpenFont(variantPath)
-		if err != nil {
-			return nil
-		}
-		fontCache[variantPath] = f
-		return f
+		return strings.Replace(baseFont, "/"+family+"/", "/"+v+"/", 1)
 	}
-	return nil
+	return ""
+}
+
+// tryLoadFontVariant attempts to find a named variant of
+// baseFont via the directory substitutions in fontVariantMap and
+// open it on display. Returns nil silently when no variant
+// applies or the file can't be opened — the frame falls back to
+// the base font, which is the graceful-degradation contract.
+func tryLoadFontVariant(display draw.Display, baseFont, variant string) draw.Font {
+	p := variantPathFor(baseFont, variant)
+	if p == "" {
+		return nil
+	}
+	if cached, ok := fontCache[p]; ok {
+		return cached
+	}
+	f, err := display.OpenFont(p)
+	if err != nil {
+		return nil
+	}
+	fontCache[p] = f
+	return f
 }
 
 var boxcursor = draw.Cursor{

@@ -160,6 +160,9 @@ func (t *Text) Init(r image.Rectangle, rf string, cols [frame.NumColours]draw.Im
 	if v := tryLoadFontVariant(t.display, rf, "bolditalic"); v != nil {
 		extra = append(extra, frame.OptBoldItalicFont(v))
 	}
+	if v := tryLoadFontVariant(t.display, rf, "code"); v != nil {
+		extra = append(extra, frame.OptCodeFont(v))
+	}
 	t.fr = frame.NewFrame(r, baseFont, t.display.ScreenImage(), cols, extra...)
 	t.Redraw(r, -1, false /* noredraw */)
 	return t
