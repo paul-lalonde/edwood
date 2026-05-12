@@ -312,13 +312,24 @@ func (i *mockImage) Bytes(pt image.Point, src draw.Image, sp image.Point, f draw
 	if msrc, ok := src.(*mockImage); ok {
 		srcname = msrc.n
 	}
+	// Only append "font: NAME" when the caller opted in via
+	// NewFontWithName. Default mock fonts (NewFont, OpenFont)
+	// have an empty name field; omitting the suffix keeps the
+	// op string compatible with pre-existing visual baselines
+	// while letting Slice B font-selection tests assert on the
+	// font picked per styled run.
+	fontsuffix := ""
+	if mf, ok := f.(*mockFont); ok && mf.name != "" {
+		fontsuffix = " font: " + mf.name
+	}
 
-	op := fmt.Sprintf("%s <- string %q atpoint: %v %s fill: %s",
+	op := fmt.Sprintf("%s <- string %q atpoint: %v %s fill: %s%s",
 		i.n,
 		string(b),
 		pt,
 		pointochars(pt),
 		srcname,
+		fontsuffix,
 	)
 	i.d.drawops = append(i.d.drawops, op)
 
@@ -366,9 +377,13 @@ var _ = draw.Font((*mockFont)(nil))
 // TODO(rjk): Do we need to handle variable widths?
 type mockFont struct {
 	width, height int
+	name          string // empty → Plan9FontPath(MockFontName)
 }
 
 // NewFont returns a draw.Font that mocks a fixed-width font.
+// The font reports the default mock font name from Name(); to
+// distinguish multiple fonts in the same test (e.g., regular vs
+// bold variants) use NewFontWithName.
 func NewFont(width, height int) draw.Font {
 	return &mockFont{
 		width:  width,
@@ -376,10 +391,27 @@ func NewFont(width, height int) draw.Font {
 	}
 }
 
+// NewFontWithName returns a draw.Font like NewFont but with a
+// caller-provided name. Tests use the name to verify that the
+// frame picked the right font variant for a styled run; the
+// recorded Bytes op string includes the font name.
+func NewFontWithName(name string, width, height int) draw.Font {
+	return &mockFont{
+		width:  width,
+		height: height,
+		name:   name,
+	}
+}
+
 // const MockFontName = "/lib/font/bit/veryloverylongstringherengstringhere/euro.8.font"
 const MockFontName = "/lib/font/bit/lucsans/euro.8.font"
 
-func (f *mockFont) Name() string             { return Plan9FontPath(MockFontName) }
+func (f *mockFont) Name() string {
+	if f.name != "" {
+		return f.name
+	}
+	return Plan9FontPath(MockFontName)
+}
 func (f *mockFont) Height() int              { return f.height }
 func (f *mockFont) BytesWidth(b []byte) int  { return f.width * utf8.RuneCount(b) }
 func (f *mockFont) RunesWidth(r []rune) int  { return f.width * len(r) }
