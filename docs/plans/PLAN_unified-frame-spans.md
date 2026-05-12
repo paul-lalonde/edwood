@@ -143,6 +143,24 @@ cleanroom edwood end-to-end; bold/italic/links/hrule/family=code
 all render. Slice A and Slice B producers unaffected.
 `./regression.sh` green.
 
+## Phase B5 — Word-boundary line wrapping
+
+Soft-wrap inside paragraphs currently breaks mid-word because
+bxscan emits one box per style run. Split content boxes at
+U+0020 SPACE boundaries; `cklinewrap`'s existing wrap test
+naturally produces word-boundary breaks. Design §12 Phase B5
+for R-B5.1..R-B5.7.
+
+| # | Design | Tests | Iterate | Commit |
+|---|---|---|---|---|
+| B5.1 | [ ] §12 + R-B5.1, R-B5.2 | [ ] bxscan on plain "one two three" emits 3 word boxes + 2 space boxes; clean does NOT merge a word and an adjacent space; clean DOES merge two adjacent space-only boxes | [ ] bxscan's content branch flushes wipbox at every space ↔ non-space transition; helper `isSpaceOnlyBox(b)` for clean's merge predicate | [ ] `frame: split content at spaces in bxscan` |
+| B5.2 | [ ] §12 + R-B5.3, R-B5.4 | [ ] A line whose rightmost word doesn't fit (after bold widening) wraps just before that word, not mid-word; a single line-width-exceeding word wraps to its own line and overflows | [ ] No production code change expected after B5.1; test-only confirmation | [ ] `frame: word-boundary wrap behavior tests` |
+| B5.3 | [ ] §12 + R-B5.5, R-B5.6, R-B5.7 | [ ] SetStyleRange across a previously-split space-boundary correctly styles both halves; selection covers all visible runes; ptofcharptb / charofptimpl round-trip correctly | [ ] No production code change expected; scan for callsites assuming "one box per line" via grep | [ ] `frame: regression for word-split layout walks` |
+
+**Phase B5 exit criterion.** Markdown paragraphs wrap at word
+boundaries; the bold "**Before writing any code...**" line
+wraps before the first word that doesn't fit, not mid-word.
+
 **Slice B exit criterion.** Body text carries mixed bold, italic,
 underline, and font sizes; line heights adapt. Slice A producers
 (`edcolor`) still work. `./regression.sh` green.

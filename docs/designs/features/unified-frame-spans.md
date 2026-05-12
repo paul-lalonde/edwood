@@ -1232,6 +1232,64 @@ images, code-block backgrounds, blockquote indents, and list
 markers stay unstyled until Slice C lands their machinery.
 Slice A/B producers unaffected.
 
+#### Phase B5 — Word-boundary line wrapping
+
+Soft-wrap inside paragraphs currently breaks mid-word because
+`bxscan` emits one box per style run. Split content boxes at
+U+0020 SPACE boundaries so `cklinewrap`'s existing wrap test
+naturally falls on word boundaries. `cklinewrap` itself is
+unchanged.
+
+Numbered requirements:
+
+- **R-B5.1** (bxscan splits at spaces). `bxscan` splits content
+  runs at U+0020 SPACE boundaries. Each contiguous non-space
+  sequence becomes its own "word" box; each contiguous run of
+  one or more spaces becomes its own "space" box. Tabs and
+  newlines remain special boxes (`Nrune < 0`). Style boundaries
+  still cause splits.
+- **R-B5.2** (clean preserves the boundary). `clean`'s merge
+  predicate is relaxed: two adjacent same-`Style` content
+  boxes do NOT merge if exactly one of them is space-only.
+  Adjacent space-only boxes still merge with each other.
+- **R-B5.3** (wrap behavior). `cklinewrap` is unchanged. Because
+  word boxes are sized to one word's `Wid`, a box that doesn't
+  fit causes a wrap-to-next-line — naturally at the word
+  boundary just before it. Trailing spaces on a wrapped line
+  stay present at the right edge.
+- **R-B5.4** (long word fallback). A word box whose
+  `Wid > rect.Dx()` wraps to a fresh line and then extends
+  past `rect.Max.X` for that line. The `paintBox` bounds check
+  (I-1) keeps the overflow inside the screen image but glyphs
+  still extend past `rect.Max.X`. **v1 limitation:** character-
+  level splitting for over-long words is deferred.
+- **R-B5.5** (style preservation). Splitting a run at a space
+  preserves the run's `Style` on each resulting box.
+  `SetStyleRange` that crosses a previously-split space-point
+  works unchanged.
+- **R-B5.6** (layout invariants). `ptofcharptb`, `charofptimpl`,
+  `drawsel0`, `paintBox`, and the box-walking paint paths
+  continue to function. None of them assume "one content box
+  per line" — they all walk the box list box-by-box.
+- **R-B5.7** (regression). Box count rises from ~1 per line to
+  ~N per line (N ≈ word count); walks are O(boxes), so this is
+  a constant-factor cost. Frame test suite stays green;
+  `./regression.sh` stays green.
+
+Not in scope for Phase B5:
+
+- Hyphenation or hyphen-insertion at line breaks.
+- Character-level splitting for over-long words.
+- Non-ASCII whitespace (NBSP, ZWSP) as wrap points.
+- A per-buffer toggle (universal for v1).
+
+**Phase B5 exit criterion.** Markdown paragraphs in the built
+binary wrap at word boundaries. The bold "**Before writing any
+code, read [CODING-PROCESS.md](./CODING-PROCESS.md).**" line
+wraps before whichever word crosses `rect.Max.X`, not mid-word.
+Plain Slice A producers (`edcolor`) still work. `./regression.sh`
+green.
+
 **Exit criterion for Slice B.** Body text can carry mixed bold,
 italic, underline, and font sizes; line heights adapt; selection,
 cursor behavior, and Slice A producers (`edcolor`) all still

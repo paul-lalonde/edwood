@@ -490,22 +490,55 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   regions (`begin region` / `end region`) stay unstyled —
   they're Slice C.
 
+### 2026-05-12 (later) — Phase B2.2 attempt 1 reverted
+
+After ten+ patches piled on B2.2.3 (per-line height in layout
+walks) the implementation was too compromised to land. Each
+fix uncovered another walk that drifted from `ptofcharptb`.
+The architectural pattern — store a mutable `f.curLineH` on
+the frame, require every walk to reset it — proved fragile.
+
+Attempt-1 preserved as the tag `b22-attempt-1`. The repo
+HEAD reset to `86848f2` (end of Phase B4). The valuable
+infrastructure carried back:
+
+- `docs/designs/features/frame-layout-invariants.md` — five
+  general invariants (I-1, I-2, I-5, I-10, I-11), plus the
+  architectural-notes section capturing the lessons.
+- Phase B5 spec (word-boundary wrap) in design §12 and the
+  plan — still applies, scanner-level change orthogonal to
+  the variable-height question.
+- Baseline-alignment requirement — added to architectural
+  notes. Attempt 1 painted glyphs top-aligned; restart must
+  use baseline alignment so a heading and adjacent body text
+  share a baseline.
+
+Not carried back (re-create during B2.2 restart):
+
+- `frame/draw_bounds_test.go` — referenced KindScale and
+  related constructs that no longer exist post-reset.
+- `Box` / `Spans` tag-bar debug commands — implementation
+  was tangled with the after-paint-hook architecture from
+  attempt 1; rewrite cleanly during restart.
+- `-validatelayout` flag — same.
+- B2.2-specific invariants (I-3, I-4, I-6, I-7, I-8, I-9,
+  I-12) — they belong in the next attempt's design.
+
 ## Next-session candidates
 
-1. Smoke-test md2spans against this binary; record visual
-   findings in this log. If hrule or family=code don't look
-   right, return to B4.2 with a classified bug.
-2. Slice C C1 — Replaced-element rendering for the `b`
-   directive (the biggest visible md2spans gap is inline
-   images).
-3. Slice C C4 — Block context (gutter indent, code-block bg,
-   blockquote indent, listitem markers). Needed before
-   md2spans's region directives produce useful output.
-4. Slice C B2.2 — Variable line height for `scale=N.N`
-   (headings). The substantive piece of Slice B that we
-   skipped to get md2spans running with the
-   no-line-height-change subset.
-5. The Externalize-font-variant-map idea (project memory):
-   `fontVariantMap` is currently hard-coded for GoRegular
-   and GoMono. Externalizing it would let non-Go-font users
-   get Slice B / B4 styling visually.
+1. Phase B5 — word-boundary line wrapping. Pure scanner +
+   clean change; orthogonal to variable line height. Three
+   rows in the plan.
+2. Restart Phase B2.2 with the per-box Y architecture:
+   - Each box stores `Y` (its line's top Y) and `Asc` (its
+     line's baseline ascent — the max ascent of any font on
+     the line).
+   - Insert / Delete / SetStyleRange compute Y / Asc for
+     affected boxes in a SINGLE forward pass; ALL subsequent
+     layout walks just read box.Y / box.Asc.
+   - paintBox paints at `pt.Y + (line.Asc - font.Ascent())`
+     so glyphs share a baseline regardless of font size.
+   - Cursor (tick) and scroll (`Delete`'s blit, fill
+     semantics) get explicit subrows.
+3. Slice C C1 — Replaced-element rendering for `b` directive.
+4. The Externalize-font-variant-map idea (project memory).
