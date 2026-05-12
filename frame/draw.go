@@ -14,13 +14,12 @@ func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 
 		if !f.noredraw && b.Nrune >= 0 {
 			t := text
-			// Per-box style override (Slice A: colors only). When
-			// KindColored is set, Fg/Bg if non-nil substitute for
-			// the frame-default text color and repaint the box's
-			// background rect, respectively. fillNonGlyphAreas
-			// already painted the run-wide background with the
-			// frame default, so the per-box Bg paint here is only
-			// needed for non-default backgrounds.
+			// Per-box style override. When KindColored is set,
+			// Fg/Bg if non-nil substitute for the frame-default
+			// text color and repaint the box's background rect.
+			// fillNonGlyphAreas already painted the run-wide
+			// background with the frame default; the per-box Bg
+			// paint is only needed for non-default backgrounds.
 			if b.Style.Kind&KindColored != 0 {
 				if b.Style.Fg != nil {
 					t = b.Style.Fg
@@ -30,10 +29,37 @@ func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 					f.background.Draw(rect, b.Style.Bg, nil, image.Point{})
 				}
 			}
-			f.background.Bytes(pt, t, image.Point{}, f.font, b.Ptr)
+			// KindHidden suppresses the glyph paint; the box's
+			// background is preserved so the rect doesn't show
+			// ghosts of prior content.
+			if b.Style.Kind&KindHidden == 0 {
+				f.background.Bytes(pt, t, image.Point{}, f.fontFor(b.Style), b.Ptr)
+			}
 		}
 		pt.X += b.Wid
 	}
+}
+
+// fontFor picks the right font variant for a styled run. Falls
+// back to the base font when the requested variant hasn't been
+// configured (so styling degrades gracefully on installations
+// that don't have bold/italic font files).
+func (f *frameimpl) fontFor(s Style) draw.Font {
+	bold := s.Kind&KindBold != 0
+	italic := s.Kind&KindItalic != 0
+	switch {
+	case bold && italic && f.fontBoldItalic != nil:
+		return f.fontBoldItalic
+	case bold && italic && f.fontBold != nil:
+		return f.fontBold
+	case bold && italic && f.fontItalic != nil:
+		return f.fontItalic
+	case bold && f.fontBold != nil:
+		return f.fontBold
+	case italic && f.fontItalic != nil:
+		return f.fontItalic
+	}
+	return f.font
 }
 
 // repaintBoxRange repaints boxes [nb0, nb1) starting at pt. Each
@@ -67,7 +93,9 @@ func (f *frameimpl) repaintBoxRange(pt image.Point, nb0, nb1 int, text draw.Imag
 			}
 			rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
 			f.background.Draw(rect, bg, nil, image.Point{})
-			f.background.Bytes(pt, t, image.Point{}, f.font, b.Ptr)
+			if b.Style.Kind&KindHidden == 0 {
+				f.background.Bytes(pt, t, image.Point{}, f.fontFor(b.Style), b.Ptr)
+			}
 		}
 		pt.X += b.Wid
 	}
@@ -229,8 +257,19 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 			}
 		}
 		f.background.Draw(image.Rect(pt.X, pt.Y, x, pt.Y+f.defaultfontheight), bg, nil, pt)
+		// Pick the bold/italic font variant per the box's Style.
+		// In highlight mode the glyph color is ColHText but the
+		// font weight/angle still comes from the box's Style so
+		// the highlight reflects the underlying styling.
+		// KindHidden boxes skip the glyph paint in clear mode;
+		// in highlight mode we still draw to keep the highlight
+		// readable.
 		if b.Nrune >= 0 {
-			f.background.Bytes(pt, glyph, image.Point{}, f.font, ptr[0:runeindex(ptr, nr)])
+			if back == f.cols[ColBack] && b.Style.Kind&KindHidden != 0 {
+				// hidden + clearing → no glyph
+			} else {
+				f.background.Bytes(pt, glyph, image.Point{}, f.fontFor(b.Style), ptr[0:runeindex(ptr, nr)])
+			}
 		}
 		pt.X += w
 		p += nr

@@ -60,6 +60,33 @@ func OptFont(ft draw.Font) OptionClosure {
 	}
 }
 
+// OptBoldFont sets the font used for runs whose Style.Kind has
+// KindBold (and not KindItalic). nil falls back to the base font
+// — Slice B's "no font height change" guarantee assumes the
+// caller picks a variant of the same family / metrics.
+func OptBoldFont(ft draw.Font) OptionClosure {
+	return func(f *frameimpl, ctx *optioncontext) {
+		f.fontBold = ft
+	}
+}
+
+// OptItalicFont sets the font used for runs whose Style.Kind has
+// KindItalic (and not KindBold). nil falls back to the base font.
+func OptItalicFont(ft draw.Font) OptionClosure {
+	return func(f *frameimpl, ctx *optioncontext) {
+		f.fontItalic = ft
+	}
+}
+
+// OptBoldItalicFont sets the font used for runs whose Style.Kind
+// has both KindBold and KindItalic. nil falls back to fontBold,
+// then fontItalic, then the base font.
+func OptBoldItalicFont(ft draw.Font) OptionClosure {
+	return func(f *frameimpl, ctx *optioncontext) {
+		f.fontBoldItalic = ft
+	}
+}
+
 // OptMaxTab sets the default tabwidth in `0` characters.
 func OptMaxTab(maxtabchars int) OptionClosure {
 	return func(f *frameimpl, ctx *optioncontext) {

@@ -3,6 +3,8 @@ package spans
 import (
 	"image/color"
 	"testing"
+
+	"github.com/rjkroege/edwood/frame"
 )
 
 // Spec source: /Users/paul/dev/edwood/docs/designs/spans-protocol.md
@@ -127,32 +129,37 @@ func TestParseDirective_RejectsRegionDirectives(t *testing.T) {
 	}
 }
 
-func TestParseDirective_AcceptsKnownFlagsSilently(t *testing.T) {
-	// Slice A doesn't yet implement bold / italic / hidden /
-	// hrule / scale= / family= rendering, but the parser MUST
-	// accept them so producers that emit the full published
-	// protocol (e.g. the prior `edcolor`) work unmodified. The
-	// flags don't change the Directive's observable fields;
-	// rendering semantics arrive in Slice B and C.
-	cases := []string{
-		"s 0 5 #ff0000 bold",
-		"s 0 5 #ff0000 italic",
-		"s 0 5 #ff0000 hidden",
-		"s 0 5 #ff0000 hrule",
-		"s 0 5 #ff0000 #00ff00 bold",
-		"s 0 5 - bold italic",
-		"s 0 5 #ff0000 scale=2.0",
-		"s 0 5 #ff0000 family=code",
-		"s 0 5 - - bold scale=1.5 family=code",
+func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
+	// Slice B translates bold / italic / hidden into Kind bits;
+	// hrule / scale= / family= are accepted but ignored (their
+	// rendering arrives in Slice C / a follow-up). All four
+	// must succeed at the parse layer so producers emitting the
+	// full published protocol work without modification.
+	cases := []struct {
+		line     string
+		wantKind frame.Kind
+	}{
+		{"s 0 5 #ff0000 bold", frame.KindBold},
+		{"s 0 5 #ff0000 italic", frame.KindItalic},
+		{"s 0 5 #ff0000 hidden", frame.KindHidden},
+		{"s 0 5 #ff0000 hrule", 0},
+		{"s 0 5 #ff0000 #00ff00 bold", frame.KindBold},
+		{"s 0 5 - bold italic", frame.KindBold | frame.KindItalic},
+		{"s 0 5 #ff0000 scale=2.0", 0},
+		{"s 0 5 #ff0000 family=code", 0},
+		{"s 0 5 - - bold scale=1.5 family=code", frame.KindBold},
 	}
-	for _, line := range cases {
-		d, err := ParseDirective(line)
+	for _, c := range cases {
+		d, err := ParseDirective(c.line)
 		if err != nil {
-			t.Errorf("expected silent accept for %q, got error: %v", line, err)
+			t.Errorf("expected accept for %q, got error: %v", c.line, err)
 			continue
 		}
 		if d.Op != OpSetStyle {
-			t.Errorf("%q: Op = %v, want OpSetStyle", line, d.Op)
+			t.Errorf("%q: Op = %v, want OpSetStyle", c.line, d.Op)
+		}
+		if d.Kind != c.wantKind {
+			t.Errorf("%q: Kind = %v, want %v", c.line, d.Kind, c.wantKind)
 		}
 	}
 }

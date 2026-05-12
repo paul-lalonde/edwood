@@ -296,6 +296,15 @@ type frameimpl struct {
 	cols       [NumColours]draw.Image // background and text colours
 	rect       image.Rectangle        // in which the text appears
 
+	// Slice B font variants. Each is optional — when nil the
+	// renderer falls back to the base font, so a plain (no-
+	// variant) Init is unchanged from upstream. A box's
+	// Style.Kind & (KindBold|KindItalic) selects which font to
+	// use (see fontFor in draw.go).
+	fontBold       draw.Font
+	fontItalic     draw.Font
+	fontBoldItalic draw.Font
+
 	defaultfontheight int // height of default font
 
 	box []*frbox // the boxes of text in this frame.
@@ -321,11 +330,19 @@ type frameimpl struct {
 	tickscale int // tick scaling factor
 }
 
-// NewFrame creates a new Frame with Font ft, background image b, colours cols, and
-// of the size r
-func NewFrame(r image.Rectangle, ft draw.Font, b draw.Image, cols [NumColours]draw.Image) Frame {
+// NewFrame creates a new Frame with Font ft, background image b,
+// colours cols, and of the size r. Additional options (extra)
+// are applied after the default options, so callers can override
+// (e.g., add bold/italic font variants via OptBoldFont,
+// OptItalicFont, OptBoldItalicFont) without restating the
+// defaults.
+func NewFrame(r image.Rectangle, ft draw.Font, b draw.Image, cols [NumColours]draw.Image, extra ...OptionClosure) Frame {
 	f := new(frameimpl)
-	f.Init(r, OptColors(cols), OptFont(ft), OptBackground(b), OptMaxTab(8))
+	opts := []OptionClosure{
+		OptColors(cols), OptFont(ft), OptBackground(b), OptMaxTab(8),
+	}
+	opts = append(opts, extra...)
+	f.Init(r, opts...)
 	return f
 }
 

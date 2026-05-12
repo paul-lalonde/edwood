@@ -144,7 +144,23 @@ func (t *Text) Init(r image.Rectangle, rf string, cols [frame.NumColours]draw.Im
 	t.font = rf
 	t.tabstop = int(global.maxtab)
 	t.tabexpand = global.tabexpand
-	t.fr = frame.NewFrame(r, fontget(rf, t.display), t.display.ScreenImage(), cols)
+	baseFont := fontget(rf, t.display)
+	// Load bold/italic/bold-italic variants of the body font if
+	// the installation has them (best-effort; nil falls back to
+	// the base font in the frame). This is what makes producer-
+	// emitted `s ... bold` / `italic` directives render with a
+	// real bold or italic typeface instead of the regular one.
+	var extra []frame.OptionClosure
+	if v := tryLoadFontVariant(t.display, rf, "bold"); v != nil {
+		extra = append(extra, frame.OptBoldFont(v))
+	}
+	if v := tryLoadFontVariant(t.display, rf, "italic"); v != nil {
+		extra = append(extra, frame.OptItalicFont(v))
+	}
+	if v := tryLoadFontVariant(t.display, rf, "bolditalic"); v != nil {
+		extra = append(extra, frame.OptBoldItalicFont(v))
+	}
+	t.fr = frame.NewFrame(r, baseFont, t.display.ScreenImage(), cols, extra...)
 	t.Redraw(r, -1, false /* noredraw */)
 	return t
 }

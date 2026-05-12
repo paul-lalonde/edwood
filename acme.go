@@ -194,6 +194,55 @@ func fontget(name string, display draw.Display) draw.Font {
 	return font
 }
 
+// tryLoadFontVariant attempts to find a bold / italic /
+// bold-italic variant of baseFont using filename conventions
+// drawn from the published spans-protocol producer setup.
+// Returns nil silently when no variant is found, in which case
+// the frame falls back to the base font.
+//
+// The variant map mirrors the prior implementation in upstream's
+// /Users/paul/dev/edwood/acme.go: variants are looked up by
+// known family name embedded in the font path, then probed on
+// the display. New family entries can be added to variantMap
+// without touching the rest of the pipeline.
+func tryLoadFontVariant(display draw.Display, baseFont, variant string) draw.Font {
+	if baseFont == "" {
+		return nil
+	}
+	variantMap := map[string]map[string]string{
+		"GoRegular": {
+			"bold":       "Go-Bold",
+			"italic":     "Go-Italic",
+			"bolditalic": "Go-BoldItalic",
+		},
+		"GoMono": {
+			"bold":       "GoMono-Bold",
+			"italic":     "GoMono-Italic",
+			"bolditalic": "GoMono-BoldItalic",
+		},
+	}
+	for family, variants := range variantMap {
+		if !strings.Contains(baseFont, "/"+family+"/") {
+			continue
+		}
+		variantFamily, ok := variants[variant]
+		if !ok {
+			return nil
+		}
+		variantPath := strings.Replace(baseFont, "/"+family+"/", "/"+variantFamily+"/", 1)
+		if cached, ok := fontCache[variantPath]; ok {
+			return cached
+		}
+		f, err := display.OpenFont(variantPath)
+		if err != nil {
+			return nil
+		}
+		fontCache[variantPath] = f
+		return f
+	}
+	return nil
+}
+
 var boxcursor = draw.Cursor{
 	Point: image.Point{-7, -7},
 	Clr: [32]byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,

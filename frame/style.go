@@ -37,12 +37,19 @@ type Kind uint
 const KindPlain Kind = 0
 
 const (
-	// KindColored signals that Fg/Bg carry overrides.
-	KindColored Kind = 1 << iota
-	// Slice B will add KindBold, KindItalic, KindUnderline,
-	// KindFontIdx; Slice C will add KindReplaced,
-	// KindBlockquote, KindInCodeBlock, KindInTable. Each takes
-	// the next iota step in this block.
+	// Slice A
+	KindColored Kind = 1 << iota // Fg / Bg meaningful
+
+	// Slice B (typographic variation that doesn't change line
+	// height). All three are bare flag tokens in the published
+	// spans protocol.
+	KindBold   // bold weight; renders with the frame's bold font
+	KindItalic // italic angle; renders with the italic font
+	KindHidden // glyph is not painted (frame still paints bg)
+
+	// Future bits (KindFontIdx for FontIdx-driven font picking,
+	// KindReplaced + Replaced* fields for Slice C, block-context
+	// bits) take the next iota steps in this block.
 )
 
 // IsPlain reports whether s carries no styling — i.e., a frame

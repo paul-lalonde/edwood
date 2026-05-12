@@ -1,24 +1,32 @@
 // Wire-format parser for the spans protocol. The protocol is
 // authoritatively defined in the published spec
 // (/Users/paul/dev/edwood/docs/designs/spans-protocol.md in the
-// upstream tree). This implementation covers the Slice A subset:
+// upstream tree). This implementation covers what Slices A and B
+// support today:
 //
 //   c
 //     Clears all spans for the window. Must be alone in its
 //     write.
 //
-//   s <offset> <length> <fg> [<bg>]
+//   s <offset> <length> <fg> [<bg>] [<flag>...]
 //     Defines a styled run. <fg> and <bg> are either `#rrggbb`
 //     (lowercase hex, exactly 6 digits) or `-` (default).
 //     Producers fill gaps in the styled region with default-
 //     styled lines (`s <off> <len> -`).
+//     Flag tokens (Slice B):
+//       bold    → Directive.Kind |= frame.KindBold
+//       italic  → Directive.Kind |= frame.KindItalic
+//       hidden  → Directive.Kind |= frame.KindHidden
+//     Other recognised flags (hrule, scale=N.N, family=NAME) are
+//     accepted but currently produce no bits; rendering arrives
+//     in Slice C / a follow-up. Unknown flag spellings are an
+//     error per the published spec.
 //
-// Slice A explicitly rejects the protocol's flag tokens (bold,
-// italic, scale=, family=, hrule), the `b` directive (replaced
-// elements — Slice C), and the begin/end region forms (Slice B
-// / C). The legacy unprefixed format is not accepted; Slice A
-// is a producer-side cleanroom rewrite, so we require the
-// prefixed protocol from the start.
+// The `b` (replaced-element) directive and `begin region` /
+// `end region` forms are rejected — Slice C will land them.
+// The legacy unprefixed format is not accepted; this is a
+// producer-side cleanroom rewrite, so we require the prefixed
+// protocol from the start.
 //
 // Within a write, the protocol's contiguity rule applies: each
 // `s` directive's offset must equal the previous directive's
@@ -32,6 +40,8 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
+
+	"github.com/rjkroege/edwood/frame"
 )
 
 // DirOp identifies the directive type.
@@ -59,6 +69,14 @@ type Directive struct {
 	Len int         // valid only for OpSetStyle
 	Fg  color.Color // nil = default (the `-` token)
 	Bg  color.Color // nil = default (the `-` token or omitted)
+
+	// Kind carries the protocol's flag tokens that Slice B+
+	// translates into frame.Style.Kind bits — currently
+	// `bold` → frame.KindBold, `italic` → frame.KindItalic,
+	// `hidden` → frame.KindHidden. Other recognised flags
+	// (`hrule`, `scale=N.N`, `family=NAME`) are still
+	// silently accepted on the wire but don't yet set bits.
+	Kind frame.Kind
 }
 
 // ParseDirective parses one non-empty line. Returns an error
@@ -168,16 +186,28 @@ func parseSet(rest []string) (Directive, error) {
 		i++
 	}
 
-	// Remaining tokens are flags. Slice A silently accepts the
-	// protocol's defined flag set (bold, italic, hidden, hrule,
-	// scale=N.N, family=NAME) so producers that emit the full
-	// protocol — like the prior `edcolor` — work without
-	// modification. The semantics will arrive in Slice B/C;
-	// today the flags don't influence the produced Directive.
-	// Unknown flag spellings remain errors per the published
-	// spec.
+	// Remaining tokens are flags. Slice B translates the
+	// no-line-height-change subset (bold, italic, hidden) into
+	// Directive.Kind bits the applier maps to frame.Style.Kind.
+	// The remaining recognised flags (hrule, scale=N.N,
+	// family=NAME) are still silently accepted but don't set
+	// bits — Slice C and follow-ups land them. Unknown flag
+	// spellings remain errors per the published spec.
 	for ; i < len(rest); i++ {
-		if !isKnownFlag(rest[i]) {
+		switch {
+		case rest[i] == "bold":
+			d.Kind |= frame.KindBold
+		case rest[i] == "italic":
+			d.Kind |= frame.KindItalic
+		case rest[i] == "hidden":
+			d.Kind |= frame.KindHidden
+		case rest[i] == "hrule":
+			// silent accept; Slice C will render
+		case strings.HasPrefix(rest[i], "scale="):
+			// silent accept; future slice will scale glyphs
+		case strings.HasPrefix(rest[i], "family="):
+			// silent accept; future slice will switch font family
+		default:
 			return Directive{}, fmt.Errorf("spans: `s` unknown flag %q", rest[i])
 		}
 	}
@@ -189,23 +219,6 @@ func parseSet(rest []string) (Directive, error) {
 // trailing flag without parsing.
 func looksLikeColor(s string) bool {
 	return s == "-" || (len(s) == 7 && s[0] == '#')
-}
-
-// isKnownFlag reports whether tok is one of the spans-protocol
-// flag tokens documented in the published spec: bold, italic,
-// hidden, hrule, scale=N.N, family=NAME. Slice A accepts and
-// ignores these; later slices will interpret them. The function
-// validates only the *spelling*, not the value (scale=foo and
-// family=anything are accepted; Slice B will tighten this).
-func isKnownFlag(tok string) bool {
-	switch tok {
-	case "bold", "italic", "hidden", "hrule":
-		return true
-	}
-	if strings.HasPrefix(tok, "scale=") || strings.HasPrefix(tok, "family=") {
-		return true
-	}
-	return false
 }
 
 // parseColorToken decodes a protocol color token: `-` returns

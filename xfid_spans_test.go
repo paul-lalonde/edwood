@@ -94,8 +94,9 @@ func TestA52_WriteSpansToStore_NonContiguousErrors(t *testing.T) {
 
 func TestA52_WriteSpansToStore_AcceptsKnownFlagsSilently(t *testing.T) {
 	// Prior `edcolor` emits `s ... <fg> bold` and similar
-	// flag-tagged lines. Slice A's parser accepts these silently
-	// (ignoring the flag); the directive still applies the color.
+	// flag-tagged lines. Slice B translates the bold flag into
+	// frame.KindBold so the renderer picks the bold font; the
+	// color still applies.
 	w := setupWindowForSpansWriteTest(t)
 	if err := writeSpansToStore(w, "s 0 5 #ff0000 bold"); err != nil {
 		t.Fatalf("writeSpansToStore: %v", err)
@@ -105,7 +106,28 @@ func TestA52_WriteSpansToStore_AcceptsKnownFlagsSilently(t *testing.T) {
 		t.Fatalf("no runs returned")
 	}
 	if runs[0].Style.Kind&frame.KindColored == 0 || runs[0].Style.Fg == nil {
-		t.Errorf("color must still apply when a known flag is present; got %+v", runs[0])
+		t.Errorf("color must still apply when a flag is present; got %+v", runs[0])
+	}
+	if runs[0].Style.Kind&frame.KindBold == 0 {
+		t.Errorf("KindBold must be set when bold flag was on the directive; got Kind=%v", runs[0].Style.Kind)
+	}
+}
+
+func TestB4_WriteSpansToStore_ItalicAndHidden(t *testing.T) {
+	w := setupWindowForSpansWriteTest(t)
+	if err := writeSpansToStore(w, "s 0 5 - italic hidden"); err != nil {
+		t.Fatalf("writeSpansToStore: %v", err)
+	}
+	runs := w.body.spans.GetStyleRuns(0, 5)
+	if len(runs) == 0 {
+		t.Fatalf("no runs returned")
+	}
+	got := runs[0].Style.Kind
+	if got&frame.KindItalic == 0 {
+		t.Errorf("KindItalic missing: %v", got)
+	}
+	if got&frame.KindHidden == 0 {
+		t.Errorf("KindHidden missing: %v", got)
 	}
 }
 
