@@ -529,20 +529,32 @@ narrower range.
 
 For one box at its layout-stored `b.X`, `b.Y`:
 
-1. If `f.noredraw` or `b.Nrune < 0` or `b.Y >= rect.Max.Y`:
-   return.
+1. **Bail if fully off-screen.** If `f.noredraw` or
+   `b.Nrune < 0` or `b.Y >= rect.Max.Y` or `b.Y + b.LineH <=
+   rect.Min.Y`: return. (The two Y checks cover off-screen
+   below and above; §7.2 handles partial visibility.)
 2. Resolve effective `fg` / `bg` (Style.Fg / Style.Bg if
    KindColored).
-3. If `clearBg` or `hasBgOverride`: paint bg rect
-   `(b.X, b.Y, b.X + b.Wid, b.Y + b.LineH)`. Clamped at
-   bottom to `rect.Max.Y`.
-4. If not `KindHidden`: paint glyph at
+3. **Background rect.** If `clearBg` or `hasBgOverride`:
+   paint `(b.X, b.Y, b.X + b.Wid, b.Y + b.LineH)`. Both Y
+   edges are clamped to `[rect.Min.Y, rect.Max.Y]` before
+   issuing the Draw — partial-line bg is painted; fully
+   off-screen rect is the bail above.
+4. **Glyph.** If not `KindHidden`: paint at
    `(b.X, b.Y + b.LineA - fontAscent(b))`. This is the
-   baseline-alignment rule. Suppress if the glyph would
-   extend past `rect.Max.Y`.
-5. If `KindHRule`: paint a 1-px horizontal line at
-   `(b.X, b.Y + b.LineH/2, b.X + b.Wid, b.Y + b.LineH/2 + 1)`.
-   Suppress if past `rect.Max.Y`.
+   baseline-alignment rule (§3.3). The glyph paint is NOT
+   suppressed for partial visibility — the implementer
+   ensures `f.background` is bounded to `f.rect` (sub-image
+   or equivalent) so glyphs that extend past `rect.Max.Y`
+   are clipped by the underlying image rather than skipped.
+   Bytes has no per-call clip, so image-bounds enforcement
+   is the only mechanism — see §7.2.
+5. **HRule decoration.** If `KindHRule`: paint a 1-px
+   horizontal line at `(b.X, b.Y + b.LineH/2, b.X + b.Wid,
+   b.Y + b.LineH/2 + 1)`. Suppress if the line's vertical
+   center is at or past `rect.Max.Y` (a stylistic accent
+   on an off-screen-bottom partial line is acceptable to
+   lose).
 
 Note that the bg rect uses `LineH` (line height, not box
 height) so the bg covers the entire line vertically. Body
@@ -572,12 +584,48 @@ Selection paint. For each visual line in `[p0, p1)`:
 `f.box` is empty. Ptofchar(0) returns `f.rect.Min`. Charofpt
 of any point returns 0. Layout pass is a no-op.
 
-### 7.2 Off-screen boxes
+### 7.2 Off-screen and partially-visible boxes
 
-After the layout pass, any box whose `Y >= rect.Max.Y` is
-off-screen. The pass marks the cutoff (sets `lastlinefull`
-and truncates `f.box`). `Text.fill` then knows the frame is
-full and stops inserting.
+A box is **fully off-screen** when `Y >= rect.Max.Y` — the
+entire box top is at or below the frame's bottom edge.
+`paintBox` produces no output and the layout pass treats this
+as the cutoff (sets `lastlinefull`, truncates `f.box`).
+`Text.fill` then knows the frame is full and stops inserting.
+
+A box is **partially visible** when `Y < rect.Max.Y < Y + LineH`
+— the line's top is inside the rect but its bottom (and
+possibly its baseline) is past `rect.Max.Y`. **The visible
+portion of the line MUST be painted.** Specifically:
+
+- **Bg rect:** painted from `Y` to `min(Y + LineH,
+  rect.Max.Y)`. The bottom is clipped at `rect.Max.Y`. (Same
+  rule as I-1; the clipping isn't new but applies here.)
+- **Glyph:** painted at the baseline-aligned origin
+  `(box.X, Y + LineA - fontAscent(box))`. The glyph extends
+  downward to `(Y + LineA - fontAscent + fontHeight)`; if
+  that exceeds `rect.Max.Y`, the draw library's image-bounds
+  clipping handles the rest — the implementer must ensure
+  `f.background`'s effective bounds equal `f.rect` so the
+  glyph clips at `rect.Max.Y` rather than bleeding into the
+  tag bar / next pane. (Plan 9's `Bytes` doesn't accept a
+  per-call clip; sub-image / image-bounds enforcement is the
+  mechanism.)
+- **HRule decoration:** painted at `Y + LineH/2` only if that
+  Y is `< rect.Max.Y`. If the line's vertical center is past
+  the rect, the rule is suppressed (it's a stylistic accent;
+  losing it on a partial line is acceptable).
+
+The same rule applies in the OTHER direction for completeness:
+a box whose `Y < rect.Min.Y` but `Y + LineH > rect.Min.Y` is
+partially visible from below. `paintBox` paints the visible
+slice. (This case arises mid-scroll when a heading line
+straddles `rect.Min.Y`.)
+
+The layout pass truncates `f.box` only at the FULLY-off-screen
+boundary — partially-visible boxes stay in the box list and
+participate in walks. `lastlinefull` is set when even one
+fully-off-screen box exists or when the next box past the
+visible content wouldn't fit even partially.
 
 ### 7.3 Scroll (setorigin / fill)
 

@@ -15,21 +15,29 @@ restart with a cleaner per-box-Y architecture.
 
 ## I-1: paintBox stays inside f.rect
 
-Every paint op `paintBox` emits has its rect entirely within
-`f.rect`. Specifically:
+Every paint op `paintBox` emits resolves to pixels entirely
+within `f.rect`. The mechanism differs by op type:
 
-- The bg rect `(pt.X, pt.Y) — (pt.X+b.Wid, pt.Y+boxHeight(b))`
-  is clamped at the bottom to `f.rect.Max.Y`.
-- A box whose `pt.Y >= f.rect.Max.Y` produces no ops at all
-  (no bg, no glyph, no decoration).
-- The glyph (`Bytes`) paint is suppressed when
-  `pt.Y + boxHeight(b) > f.rect.Max.Y` (Bytes has no per-call
-  clip).
-- The `KindHRule` decoration is suppressed when the rule line
-  would land past `f.rect.Max.Y`.
+- A box whose `pt.Y >= f.rect.Max.Y` OR `pt.Y + LineH <=
+  f.rect.Min.Y` produces no ops at all — fully off-screen.
+- A partially-visible box (line top inside the rect, bottom
+  past `rect.Max.Y` — or vice versa) IS painted, but only
+  its visible slice survives:
+  - The bg rect's Y edges are clamped to `[rect.Min.Y,
+    rect.Max.Y]` before the Draw call.
+  - The glyph (`Bytes`) paint is NOT suppressed for partial
+    visibility; instead `f.background` is bounded to
+    `f.rect` (sub-image or equivalent), so glyphs that
+    extend past `rect.Max.Y` are clipped by the underlying
+    image rather than dropped entirely.
+  - The `KindHRule` decoration is suppressed when its
+    vertical center is past `rect.Max.Y` (a stylistic
+    accent that's acceptable to lose on a partial line).
 
 **Failure mode:** content leaks into the tag bar below the
-frame or the next pane in the column.
+frame or the next pane in the column (image not bounded to
+rect); OR partial lines disappear entirely when they should
+be partially visible (overly-aggressive suppression).
 
 **Tests:** `TestPaintWithinBounds_*` (to be re-added during
 B2.2 restart — they referenced KindScale).
