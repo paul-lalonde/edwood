@@ -72,7 +72,7 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| A5.1 | [ ] §6.4 directive format (`s`, `c`, `fg=`, `bg=` only) | [ ] Parser/serializer round-trip; malformed input rejected | [ ] Implement parser + serializer in `spans` package | [ ] `spans: directive parser/serializer (color-only)` | `b` directives and font keys parse-reject in Slice A. |
+| A5.1 | [x] §6.4 directive format (`s`, `c`, `fg=`, `bg=` only); colors as `color.Color` (caller resolves to draw.Image) — keeps spans pkg out of `draw` dep | [x] s/c happy paths; fg-only / bg-only / both; b rejected; unknown keys rejected; malformed ints / colors rejected; ParseAll skips blanks, stops at first error | [x] `spans/parse.go`: `ParseDirective(line)` + `ParseAll(text)` returning `Directive{Op, Off, Len, Fg, Bg}` | [x] (pending commit) — `spans: directive parser (color-only)` | Serializer (Snapshot→directives) deferred — `draw.Image` is opaque; track raw colors when we get to A5.3 or Slice B. |
 | A5.2 | [ ] §8.3 `QWspans` qid | [ ] xfid open/read/write/close; multiple concurrent readers; "last writer wins" | [ ] Add qid in `xfid.go`; hook to per-window store | [ ] `xfid: add QWspans qid` | |
 | A5.3 | [ ] Integration | [ ] Hand-written test producer writes directives over 9P; spans changes propagate to Text and onto the frame | [ ] Wire end-to-end | [ ] `text: integrate spans file with producer flow` | |
 

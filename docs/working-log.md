@@ -320,6 +320,19 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   SetStyleRange called with full range; out-of-window → no
   call; partial overlap → clipped; non-zero t.org → frame-
   relative offsets correct.
+- A5.1 — `spans/parse.go` introduces `ParseDirective(line)` and
+  `ParseAll(text)` for the 9P spans-file wire format. Slice A
+  recognizes `s <off> <len> [fg=#RRGGBB] [bg=#RRGGBB]` and
+  `c <off> <len>`; `b` directives, unknown keys (bold/italic/
+  underline/font), malformed integers, and malformed colors all
+  fail with errors. Parsed colors are `color.Color` rather than
+  `draw.Image` so the spans package stays free of a draw
+  dependency — the xfid/main-package handler (A5.2) will
+  resolve to `draw.Image` via `display.AllocImage` before
+  calling `Store.SetRegion`. Serialization (Snapshot →
+  directives) is deferred; `draw.Image` is opaque so we can't
+  recover RGB from a stored Style without an additional
+  side-channel. 13 tests cover happy paths and rejections.
 
 ## Next-session candidates
 
