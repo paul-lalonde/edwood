@@ -10,11 +10,8 @@ import (
 	"github.com/rjkroege/edwood/spans"
 )
 
-// A5.2 — QWspans wiring. The xfid write payload is parsed via
-// spans.ParseAll, colors are resolved through the window's
-// display, and SetRegion / ClearRegion are applied to
-// w.body.spans. Tests exercise writeSpansToStore (the testable
-// helper) directly so we don't need to build a fake Xfid.
+// A5.2/A5.3 — QWspans wiring. Wire format and apply rules
+// follow the published spans-protocol spec (Slice A subset).
 
 func setupWindowForSpansWriteTest(t *testing.T) *Window {
 	t.Helper()
@@ -33,12 +30,10 @@ func setupWindowForSpansWriteTest(t *testing.T) *Window {
 func TestA52_WriteSpansToStore_SetDirectiveAppliesStyle(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
 
-	if err := writeSpansToStore(w, "s 0 5 fg=#ff0000"); err != nil {
+	if err := writeSpansToStore(w, "s 0 5 #ff0000"); err != nil {
 		t.Fatalf("writeSpansToStore: %v", err)
 	}
 
-	// Verify via GetStyleRuns: the first 5 runes should carry a
-	// KindColored style with a non-nil Fg.
 	runs := w.body.spans.GetStyleRuns(0, 11)
 	if len(runs) == 0 {
 		t.Fatalf("no runs returned")
@@ -51,40 +46,55 @@ func TestA52_WriteSpansToStore_SetDirectiveAppliesStyle(t *testing.T) {
 	}
 }
 
-func TestA52_WriteSpansToStore_ClearDirective(t *testing.T) {
+func TestA52_WriteSpansToStore_ClearWipesAll(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
+	// Style some content first.
+	if err := writeSpansToStore(w, "s 0 5 #ff0000"); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	if w.body.spans.Empty() {
+		t.Fatalf("spans should be non-empty after the seed write")
+	}
 
-	// First set, then clear.
-	if err := writeSpansToStore(w, "s 0 5 fg=#ff0000\nc 0 5"); err != nil {
-		t.Fatalf("writeSpansToStore: %v", err)
+	// Per protocol: `c` (no args) clears all spans.
+	if err := writeSpansToStore(w, "c"); err != nil {
+		t.Fatalf("writeSpansToStore(c): %v", err)
 	}
 	if !w.body.spans.Empty() {
-		t.Errorf("after set+clear, spans should be Empty(); Snapshot=%+v", w.body.spans.Snapshot())
+		t.Errorf("after c: spans should be Empty(); Snapshot=%+v", w.body.spans.Snapshot())
 	}
 }
 
-func TestA52_WriteSpansToStore_MultiDirective(t *testing.T) {
+func TestA52_WriteSpansToStore_MultiDirective_Contiguous(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
-	payload := "s 0 5 fg=#ff0000\ns 6 5 fg=#00ff00\n"
+	// Contiguous: 0..5 (red) immediately followed by 5..8 (default).
+	payload := "s 0 5 #ff0000\ns 5 3 -\n"
 	if err := writeSpansToStore(w, payload); err != nil {
 		t.Fatalf("writeSpansToStore: %v", err)
 	}
-	// Two colored regions expected.
 	runs := w.body.spans.GetStyleRuns(0, 11)
+	// Expect one colored run for [0,5) and plain elsewhere.
 	colored := 0
 	for _, r := range runs {
 		if !r.Style.IsPlain() {
 			colored++
 		}
 	}
-	if colored != 2 {
-		t.Errorf("got %d colored runs, want 2: %+v", colored, runs)
+	if colored != 1 {
+		t.Errorf("got %d colored runs, want 1: %+v", colored, runs)
+	}
+}
+
+func TestA52_WriteSpansToStore_NonContiguousErrors(t *testing.T) {
+	w := setupWindowForSpansWriteTest(t)
+	if err := writeSpansToStore(w, "s 0 5 #ff0000\ns 7 3 -"); err == nil {
+		t.Errorf("expected contiguity error, got nil")
 	}
 }
 
 func TestA52_WriteSpansToStore_BadDirectiveErrors(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
-	if err := writeSpansToStore(w, "b 0 1 image w=400 h=300 ref=/x"); err == nil {
+	if err := writeSpansToStore(w, "b 0 1 100 50 - - image:/x"); err == nil {
 		t.Errorf("expected error for `b` directive (Slice C only), got nil")
 	}
 }
@@ -92,53 +102,15 @@ func TestA52_WriteSpansToStore_BadDirectiveErrors(t *testing.T) {
 func TestA52_WriteSpansToStore_NilSpansErrors(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
 	w.body.spans = nil
-	if err := writeSpansToStore(w, "s 0 5 fg=#ff0000"); err == nil {
+	if err := writeSpansToStore(w, "s 0 5 #ff0000"); err == nil {
 		t.Errorf("expected error when body.spans is nil, got nil")
 	}
 }
 
-func TestA53_Integration_WriteSpansPropagatesToFrame(t *testing.T) {
-	// End-to-end check for Slice A's producer-driven update path:
-	//   spans-file write
-	//      → writeSpansToStore (A5.2)
-	//      → spans.Store.SetRegion (A3.1)
-	//      → Observe callback registered by attachSpans (A4.4)
-	//      → frame.SetStyleRange (A2.2 via recordingFrame).
-	w := setupWindowForSpansWriteTest(t)
-	rf := newRecordingFrame()
-	rf.nchars = w.body.file.Nr() // model the whole buffer as visible
-	w.body.fr = rf
-	w.body.what = Body
-	w.body.org = 0
-	// No need to re-attach: the A4.4 Observe callback closes
-	// over t (the *Text), so setting t.fr above is picked up
-	// when the callback runs.
-
-	if err := writeSpansToStore(w, "s 2 4 fg=#ff0000"); err != nil {
-		t.Fatalf("writeSpansToStore: %v", err)
-	}
-
-	if rf.setStyleRangeCalls != 1 {
-		t.Fatalf("SetStyleRange calls = %d, want 1 (producer-driven update should repaint)", rf.setStyleRangeCalls)
-	}
-	if rf.lastStyleRangeP0 != 2 || rf.lastStyleRangeP1 != 6 {
-		t.Errorf("SetStyleRange args = (%d,%d), want (2,6)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
-	}
-	// The styled run inside the affected range carries the new color.
-	gotColored := false
-	for _, sr := range rf.lastStyleRangeStyles {
-		if sr.Style.Kind&frame.KindColored != 0 && sr.Style.Fg != nil {
-			gotColored = true
-		}
-	}
-	if !gotColored {
-		t.Errorf("no colored run in SetStyleRange styles: %+v", rf.lastStyleRangeStyles)
-	}
-}
-
 func TestA52_WriteSpansToStore_BgOnly(t *testing.T) {
+	// "Bg-only" in protocol terms: default fg + explicit bg.
 	w := setupWindowForSpansWriteTest(t)
-	if err := writeSpansToStore(w, "s 2 4 bg=#0000ff"); err != nil {
+	if err := writeSpansToStore(w, "s 2 4 - #0000ff"); err != nil {
 		t.Fatalf("writeSpansToStore: %v", err)
 	}
 	runs := w.body.spans.GetStyleRuns(2, 6)
@@ -152,6 +124,59 @@ func TestA52_WriteSpansToStore_BgOnly(t *testing.T) {
 		t.Errorf("Bg = nil, want non-nil")
 	}
 	if runs[0].Style.Fg != nil {
-		t.Errorf("Fg = %v, want nil (only bg= specified)", runs[0].Style.Fg)
+		t.Errorf("Fg = %v, want nil (explicit `-`)", runs[0].Style.Fg)
+	}
+}
+
+func TestA52_WriteSpansToStore_OutOfRangeClamped(t *testing.T) {
+	// Body has 11 runes. Directive that exceeds the bound must
+	// be clamped, not panicked.
+	w := setupWindowForSpansWriteTest(t)
+	if err := writeSpansToStore(w, "s 8 100 #ff0000"); err != nil {
+		t.Errorf("expected silent clamp, got error: %v", err)
+	}
+}
+
+func TestA52_WriteSpansToStore_OutOfRangeOffsetDropped(t *testing.T) {
+	w := setupWindowForSpansWriteTest(t)
+	// Offset >= Nr(): drop silently.
+	if err := writeSpansToStore(w, "s 100 5 #ff0000"); err != nil {
+		t.Errorf("expected silent drop, got error: %v", err)
+	}
+	if !w.body.spans.Empty() {
+		t.Errorf("spans should still be Empty (directive should have been dropped)")
+	}
+}
+
+// ===== A5.3 integration test =====
+
+func TestA53_Integration_WriteSpansPropagatesToFrame(t *testing.T) {
+	// End-to-end check: writeSpansToStore → SetRegion → A4.4
+	// Observe callback → frame.SetStyleRange.
+	w := setupWindowForSpansWriteTest(t)
+	rf := newRecordingFrame()
+	rf.nchars = w.body.file.Nr()
+	w.body.fr = rf
+	w.body.what = Body
+	w.body.org = 0
+
+	if err := writeSpansToStore(w, "s 2 4 #ff0000"); err != nil {
+		t.Fatalf("writeSpansToStore: %v", err)
+	}
+
+	if rf.setStyleRangeCalls != 1 {
+		t.Fatalf("SetStyleRange calls = %d, want 1", rf.setStyleRangeCalls)
+	}
+	if rf.lastStyleRangeP0 != 2 || rf.lastStyleRangeP1 != 6 {
+		t.Errorf("SetStyleRange args = (%d,%d), want (2,6)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
+	}
+	gotColored := false
+	for _, sr := range rf.lastStyleRangeStyles {
+		if sr.Style.Kind&frame.KindColored != 0 && sr.Style.Fg != nil {
+			gotColored = true
+		}
+	}
+	if !gotColored {
+		t.Errorf("no colored run in SetStyleRange styles: %+v", rf.lastStyleRangeStyles)
 	}
 }

@@ -37,15 +37,41 @@ func writeSpansToStore(w *Window, payload string) error {
 }
 
 // applySpansDirective converts one parsed Directive into a
-// spans.Store mutation. SetStyle directives resolve color.Color
-// values to draw.Image via w.display and tag the Style with
-// KindColored.
+// spans.Store mutation.
+//
+//   - OpClearAll wipes every styled region; the body buffer
+//     remains as a single plain run.
+//
+//   - OpSetStyle resolves color.Color values to draw.Image via
+//     w.display, tags the Style with KindColored when at least
+//     one color is non-default, and calls SetRegion on the
+//     range. Out-of-range tolerance is left to the spans.Store:
+//     directives whose range exceeds the buffer length will
+//     panic with the current store implementation. The published
+//     protocol's "silently drop / clamp" rule is enforced
+//     upstream in writeSpansToStore.
 func applySpansDirective(w *Window, d spans.Directive) error {
 	switch d.Op {
-	case spans.OpClearStyle:
-		w.body.spans.ClearRegion(d.Off, d.Off+d.Len)
+	case spans.OpClearAll:
+		// Clear all styled spans for the window. Under the
+		// dense store, this is "set the whole buffer to plain."
+		n := w.body.file.Nr()
+		if n > 0 {
+			w.body.spans.ClearRegion(0, n)
+		}
 		return nil
 	case spans.OpSetStyle:
+		// Out-of-range tolerance per the protocol: silently
+		// drop directives whose offset exceeds the body length;
+		// clamp directives whose end exceeds it.
+		n := w.body.file.Nr()
+		if d.Off >= n {
+			return nil
+		}
+		end := d.Off + d.Len
+		if end > n {
+			end = n
+		}
 		style := frame.Style{}
 		if d.Fg != nil {
 			img, err := allocColorImage(w.display, d.Fg)
@@ -63,7 +89,7 @@ func applySpansDirective(w *Window, d spans.Directive) error {
 			style.Bg = img
 			style.Kind |= frame.KindColored
 		}
-		w.body.spans.SetRegion(d.Off, d.Off+d.Len, style)
+		w.body.spans.SetRegion(d.Off, end, style)
 		return nil
 	default:
 		return fmt.Errorf("xfid: invalid spans op %v", d.Op)

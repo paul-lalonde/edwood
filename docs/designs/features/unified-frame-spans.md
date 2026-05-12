@@ -523,39 +523,54 @@ few hundred regions for a typical markdown document).
 ### 6.4 Persistence and the 9P spans file
 
 Each window exposes a `spans` file in its `wsys` directory (new
-qid `QWspans`). The file is line-oriented; one directive per
-line. Suggested syntax (the implementer may refine):
+qid `QWspans`). The wire format is **published externally** in
+`docs/designs/spans-protocol.md` of the upstream repository; this
+section summarizes only the Slice A subset our parser accepts.
+Slices B and C extend the parser to cover the rest.
+
+**Slice A directives:**
 
 ```
-s <off> <len> <style-encoded>     # set style on range
-c <off> <len>                     # clear style on range
-b <off> <len> <kind> <w> <h> <ref> # replaced-element block
+c                                  # clear all spans for the window
+s <off> <len> <fg> [<bg>]          # styled run; positional colors
 ```
 
-`<style-encoded>` is a compact form of the non-default fields of
-`Style`. Suggestion: a comma-separated list of `key=value` pairs,
-omitting fields with default values. Example:
+- `<fg>`, `<bg>` are each `#rrggbb` (lowercase 6-hex) or `-`
+  (default). `<bg>` is optional.
+- Producers fill gaps in the styled region with default-styled
+  lines (`s <off> <len> -`).
+- The flag tokens (`bold`, `italic`, `scale=N.N`, `family=NAME`,
+  `hrule`) and the `b` / `begin region` / `end region`
+  directives are part of the protocol but rejected by the
+  Slice A parser. Slice B (typographic variation) and Slice C
+  (replaced elements, regions) extend coverage.
 
-```
-s 0 12 bold=1,fg=#000080
-b 12 1 image w=400 h=300 ref=/tmp/cat.png
-s 13 50 italic=1
-```
+**Per-write rules** (the parser enforces these):
 
-Producers connect to the 9P file, issue write operations, and
-disconnect. Each write is parsed into one or more `SetRegion` /
-`ClearRegion` calls on the Store.
+1. **`c` is exclusive.** A `c` directive must be the only line in
+   its 9P write.
+2. **`s` contiguity.** Within a write, each `s` directive's
+   `<off>` must equal the previous directive's `<off> + <len>`.
+   The first `s` sets the region's start; gaps inside that
+   region must be filled by the producer with default-styled
+   lines.
+3. **Out-of-range tolerance.** A directive whose `<off>` ≥
+   buffer rune count is silently dropped; a directive whose
+   `<off> + <len>` exceeds the buffer bound is clamped.
+   Producers should not rely on these behaviors; they exist as
+   defensive clamps.
 
-**Read protocol.** Reading the spans file dumps the current
-`Snapshot()` in the same line format. This lets producers
-synchronize incrementally and lets users debug by `cat`ing the
-file.
+**Read protocol.** Reading the spans file is supposed to dump
+the current `Snapshot()` in the same line format. Slice A
+returns an empty body — the dense store loses the original
+`color.Color` once it's resolved into a `draw.Image`, so
+faithful round-trip serialization needs a side-channel that
+hasn't been added yet. Defer until needed (Slice B will likely
+add it alongside the font-aware producers).
 
-**Atomicity.** Producers should write a complete document's
-worth of directives in one write call (or use an explicit
-transaction marker if the implementer adds one). Partial writes
-should not leave the store in an obviously broken state, but the
-spec does not promise crash-consistent atomicity.
+**Atomicity.** Each 9P Twrite is parsed independently. The two-
+write idiom (`c\n` followed by a contiguous `s` block in a
+separate write) is the recommended way to fully replace styling.
 
 ## 7. Text Changes
 

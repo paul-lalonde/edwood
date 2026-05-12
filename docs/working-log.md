@@ -365,6 +365,35 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   invocation. Worth being careful about: if attachSpans ever
   needs to be re-callable, it should unregister the previous
   observer first.
+- Protocol-compliance rework. The first A5.1 pass implemented
+  an invented `s 0 5 fg=#RRGGBB bg=#RRGGBB` key=value wire
+  format. After landing A5.3 we tried to confirm by running the
+  prior `edcolor` against the cleanroom build and discovered
+  the wire format is published externally
+  (`/Users/paul/dev/edwood/docs/designs/spans-protocol.md`) and
+  is *positional*:
+    `c`                                     -- clears all
+    `s <off> <len> <fg> [<bg>] [<flag>...]` -- styled run
+  where `<fg>`/`<bg>` are `#rrggbb` or `-` and flags are bare
+  tokens (`bold`, `italic`, `scale=N.N`, `family=NAME`,
+  `hrule`). The published spec also requires `c` to be alone
+  in its 9P write, requires `s` contiguity within a write
+  (each `s.off == prev.off + prev.len`), and tolerates
+  out-of-range directives (offset >= Nr drops silently;
+  end > Nr clamps). Rewrote `spans/parse.go` and
+  `xfid_spans.go` to match:
+    - parser: positional fields; `-` → nil color; bg
+      discriminated by appearance (`#`-prefix or `-`); any
+      other 4th-or-later token is a flag and rejected in
+      Slice A; ParseAll enforces c-exclusivity and
+      contiguity.
+    - applier: `OpClearAll` calls `ClearRegion(0, Nr())`;
+      `OpSetStyle` clamps `end` to `Nr()` and silently drops
+      directives whose `off >= Nr()`.
+  Updated `docs/designs/features/unified-frame-spans.md` §6.4
+  to point at the published spec and describe the Slice A
+  subset accurately. 20 parser tests + 10 xfid tests now
+  exercise the real protocol shape.
 
 ## Next-session candidates
 
