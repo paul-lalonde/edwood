@@ -542,3 +542,8 @@ Not carried back (re-create during B2.2 restart):
      semantics) get explicit subrows.
 3. Slice C C1 — Replaced-element rendering for `b` directive.
 4. The Externalize-font-variant-map idea (project memory).
+5. Scrollbar refactor — `docs/designs/features/frame-scrollbar-spec.md`
+   is a stub capturing the scroll-direction-alignment rule
+   (B1 → SnapBottom; B3 / B2 / programmatic → SnapTop; file-top
+   and tall-line edge cases override). Expand to a full design
+   when the scrollbar phase lands.

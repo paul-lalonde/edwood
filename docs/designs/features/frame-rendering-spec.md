@@ -19,6 +19,13 @@ algorithms with that model.
   basis).
 - `unified-frame-spans.md` §12 Phase B2 — the slice's
   numbered requirements (R-B2.2.*).
+- `frame-scrollbar-spec.md` — stub for the eventual
+  scrollbar refactor. Important here because partial-line
+  visibility (§7.2) is governed by scroll direction:
+  `SnapBottom` after B1 (top edge gets the partial),
+  `SnapTop` after B3 / programmatic (bottom edge gets the
+  partial). The rendering layer must honor whichever the
+  scroll handler set.
 
 ---
 
