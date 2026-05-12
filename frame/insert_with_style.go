@@ -99,15 +99,16 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 	nb := nb0
 	for nb < nb1 {
 		b := f.box[nb]
-		boxRunes := nrune(b)
-		if boxRunes <= 0 {
-			// Special box (tab or newline): exactly one rune;
-			// width is metric/tabstop-driven, not font-driven.
+		if b.Nrune < 0 {
+			// Special box (tab or newline): occupies one rune
+			// but its width is metric/tabstop-driven, not
+			// font-glyph-derived. Update Style only.
 			b.Style = runeStyles[runeIdx]
 			runeIdx++
 			nb++
 			continue
 		}
+		boxRunes := b.Nrune
 		// Compute run of identical style within this box.
 		curStyle := runeStyles[runeIdx]
 		n := 1

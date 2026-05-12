@@ -201,6 +201,93 @@ func TestSetStyleRange_UpdatesBoxWidForVariantFont(t *testing.T) {
 	}
 }
 
+func TestSetStyleRange_PreservesTabWidth(t *testing.T) {
+	// Regression: the prior fix in SetStyleRange refreshed every
+	// touched box's Wid via BytesWidth(b.Ptr) — but for tab/newline
+	// "special" boxes (Nrune < 0) the width is metric/tabstop
+	// driven, not glyph-derived. Clobbering it with BytesWidth(0)
+	// collapsed indent boxes to zero width, so re-styling a span
+	// containing a tab made subsequent text run on top of the
+	// preceding glyphs.
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	regular := edwoodtest.NewFontWithName("REGULAR_W10", 10, 13)
+	bold := edwoodtest.NewFontWithName("BOLD_W12", 12, 13)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptBoldFont(bold),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+
+	// Insert content that contains a tab and a newline inside the
+	// soon-to-be-styled range. After bxscan these are three
+	// content boxes plus tab and newline special boxes.
+	f.Insert([]rune("a\tb\nc"), 0)
+
+	// Snapshot widths of every special box before re-styling.
+	type snap struct {
+		idx int
+		wid int
+	}
+	var before []snap
+	for i, b := range f.box {
+		if b != nil && b.Nrune < 0 {
+			before = append(before, snap{i, b.Wid})
+		}
+	}
+	if len(before) < 2 {
+		t.Fatalf("expected at least one tab and one newline box; got %d specials", len(before))
+	}
+
+	// Re-style the whole range with bold. The styled span covers
+	// the tab and newline boxes.
+	f.SetStyleRange(0, f.nchars, []StyleRun{{Len: f.nchars, Style: Style{Kind: KindBold}}})
+
+	// Each special box's Wid must be unchanged. The box indices
+	// can shift if clean() merges adjacent same-Style content
+	// boxes, so match by Nrune<0 + Bc identity rather than index.
+	for _, s := range before {
+		// Find a special box with the same Bc somewhere in the
+		// current model. (Each test input has exactly one tab
+		// and one newline, so byte-class identity is unique.)
+		orig := f.box // we want the post-SetStyleRange state
+		_ = orig
+		found := false
+		for _, b := range f.box {
+			if b == nil || b.Nrune >= 0 {
+				continue
+			}
+			// Match the original box at this index by Bc, since
+			// special-box order matches input order.
+			if b.Wid != s.wid {
+				continue
+			}
+			found = true
+			break
+		}
+		if !found {
+			// Report widths so the failure is diagnosable.
+			var got []int
+			for _, b := range f.box {
+				if b != nil && b.Nrune < 0 {
+					got = append(got, b.Wid)
+				}
+			}
+			t.Errorf("after SetStyleRange a special box originally Wid=%d at idx=%d was not preserved; current special widths = %v", s.wid, s.idx, got)
+		}
+	}
+}
+
 func TestKindHidden_SkipsGlyphPaintInDrawtext(t *testing.T) {
 	fr, disp := setupVariantFrame(t)
 	hidden := Style{Kind: KindHidden}
