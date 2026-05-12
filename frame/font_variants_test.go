@@ -155,6 +155,52 @@ func TestBoldFont_BoxWidthMatchesBoldMetrics(t *testing.T) {
 	}
 }
 
+func TestSetStyleRange_UpdatesBoxWidForVariantFont(t *testing.T) {
+	// Regression: SetStyleRange used to assign b.Style without
+	// recomputing b.Wid. On the first paint after edcolor styled
+	// a token, the bold box still carried its regular-font Wid,
+	// the next box's background fill started early, and the right
+	// edge of the bold glyph (e.g. the "c" in "func") got clipped.
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	regular := edwoodtest.NewFontWithName("REGULAR_W10", 10, 13)
+	bold := edwoodtest.NewFontWithName("BOLD_W12", 12, 13)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptBoldFont(bold),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+
+	// Insert "func foo" plain — both halves get sized with the
+	// regular font.
+	f.Insert([]rune("func foo"), 0)
+
+	// Now re-style the first 4 runes to bold, matching what edcolor
+	// would do via the spans/9P path.
+	f.SetStyleRange(0, 4, []StyleRun{{Len: 4, Style: Style{Kind: KindBold}}})
+
+	// The bold box must now carry the bold font's width.
+	for _, b := range f.box {
+		if b == nil || b.Nrune <= 0 || b.Style.Kind&KindBold == 0 {
+			continue
+		}
+		want := b.Nrune * 12
+		if b.Wid != want {
+			t.Errorf("after SetStyleRange, bold box %q has Wid=%d, want %d (%d runes × bold-width 12)", string(b.Ptr), b.Wid, want, b.Nrune)
+		}
+	}
+}
+
 func TestKindHidden_SkipsGlyphPaintInDrawtext(t *testing.T) {
 	fr, disp := setupVariantFrame(t)
 	hidden := Style{Kind: KindHidden}

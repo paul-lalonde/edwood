@@ -90,14 +90,19 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 	nb1 := f.findbox(nb0, p0, p1)
 
 	// Walk boxes, applying styles. When the style changes mid-box,
-	// splitbox is called and nb1 grows.
+	// splitbox is called and nb1 grows. Box.Wid is recomputed
+	// against the new style's font variant so the box advances by
+	// the width the painter will actually use — without this, the
+	// first paint after a span lands clips the right edge of a
+	// bold glyph (the next box's background starts too early).
 	runeIdx := 0
 	nb := nb0
 	for nb < nb1 {
 		b := f.box[nb]
 		boxRunes := nrune(b)
 		if boxRunes <= 0 {
-			// Special box (tab or newline): exactly one rune.
+			// Special box (tab or newline): exactly one rune;
+			// width is metric/tabstop-driven, not font-driven.
 			b.Style = runeStyles[runeIdx]
 			runeIdx++
 			nb++
@@ -111,12 +116,14 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		}
 		if n == boxRunes {
 			b.Style = curStyle
+			b.Wid = f.fontFor(b.Style).BytesWidth(b.Ptr)
 			runeIdx += boxRunes
 			nb++
 			continue
 		}
 		f.splitbox(nb, n)
 		f.box[nb].Style = curStyle
+		f.box[nb].Wid = f.fontFor(f.box[nb].Style).BytesWidth(f.box[nb].Ptr)
 		runeIdx += n
 		nb++
 		nb1++
