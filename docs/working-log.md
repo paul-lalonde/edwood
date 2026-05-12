@@ -524,12 +524,50 @@ Not carried back (re-create during B2.2 restart):
 - B2.2-specific invariants (I-3, I-4, I-6, I-7, I-8, I-9,
   I-12) — they belong in the next attempt's design.
 
+### 2026-05-12 (latest) — Phase B5 rows B5.1 + B5.2 landed
+
+B5.1 (cce20b4) — bxscan flushes wipbox at space ↔ non-space
+transitions in its content branch; `isSpaceOnlyBox` added to
+`clean`'s merge predicate so word and space boxes never coalesce.
+B5.1 added `frame/word_split_test.go` with eight focused tests
+for bxscan + clean behavior.
+
+B5.2 (042fdc0) — `cklinewrap0` now wraps a content box as a
+whole when it doesn't fit at p.X. The B5.1 split-at-spaces
+work means whole-box wrap == word-boundary wrap automatically.
+A word longer than the line still terminates: it wraps to a
+fresh line first, then `canfit + splitbox` splits the tail.
+Order matches the stated preference — character-split only
+when the next line won't fit either.
+
+Sixteen pre-existing sub-tests in `TestInsert` /
+`TestInsertAligned` / `TestDelete` pinned upstream's
+partial-fit-split layout and are now marked
+`knowntofail: true` with pointer comments to `*_trial.html`
+under `frame/testdata`. B5.3 rewrites these against the B5
+layout; the trial HTMLs are committed as forensic input for
+that rewrite, and `CLAUDE.scripts/diff_baselines.sh` builds a
+side-by-side HTML diff page from them.
+
+Test status: `./regression.sh` green.
+
+Exit criterion for B5 is "markdown paragraphs wrap at word
+boundaries; the bold lead line wraps before the first word
+that doesn't fit". The scanner+wrap mechanics are in. Smoke
+test pending: confirm md2spans-produced bold lead lines wrap
+correctly in a running edwood, before B5.3.
+
 ## Next-session candidates
 
-1. Phase B5 — word-boundary line wrapping. Pure scanner +
-   clean change; orthogonal to variable line height. Three
-   rows in the plan.
-2. Restart Phase B2.2 with the per-box Y architecture:
+1. Smoke-test md2spans paragraph wrap in the rebuilt
+   `./edwood` binary (open a long bold paragraph; confirm it
+   wraps before the offending word, not mid-word). If that's
+   clean, Phase B5 exit criterion is met.
+2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
+   the B5 layout. Use `frame/testdata/*/_trial.html` as the
+   reference; verify each one shows the intended wrap
+   behavior before promoting it to baseline.
+3. Restart Phase B2.2 with the per-box Y architecture:
    - Each box stores `Y` (its line's top Y) and `Asc` (its
      line's baseline ascent — the max ascent of any font on
      the line).
@@ -540,9 +578,9 @@ Not carried back (re-create during B2.2 restart):
      so glyphs share a baseline regardless of font size.
    - Cursor (tick) and scroll (`Delete`'s blit, fill
      semantics) get explicit subrows.
-3. Slice C C1 — Replaced-element rendering for `b` directive.
-4. The Externalize-font-variant-map idea (project memory).
-5. Scrollbar refactor — `docs/designs/features/frame-scrollbar-spec.md`
+4. Slice C C1 — Replaced-element rendering for `b` directive.
+5. The Externalize-font-variant-map idea (project memory).
+6. Scrollbar refactor — `docs/designs/features/frame-scrollbar-spec.md`
    is a stub capturing the scroll-direction-alignment rule
    (B1 → SnapBottom; B3 / B2 / programmatic → SnapTop; file-top
    and tall-line edge cases override). Expand to a full design
