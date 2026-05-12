@@ -35,6 +35,7 @@ const (
 	QWevent
 	QWrdsel
 	QWwrsel
+	QWspans
 	QWtag
 	QWxdata
 	QMAX

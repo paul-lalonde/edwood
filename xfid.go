@@ -294,6 +294,14 @@ func xfidread(x *Xfid) {
 		ninep.ReadString(&fc, &x.fcall, w.CtlPrint(true))
 		x.respond(&fc, nil)
 
+	case QWspans:
+		// A5.2: Slice A stub. Serialization of the store back
+		// into directive form lands later (frame.Style.Fg is an
+		// opaque draw.Image; we need to track raw colors to
+		// produce a faithful dump).
+		ninep.ReadString(&fc, &x.fcall, "")
+		x.respond(&fc, nil)
+
 	case QWevent:
 		xfideventread(x, w)
 
@@ -492,6 +500,9 @@ func xfidwrite(x *Xfid) {
 
 	case QWctl:
 		xfidctlwrite(x, w)
+
+	case QWspans:
+		xfidspanswrite(x, w)
 
 	case QWdata:
 		a := w.addr

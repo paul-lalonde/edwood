@@ -333,6 +333,22 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   directives) is deferred; `draw.Image` is opaque so we can't
   recover RGB from a stored Style without an additional
   side-channel. 13 tests cover happy paths and rejections.
+- A5.2 — `QWspans` qid wired into xfid. `dat.go` enum + `fsys.go`
+  dirtab entry (mode 0600) make the file appear in every
+  window's wsys directory. Writes route through a new
+  `xfid_spans.go`: `xfidspanswrite` → `writeSpansToStore(w,
+  payload)` (testable helper) → `spans.ParseAll` →
+  `applySpansDirective` per directive. Each `s` directive's
+  color.Color fields are resolved to `draw.Image` via
+  `allocColorImage(display, color)` which packs RGBA into
+  `draw.Color` (0xRRGGBBAA) and calls `display.AllocImage`.
+  Reads return an empty string for Slice A — full serialization
+  (Snapshot → directives) is deferred (see A5.1 note about
+  draw.Image opacity). Tests cover set / clear paths, multi-
+  directive payloads, bg-only, bad directives, and nil-spans
+  defense; they bypass `InsertAt` (which would trigger the
+  tag-status observer chain) by pre-loading the body buffer
+  with `file.MakeObservableEditableBuffer("name", []rune("..."))`.
 
 ## Next-session candidates
 

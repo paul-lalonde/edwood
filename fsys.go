@@ -77,6 +77,7 @@ var dirtabw = []*DirTab{
 	{"event", plan9.QTFILE, QWevent, 0600},
 	{"rdsel", plan9.QTFILE, QWrdsel, 0400},
 	{"wrsel", plan9.QTFILE, QWwrsel, 0200},
+	{"spans", plan9.QTFILE, QWspans, 0600},
 	{"tag", plan9.QTAPPEND, QWtag, 0600 | plan9.DMAPPEND},
 	{"xdata", plan9.QTFILE, QWxdata, 0600},
 }

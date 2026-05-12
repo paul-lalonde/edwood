@@ -73,7 +73,7 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
 | A5.1 | [x] §6.4 directive format (`s`, `c`, `fg=`, `bg=` only); colors as `color.Color` (caller resolves to draw.Image) — keeps spans pkg out of `draw` dep | [x] s/c happy paths; fg-only / bg-only / both; b rejected; unknown keys rejected; malformed ints / colors rejected; ParseAll skips blanks, stops at first error | [x] `spans/parse.go`: `ParseDirective(line)` + `ParseAll(text)` returning `Directive{Op, Off, Len, Fg, Bg}` | [x] (pending commit) — `spans: directive parser (color-only)` | Serializer (Snapshot→directives) deferred — `draw.Image` is opaque; track raw colors when we get to A5.3 or Slice B. |
-| A5.2 | [ ] §8.3 `QWspans` qid | [ ] xfid open/read/write/close; multiple concurrent readers; "last writer wins" | [ ] Add qid in `xfid.go`; hook to per-window store | [ ] `xfid: add QWspans qid` | |
+| A5.2 | [x] §8.3 `QWspans` qid | [x] write applies single/multi directives; set / clear paths; color resolution observed in store; bad directive → error; nil spans → error; bg-only path | [x] `QWspans` in dat.go enum + fsys.go dirtab; xfid read = empty stub; xfid write → `xfidspanswrite` → `writeSpansToStore` (testable helper); `allocColorImage` resolves color.Color → draw.Image | [x] (pending commit) — `xfid: add QWspans qid` | Read is a stub (serialization deferred per A5.1 note); open/close nopen tracking deferred until A6 needs it. |
 | A5.3 | [ ] Integration | [ ] Hand-written test producer writes directives over 9P; spans changes propagate to Text and onto the frame | [ ] Wire end-to-end | [ ] `text: integrate spans file with producer flow` | |
 
 ## Phase A6 — 'S' event
