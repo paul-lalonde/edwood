@@ -7,36 +7,56 @@ import (
 )
 
 func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
-	// log.Println("DrawText at", pt, "NoRedraw", f.NoRedraw, text)
 	for _, b := range f.box {
 		pt = f.cklinewrap(pt, b)
-		// log.Printf("box [%d] %#v pt %v NoRedraw %v nrune %d\n",  nb, string(b.Ptr), pt, f.NoRedraw, b.Nrune)
-
-		if !f.noredraw && b.Nrune >= 0 {
-			t := text
-			// Per-box style override. When KindColored is set,
-			// Fg/Bg if non-nil substitute for the frame-default
-			// text color and repaint the box's background rect.
-			// fillNonGlyphAreas already painted the run-wide
-			// background with the frame default; the per-box Bg
-			// paint is only needed for non-default backgrounds.
-			if b.Style.Kind&KindColored != 0 {
-				if b.Style.Fg != nil {
-					t = b.Style.Fg
-				}
-				if b.Style.Bg != nil {
-					rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
-					f.background.Draw(rect, b.Style.Bg, nil, image.Point{})
-				}
-			}
-			// KindHidden suppresses the glyph paint; the box's
-			// background is preserved so the rect doesn't show
-			// ghosts of prior content.
-			if b.Style.Kind&KindHidden == 0 {
-				f.background.Bytes(pt, t, image.Point{}, f.fontFor(b.Style), b.Ptr)
-			}
-		}
+		f.paintBox(b, pt, text, back, false)
 		pt.X += b.Wid
+	}
+}
+
+// paintBox paints one content box at pt. text and back are the
+// frame-default text and background colors; per-box Style
+// overrides (Fg/Bg when KindColored is set) take precedence.
+//
+// If clearBg is true, the box's background rect is always
+// painted before the glyph (using Style.Bg if set, else back).
+// If clearBg is false, the rect is painted only when the box
+// carries an explicit Style.Bg override — drawtext takes this
+// path because fillNonGlyphAreas already painted the run-wide
+// default background.
+//
+// paintBox is the *single* place in the frame package that
+// resolves a content box's font (via fontFor), resolves its
+// effective fg/bg, paints background, paints glyphs, and applies
+// per-box decorations (KindHidden suppression here, KindHRule in
+// row B4.2, future KindUnderline). Adding a new decoration is a
+// one-site edit and lands on every paint path (initial draw and
+// re-style repaint) automatically.
+//
+// Special boxes (Nrune < 0) and the noredraw mode produce no
+// output here; callers still walk pt past them.
+func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, clearBg bool) {
+	if f.noredraw || b.Nrune < 0 {
+		return
+	}
+	fg := text
+	bg := back
+	hasBgOverride := false
+	if b.Style.Kind&KindColored != 0 {
+		if b.Style.Fg != nil {
+			fg = b.Style.Fg
+		}
+		if b.Style.Bg != nil {
+			bg = b.Style.Bg
+			hasBgOverride = true
+		}
+	}
+	if clearBg || hasBgOverride {
+		rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
+		f.background.Draw(rect, bg, nil, image.Point{})
+	}
+	if b.Style.Kind&KindHidden == 0 {
+		f.background.Bytes(pt, fg, image.Point{}, f.fontFor(b.Style), b.Ptr)
 	}
 }
 
@@ -63,13 +83,12 @@ func (f *frameimpl) fontFor(s Style) draw.Font {
 }
 
 // repaintBoxRange repaints boxes [nb0, nb1) starting at pt. Each
-// box's background rect is always cleared (using its effective bg
-// — Style.Bg if KindColored with Bg, else back) before the glyph
-// is drawn, so the function is safe to call over a styled range
+// box's background rect is always cleared before the glyph is
+// drawn, so the function is safe to call over a styled range
 // that previously rendered with a different style. Used by
 // SetStyleRange; the upstream Insert path uses drawtext, which
-// relies on fillNonGlyphAreas having already painted the run-wide
-// background.
+// relies on fillNonGlyphAreas having already painted the
+// run-wide background.
 func (f *frameimpl) repaintBoxRange(pt image.Point, nb0, nb1 int, text draw.Image, back draw.Image) {
 	if nb0 < 0 {
 		nb0 = 0
@@ -80,23 +99,7 @@ func (f *frameimpl) repaintBoxRange(pt image.Point, nb0, nb1 int, text draw.Imag
 	for nb := nb0; nb < nb1; nb++ {
 		b := f.box[nb]
 		pt = f.cklinewrap(pt, b)
-		if !f.noredraw && b.Nrune >= 0 {
-			bg := back
-			t := text
-			if b.Style.Kind&KindColored != 0 {
-				if b.Style.Fg != nil {
-					t = b.Style.Fg
-				}
-				if b.Style.Bg != nil {
-					bg = b.Style.Bg
-				}
-			}
-			rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
-			f.background.Draw(rect, bg, nil, image.Point{})
-			if b.Style.Kind&KindHidden == 0 {
-				f.background.Bytes(pt, t, image.Point{}, f.fontFor(b.Style), b.Ptr)
-			}
-		}
+		f.paintBox(b, pt, text, back, true)
 		pt.X += b.Wid
 	}
 }

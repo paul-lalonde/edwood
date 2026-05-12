@@ -7,6 +7,23 @@ import (
 	"unicode/utf8"
 )
 
+// boxWid returns the width a content box (Nrune > 0) should
+// carry for its current (Style, Ptr). It is the single place
+// that resolves Style.Kind to a font variant for width
+// computation: every site that needs "the right width for this
+// box" goes through here. validateboxmodel uses it as the
+// invariant for b.Wid.
+//
+// Special boxes (Nrune < 0, i.e. tabs/newlines) are out of scope
+// — their widths come from the tabstop / metric paths in
+// newwid0 — and calling boxWid on one is a programmer error.
+func (f *frameimpl) boxWid(b *frbox) int {
+	if b.Nrune < 0 {
+		panic(fmt.Sprintf("frame.boxWid: not valid for special boxes (Nrune=%d)", b.Nrune))
+	}
+	return f.fontFor(b.Style).BytesWidth(b.Ptr)
+}
+
 // addbox adds  n boxes after bn and shifts the rest up: * box[bn+n]==box[bn]
 func (f *frameimpl) addbox(bn, n int) {
 	if bn > len(f.box) {
@@ -84,7 +101,7 @@ func (f *frameimpl) truncatebox(b *frbox, n int) {
 	}
 	b.Nrune -= n
 	b.Ptr = b.Ptr[0:runeindex(b.Ptr, b.Nrune)]
-	b.Wid = f.fontFor(b.Style).BytesWidth(b.Ptr)
+	b.Wid = f.boxWid(b)
 }
 
 // chopbox removes the first n chars from box b without allocation.
@@ -97,7 +114,7 @@ func (f *frameimpl) chopbox(b *frbox, n int) {
 	i := runeindex(b.Ptr, n)
 	b.Ptr = b.Ptr[i:]
 	b.Nrune -= n
-	b.Wid = f.fontFor(b.Style).BytesWidth(b.Ptr)
+	b.Wid = f.boxWid(b)
 }
 
 // splitbox duplicates box [bn] and divides it at rune n into prefix and suffix boxes.
@@ -194,9 +211,8 @@ func (f *frameimpl) validateboxmodel(format string, args ...interface{}) {
 		}
 
 		// The width is right.
-		if b.Nrune >= 0 {
-			s := string(b.Ptr)
-			if b.Wid != f.fontFor(b.Style).StringWidth(s) {
+		if b.Nrune > 0 {
+			if b.Wid != f.boxWid(b) {
 				log.Printf(format, args...)
 				f.Logboxes("-- box with contents has invalid width --")
 				panic("-- box with contents has invalid width --")

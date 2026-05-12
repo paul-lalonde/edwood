@@ -117,14 +117,14 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		}
 		if n == boxRunes {
 			b.Style = curStyle
-			b.Wid = f.fontFor(b.Style).BytesWidth(b.Ptr)
+			b.Wid = f.boxWid(b)
 			runeIdx += boxRunes
 			nb++
 			continue
 		}
 		f.splitbox(nb, n)
 		f.box[nb].Style = curStyle
-		f.box[nb].Wid = f.fontFor(f.box[nb].Style).BytesWidth(f.box[nb].Ptr)
+		f.box[nb].Wid = f.boxWid(f.box[nb])
 		runeIdx += n
 		nb++
 		nb1++
