@@ -82,17 +82,21 @@ Minimum end-to-end vertical: `Style` carries only `Fg` and `Bg`;
 |---|---|---|---|---|---|
 | A6.1 | [x] §9.3 emission conditions | [x] Fires on body selection change with spans attached and listener open; suppressed on tag, nil spans, no listener, unchanged selection; fires again on subsequent change | [x] `Text.SetSelect` saves old (q0, q1), then after the update calls `t.w.Eventf("S%d %d 0 0 \n", q0, q1)` if `t.what == Body && t.spans != nil && selection changed`. The listener gate (`nopen[QWevent] > 0`) is enforced by Eventf itself | [x] (pending commit) — `text: emit S event on selection change` | Format matches the published event-file vocabulary (single-char prefix + four space-separated fields). |
 
-## Phase A7 — `edcolor` clean-room rewrite
+## Phase A7 — `edcolor` clean-room rewrite — **SKIPPED**
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| A7.1 | [ ] §11 `edcolor` contract | [ ] Golden-output tests on representative source files per language | [ ] Clean-room re-impl as 9P client; per-language colorizers | [ ] `cmd/edcolor: clean-room rewrite` | |
-| A7.2 | [ ] §9.3 'S'-driven highlight | [ ] On `S` event, all matches of selected token are highlighted; on selection clear, highlights drop | [ ] Watch event stream; emit/clear color spans | [ ] `cmd/edcolor: selection-driven highlights` | |
+| A7.1 | [skip] §11 `edcolor` contract | n/a | n/a | n/a | Skipped — existing external `edcolor` (from the upstream tree at `/Users/paul/dev/edwood/cmd/edcolor`) is reused. Slice A's wire-format compliance (the protocol-rework commit and silent-flag-accept commit) makes the external tool work against the cleanroom edwood end-to-end. |
+| A7.2 | [skip] §9.3 'S'-driven highlight | n/a | n/a | n/a | Same: the external `edcolor` already implements the `S`-driven highlight pattern; A6's emission in `Text.SetSelect` is the cleanroom side of that contract. |
 
-**Slice A exit criterion.** `edcolor` syntax-colors a Go file in
-an acme window; highlights-on-selection track the cursor. Plain
-text and tag bars byte-identical to upstream. `./regression.sh`
-green.
+**Slice A exit criterion (as actually shipped).** The cleanroom
+`edwood` binary runs the external `edcolor` (and `md2spans`,
+once Slice B / C land) without modification. Plain text and tag
+bars are byte-identical to upstream. `./regression.sh` green.
+The S event fires correctly; the spans store updates on
+producer writes; the frame repaints styled runs. A7 (a
+cleanroom rewrite of `edcolor`) is deferred indefinitely — the
+external tool serves our needs.
 
 ---
 

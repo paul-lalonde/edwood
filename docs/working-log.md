@@ -418,6 +418,16 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   fires again" case. Smoke test with prior `edcolor` should
   now work end-to-end: edcolor reacts to S events to
   re-colorize matches of the current selection.
+- **Slice A closing**. A7 (cleanroom `edcolor` rewrite)
+  skipped — the external prior `edcolor` works unmodified
+  against the cleanroom edwood now that A1–A6 are in place.
+  The smoke test was confirmed live; the user reported it
+  working. Slice A's exit criterion is therefore met by way
+  of the external tool: cleanroom edwood + external edcolor
+  = working syntax coloring with selection-driven highlight.
+  Bilateral wire-format compliance is the contract; the
+  in-repo rewrite was always an option, not a requirement.
+  Next slice: Slice B (typographic variation).
 
 ## Next-session candidates
 
