@@ -97,6 +97,45 @@ func TestA52_WriteSpansToStore_NilSpansErrors(t *testing.T) {
 	}
 }
 
+func TestA53_Integration_WriteSpansPropagatesToFrame(t *testing.T) {
+	// End-to-end check for Slice A's producer-driven update path:
+	//   spans-file write
+	//      → writeSpansToStore (A5.2)
+	//      → spans.Store.SetRegion (A3.1)
+	//      → Observe callback registered by attachSpans (A4.4)
+	//      → frame.SetStyleRange (A2.2 via recordingFrame).
+	w := setupWindowForSpansWriteTest(t)
+	rf := newRecordingFrame()
+	rf.nchars = w.body.file.Nr() // model the whole buffer as visible
+	w.body.fr = rf
+	w.body.what = Body
+	w.body.org = 0
+	// No need to re-attach: the A4.4 Observe callback closes
+	// over t (the *Text), so setting t.fr above is picked up
+	// when the callback runs.
+
+	if err := writeSpansToStore(w, "s 2 4 fg=#ff0000"); err != nil {
+		t.Fatalf("writeSpansToStore: %v", err)
+	}
+
+	if rf.setStyleRangeCalls != 1 {
+		t.Fatalf("SetStyleRange calls = %d, want 1 (producer-driven update should repaint)", rf.setStyleRangeCalls)
+	}
+	if rf.lastStyleRangeP0 != 2 || rf.lastStyleRangeP1 != 6 {
+		t.Errorf("SetStyleRange args = (%d,%d), want (2,6)", rf.lastStyleRangeP0, rf.lastStyleRangeP1)
+	}
+	// The styled run inside the affected range carries the new color.
+	gotColored := false
+	for _, sr := range rf.lastStyleRangeStyles {
+		if sr.Style.Kind&frame.KindColored != 0 && sr.Style.Fg != nil {
+			gotColored = true
+		}
+	}
+	if !gotColored {
+		t.Errorf("no colored run in SetStyleRange styles: %+v", rf.lastStyleRangeStyles)
+	}
+}
+
 func TestA52_WriteSpansToStore_BgOnly(t *testing.T) {
 	w := setupWindowForSpansWriteTest(t)
 	if err := writeSpansToStore(w, "s 2 4 bg=#0000ff"); err != nil {

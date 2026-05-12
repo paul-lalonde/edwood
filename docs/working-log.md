@@ -349,6 +349,22 @@ Every Phase >= 1 commit must keep `./regression.sh` green.
   defense; they bypass `InsertAt` (which would trigger the
   tag-status observer chain) by pre-loading the body buffer
   with `file.MakeObservableEditableBuffer("name", []rune("..."))`.
+- A5.3 — integration test pinning the producer-driven path:
+  `writeSpansToStore` → `Store.SetRegion` → A4.4 Observe
+  callback → `Frame.SetStyleRange` with the right frame-relative
+  offsets and a `KindColored` run. We test the *apply* chain
+  (which is what mattered to get right); the 9P I/O wrapping
+  isn't end-to-end tested at the protocol level. A manual smoke
+  test using the prior repo's `edcolor` against the cleanroom
+  edwood is the natural next confidence step.
+  One gotcha during test writing: a second `attachSpans` call
+  registers a SECOND Observe callback (it doesn't replace the
+  first). Doubled callbacks meant SetStyleRange fired twice.
+  Fix: avoid re-attaching; the callback closes over `t` (a
+  `*Text`), so swapping `t.fr` is picked up on the next
+  invocation. Worth being careful about: if attachSpans ever
+  needs to be re-callable, it should unregister the previous
+  observer first.
 
 ## Next-session candidates
 
