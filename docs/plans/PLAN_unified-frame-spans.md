@@ -120,11 +120,28 @@ frame learns variable line heights.
 | B2.2 | [ ] §5.4 SetStyleRange line-height recompute | [ ] Range flip changes line height; reflow correct; scroll math holds | [ ] Per-line height tracking; recompute on font deltas | [ ] `frame: variable line-height in SetStyleRange` | The substantive piece of Slice B. |
 | B2.3 | [ ] §13.3 perf | [ ] Plain-text Insert throughput within 5% of upstream after this change | [ ] Profile + optimize hot path | [ ] (only if regression observed) | Confirm the new code didn't slow the fast path. |
 
-## Phase B3 — (optional) heading-only `md2spans`
+## Phase B3 — (optional) heading-only `md2spans` — **SKIPPED**
 
 | # | Design | Tests | Iterate | Commit | Notes |
 |---|---|---|---|---|---|
-| B3.1 | [ ] §11 `md2spans` (headings + emphasis only) | [ ] Golden tests on minimal markdown | [ ] Subset implementation | [ ] `cmd/md2spans: heading + emphasis (slice B)` | Skip and roll into Slice C if cleaner. |
+| B3.1 | [skip] §11 `md2spans` (headings + emphasis only) | n/a | n/a | n/a | Skipped — the external `md2spans` from `/Users/paul/dev/edwood/cmd/md2spans` is reused once Phase B4 lands the parser surface and the rendering for `hrule` / `family=code`. |
+
+## Phase B4 — md2spans compatibility (parser surface + small render wins)
+
+The remaining work to make external `md2spans` produce useful output
+end-to-end. See design §12 Phase B4 for R-B4.1..R-B4.11.
+
+| # | Design | Tests | Iterate | Commit | Notes |
+|---|---|---|---|---|---|
+| B4.1 | [ ] §6.4 + R-B4.1, R-B4.2, R-B4.3, R-B4.4 | [ ] `b OFF LEN ...` → `OpNoOp`; `begin region X k=v` → `OpNoOp`; `end region` → `OpNoOp`; malformed `b` (short field count) still errors; contiguity finds previous `OpSetStyle` across `OpNoOp`s; `family=code` sets `Kind & KindCodeFamily`; `hrule` sets `Kind & KindHRule`; existing `bold`/`italic`/`hidden` translation unchanged | [ ] Add `OpNoOp` to `spans.Op`; rewrite `ParseDirective` switch on `b`/`begin`/`end` to construct `OpNoOp`; teach `ParseAll` contiguity to skip `OpNoOp`; teach `parseSet` flag loop to set new Kind bits | [ ] `spans: silently accept b/region directives; translate hrule and family=code` | All parser changes. |
+| B4.1.5 | [ ] R-B4.12 (paintBox); R-B4.13 (boxWid) | [ ] `paintBox` is called once per styled paint of each content box from both `drawtext` and `repaintBoxRange`; visual baseline (existing tests) byte-identical pre/post; `boxWid(b)` returns the same value as the prior 8 inlined sites for every test fixture; `validateboxmodel` panics when a content box's `Wid` doesn't match `boxWid(b)`; the §13.2 frame test suite continues green | [ ] Extract `(*frameimpl).paintBox(b, pt, text, back)` consolidating font lookup + color resolution + bg + glyph + KindHidden suppression; reduce `drawtext` and `repaintBoxRange` to walk-and-call loops; extract `(*frameimpl).boxWid(b *frbox) int`; replace inline `fontFor(b.Style).BytesWidth(b.Ptr)` at insert.go:23, box.go:87/100/199, util.go:34, ptofchar.go:23/100, draw.go:238 with `boxWid` calls; extend `validateboxmodel`'s width-equality check to use `boxWid` | [ ] `frame: extract paintBox and boxWid helpers (refactor)` | Pure refactor; no behavior change. Lands before B4.2 so the new bits attach to one site. |
+| B4.2 | [ ] §5.3 + R-B4.5; §5.1 + R-B4.6; §5.4 + R-B4.7, R-B4.8, R-B4.9 | [ ] `KindHRule` and `KindCodeFamily` bits exist at the §5.3 positions; `OptCodeFont` installs a fontCode slot; `fontFor` returns it for `KindCodeFamily` and falls back to base when not configured; `KindCodeFamily` combined with `KindBold` still picks fontCode (no bold-code variant in v1); a box with `KindHRule` produces a `Draw(rect, fg, ...)` op of 1-pixel height across the box's rect at the row's vertical center; the glyph paint still happens; `repaintBoxRange` paints the rule on re-style too | [ ] Add `KindHRule`/`KindCodeFamily` to `frame/style.go`; add `fontCode` field + `OptCodeFont`; extend `fontFor` to consult code first; in `paintBox` (post-B4.1.5), after the glyph paint, draw the hrule line if the bit is set | [ ] `frame: render hrule and family=code` | Small now — single edit in `paintBox` for hrule plus the font-lookup extension. |
+| B4.3 | [ ] §7 + R-B4.10 | [ ] `tryLoadFontVariant` returns the GoMono variant for a GoRegular base; integration test (or smoke description in working log) showing the frame Init receives the code font when the base font matches a known family | [ ] Extend `acme.tryLoadFontVariant` and `acme.go` font-loading site to probe + thread `OptCodeFont` through `frame.Init` | [ ] `text: thread code-family variant font through Init` | Text/acme wiring. |
+
+**Phase B4 exit criterion.** External `md2spans` runs against the
+cleanroom edwood end-to-end; bold/italic/links/hrule/family=code
+all render. Slice A and Slice B producers unaffected.
+`./regression.sh` green.
 
 **Slice B exit criterion.** Body text carries mixed bold, italic,
 underline, and font sizes; line heights adapt. Slice A producers

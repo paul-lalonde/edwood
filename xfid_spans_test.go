@@ -132,9 +132,38 @@ func TestB4_WriteSpansToStore_ItalicAndHidden(t *testing.T) {
 }
 
 func TestA52_WriteSpansToStore_BadDirectiveErrors(t *testing.T) {
+	// After Phase B4 a well-formed `b` line is OpNoOp; use a
+	// truly unknown op to exercise the error path.
 	w := setupWindowForSpansWriteTest(t)
-	if err := writeSpansToStore(w, "b 0 1 100 50 - - image:/x"); err == nil {
-		t.Errorf("expected error for `b` directive (Slice C only), got nil")
+	if err := writeSpansToStore(w, "zzz 0 1 100 50"); err == nil {
+		t.Errorf("expected error for unknown directive, got nil")
+	}
+}
+
+func TestB4_WriteSpansToStore_IgnoresNoOpDirectives(t *testing.T) {
+	// md2spans output interleaves `begin region` markers with
+	// styled spans and emits inline-image `b` lines. The
+	// applier must accept them silently and still apply the
+	// styled spans either side of them.
+	w := setupWindowForSpansWriteTest(t)
+	payload := "" +
+		"s 0 5 #ff0000\n" +
+		"begin region code\n" +
+		"s 5 3 #00ff00\n" +
+		"end region\n" +
+		"b 8 0 80 80 - -\n" +
+		"s 8 2 -\n"
+	if err := writeSpansToStore(w, payload); err != nil {
+		t.Fatalf("writeSpansToStore: %v", err)
+	}
+	// The first `s` directive (0..5) should have applied with
+	// red foreground.
+	runs := w.body.spans.GetStyleRuns(0, 10)
+	if len(runs) == 0 {
+		t.Fatalf("no runs returned")
+	}
+	if runs[0].Style.Kind&frame.KindColored == 0 || runs[0].Style.Fg == nil {
+		t.Errorf("first styled span must still apply; got %+v", runs[0])
 	}
 }
 

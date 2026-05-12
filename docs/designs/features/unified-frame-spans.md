@@ -316,17 +316,26 @@ const (
     // Slice A
     KindColored Kind = 1 << iota  // = 1, Fg / Bg meaningful
 
-    // Slice B
-    KindBold       // = 2,  bold weight
-    KindItalic     // = 4,  italic angle
-    KindUnderline  // = 8,  underline decoration
-    KindFontIdx    // = 16, FontIdx field meaningful
+    // Slice B (typographic variation that doesn't change line
+    // height — all three are bare flag tokens in the published
+    // spans protocol).
+    KindBold     // = 2, bold weight
+    KindItalic   // = 4, italic angle
+    KindHidden   // = 8, glyph is not painted (frame still paints bg)
 
-    // Slice C
-    KindReplaced    // = 32,  Replaced* and HOffset meaningful
-    KindBlockquote  // = 64,  BlockquoteDepth meaningful
-    KindInCodeBlock // = 128
-    KindInTable     // = 256
+    // Slice B.4 (md2spans compatibility — no line-height change;
+    // §12 Phase B4).
+    KindHRule       // = 16, draw horizontal rule on the row containing this run
+    KindCodeFamily  // = 32, render with the code (monospace) font variant
+
+    // Slice C (replaced elements + block context — line height
+    // and layout may vary).
+    KindFontIdx     // = 64,  FontIdx field meaningful
+    KindUnderline   // = 128, underline decoration
+    KindReplaced    // = 256, Replaced* and HOffset meaningful
+    KindBlockquote  // = 512, BlockquoteDepth meaningful
+    KindInCodeBlock // = 1024
+    KindInTable     // = 2048
 )
 
 // IsPlain reports whether s carries no styling — i.e., a frame
@@ -544,11 +553,15 @@ s <off> <len> <fg> [<bg>]          # styled run; positional colors
   **silently accepted** in Slice A — the parser recognises and
   discards them so producers like the prior `edcolor` work
   unmodified, but the styling they convey does not yet apply.
-  Slice B and Slice C will translate them into real
-  rendering. Unknown flag spellings remain errors.
+  Slice B translates `bold` / `italic` / `hidden` into real
+  rendering; Slice B.4 (§12 Phase B4) translates `hrule` and
+  `family=code`. Unknown flag spellings remain errors.
 - The `b` directive (replaced elements) and `begin region` /
-  `end region` directives are rejected entirely in Slice A;
-  Slice C wires them up.
+  `end region` directives are rejected entirely in Slice A. In
+  Phase B4 (§12) the parser **silently accepts** them — it
+  consumes the line and emits `OpNoOp` so md2spans output
+  flows through without errors — but the directives are
+  inert until Slice C wires them up.
 
 **Per-write rules** (the parser enforces these):
 
@@ -1089,13 +1102,135 @@ learn to recompute line height when font flags change.
   fonts on a line; scroll math correctness when line heights
   vary.
 
-#### Phase B3 — (optional) heading-only `md2spans`
+#### Phase B3 — (optional) heading-only `md2spans` — **SKIPPED**
 
 - A minimal `md2spans` that emits heading and emphasis directives
   only. Enough to demonstrate Slice B end-to-end on a markdown
   file before Slice C lands the full producer.
-- Skip this phase if the team wants to consolidate `md2spans` in
-  Slice C.
+- Skipped: we reuse the existing external `md2spans` (from
+  `/Users/paul/dev/edwood/cmd/md2spans`) once Phase B4 lands the
+  parser surface and the small render wins that bring its output
+  to a visually meaningful subset.
+
+#### Phase B4 — md2spans compatibility (parser surface + small render wins)
+
+The external `md2spans` emits the published-protocol's full surface
+including directives Slice A rejects (`b`, `begin region`,
+`end region`) and flag tokens Slice A/B silently accept but don't
+render (`hrule`, `family=NAME`, `scale=N.N`). Until Slice C lands the
+heavy work — `b` rendering, block-context layout, variable line
+height for `scale=` — md2spans output crashes the parser the moment
+it reaches a `begin region` line, so nothing renders.
+
+This phase brings md2spans **end-to-end** by (a) widening the
+parser so its full output is accepted, and (b) translating two
+remaining flag tokens — `hrule` and `family=code` — into real
+rendering. Both are typographic decorations that do not change
+line height, so they fit the Slice B exit invariants. Three
+remaining tokens (`scale=N.N`, `family=NAME` for non-code, the
+`b`/region directives themselves) stay inert here and are picked up
+in Slice C.
+
+Before the new bits land, a small refactor consolidates layout
+machinery so this slice and Slice C don't keep multiplying paint
+sites. See R-B4.12 / R-B4.13 below.
+
+Numbered requirements:
+
+- **R-B4.1** (parser).  `ParseDirective` returns
+  `Directive{Op: OpNoOp}` (a new op) for `b <args>`,
+  `begin region <args>`, and `end region [<args>]` lines instead
+  of an error. Malformed `b` lines that are not parseable as the
+  published spec (missing required fields) still error — silent
+  accept only covers well-formed lines.
+- **R-B4.2** (parser).  Contiguity validation in `ParseAll` finds
+  the previous `OpSetStyle` directive across intervening `OpNoOp`
+  directives. Two `s` directives separated by `begin region` must
+  still be contiguous; the parser does not silently allow a gap.
+- **R-B4.3** (parser).  The `hrule` flag token on an `s` directive
+  sets `Directive.Kind |= frame.KindHRule`.
+- **R-B4.4** (parser).  The `family=code` flag token on an `s`
+  directive sets `Directive.Kind |= frame.KindCodeFamily`. Other
+  `family=NAME` values remain silent-accept-no-bit (unchanged from
+  Slice A).
+- **R-B4.5** (frame data types).  `frame.Kind` adds `KindHRule`
+  and `KindCodeFamily` bits at the positions defined in §5.3.
+  `IsPlain()` is unchanged — any non-zero `Kind` is non-plain.
+- **R-B4.6** (frame opts).  `frame.OptCodeFont(f draw.Font)`
+  installs a code-family variant font on the frame, analogous to
+  `OptBoldFont`. The frame stores it in a new `fontCode` field.
+- **R-B4.7** (frame font selection).  `fontFor(Style)` returns the
+  code font when `Kind & KindCodeFamily != 0` and the code font is
+  configured; otherwise it falls back to the existing
+  weight/italic resolution. A frame without `OptCodeFont`
+  configured renders `KindCodeFamily` runs in the base font (graceful
+  degradation, same pattern as bold/italic).
+- **R-B4.8** (frame rendering).  After painting glyphs and
+  background, a box whose `Style.Kind & KindHRule != 0` has a
+  1-pixel horizontal line drawn across its rectangle at the row's
+  vertical center. The line uses the box's effective foreground
+  color (`Style.Fg` if set, else the frame text color). Both
+  `drawtext` and `repaintBoxRange` honor this rule so the line
+  appears on initial paint and on re-style.
+- **R-B4.9** (frame rendering).  The marker glyphs themselves
+  continue to render normally (the "markers stay visible" stance
+  shared by every other v1 directive). The horizontal line is
+  drawn over the same row but does not suppress the glyphs.
+- **R-B4.10** (Text wiring).  `acme.tryLoadFontVariant` probes the
+  base font's family for a code variant (the existing GoMono path
+  it already probes for bold/italic falls under this) and threads
+  the result through to `frame.Init` via `OptCodeFont`. If no
+  variant is found, the frame is built without it and Slice B
+  graceful-degrades.
+- **R-B4.11** (regression).  Slice A and Slice B producers
+  (`edcolor`, hand-issued color directives) continue to work with
+  no behavior change. `./regression.sh` green.
+- **R-B4.12** (refactor — `paintBox`).  A single method
+  `(*frameimpl).paintBox(b *frbox, pt image.Point, text, back draw.Image)`
+  consolidates per-box styled paint. It is the only function
+  in `frame/draw.go` that resolves a box's effective font
+  (`fontFor`), resolves a box's effective fg/bg from
+  `KindColored`, paints the box's background rect, paints
+  glyphs, applies `KindHidden`, or paints decorations
+  (`KindHRule` after B4.2 lands; future `KindUnderline` from
+  Slice C lands the same way). `drawtext` and
+  `repaintBoxRange` reduce to walk-and-call loops over
+  `paintBox`. The observable invariant: adding a new
+  decoration that paints on every render path requires a
+  one-site edit in `paintBox`.
+- **R-B4.13** (refactor — `boxWid`).  A single helper
+  `(*frameimpl).boxWid(b *frbox) int` returns the width a
+  content box (`b.Nrune > 0`) should carry given its current
+  `(Style, Ptr)`. Every site that previously inlined
+  `f.fontFor(b.Style).BytesWidth(b.Ptr)` (or
+  `StringWidth(string(b.Ptr))`) calls `boxWid` instead.
+  `validateboxmodel` (under `-validateboxes`) asserts
+  `b.Wid == f.boxWid(b)` for every content box; this
+  structurally prevents the SetStyleRange-forgot-Wid bug
+  class. Special boxes (tabs/newlines, `b.Nrune < 0`) are out
+  of scope and retain their tabstop/metric-driven widths.
+
+Not in scope for Phase B4:
+
+- `scale=N.N` rendering (variable line height — Slice C).
+- `b` directive *rendering* (the parser accepts but ignores; Slice
+  C C1 lands the replaced-element render path).
+- `begin region` / `end region` *semantics* (the parser accepts
+  but the applier discards; Slice C C4 lands block-context layout).
+- `family=NAME` for non-`code` values (no defined behavior; v1
+  external `md2spans` only emits `family=code`).
+- An hrule line that spans the full *row* width instead of just
+  the marker box's `Wid`. v1 draws within the box; a full-row
+  hrule is a polish item if visible ugliness motivates it.
+
+**Exit criterion for Phase B4.** External `md2spans` runs against
+the cleanroom edwood end-to-end. Body text renders bold, italic,
+bold-italic, inline-link colors, **horizontal rules**, and inline
+`family=code` spans (and fenced code-block bodies, which md2spans
+also emits as `family=code` over the body runes). Headings,
+images, code-block backgrounds, blockquote indents, and list
+markers stay unstyled until Slice C lands their machinery.
+Slice A/B producers unaffected.
 
 **Exit criterion for Slice B.** Body text can carry mixed bold,
 italic, underline, and font sizes; line heights adapt; selection,

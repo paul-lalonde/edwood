@@ -111,30 +111,100 @@ func TestParseDirective_SetStyle_DashFgDashBg(t *testing.T) {
 // Rejections (Slice A scope)
 // =====================================================================
 
-func TestParseDirective_RejectsBDirective(t *testing.T) {
-	_, err := ParseDirective("b 0 1 100 50 - - image:/x")
-	if err == nil {
-		t.Errorf("expected error for `b` directive (Slice C feature), got nil")
+// R-B4.1: `b`, `begin region`, `end region` are silently accepted
+// and emit OpNoOp directives. The applier ignores them. Lets
+// md2spans output flow through unmodified until Slice C lands
+// rendering for replaced elements / block context.
+
+func TestParseDirective_BAcceptedAsNoOp(t *testing.T) {
+	cases := []string{
+		"b 0 1 100 50 - - image:/x",
+		"b 5 0 200 100 #ff0000 #00ff00 placement=below image:/foo",
+		"b 12 3 80 80 - -",
+	}
+	for _, line := range cases {
+		d, err := ParseDirective(line)
+		if err != nil {
+			t.Errorf("expected accept-as-noop for %q, got error: %v", line, err)
+			continue
+		}
+		if d.Op != OpNoOp {
+			t.Errorf("%q: Op = %v, want OpNoOp", line, d.Op)
+		}
 	}
 }
 
-func TestParseDirective_RejectsRegionDirectives(t *testing.T) {
-	for _, line := range []string{
-		"begin region code",
-		"end region",
-	} {
+func TestParseDirective_BRejectsMalformed(t *testing.T) {
+	// Silent-accept only covers well-formed `b` lines per the
+	// published spec (at least off, len, width, height, fg, bg).
+	// Truncated forms still error so producers don't accidentally
+	// generate broken-but-accepted output.
+	cases := []string{
+		"b",
+		"b 0",
+		"b 0 1",
+		"b 0 1 100",
+		"b 0 1 100 50",   // missing fg
+		"b 0 1 100 50 -", // missing bg
+		"b xyz 1 100 50 - -",
+		"b 0 xyz 100 50 - -",
+		"b -1 1 100 50 - -",
+		"b 0 1 -100 50 - -",
+		"b 0 1 100 50 garbage -",
+	}
+	for _, line := range cases {
 		if _, err := ParseDirective(line); err == nil {
-			t.Errorf("expected error for region directive %q (Slice B/C)", line)
+			t.Errorf("expected error for malformed `b` line %q, got nil", line)
+		}
+	}
+}
+
+func TestParseDirective_RegionAcceptedAsNoOp(t *testing.T) {
+	cases := []string{
+		"begin region code",
+		"begin region listitem marker=-",
+		"begin region listitem number=3",
+		"begin region blockquote",
+		"begin region code lang=go",
+		"end region",
+	}
+	for _, line := range cases {
+		d, err := ParseDirective(line)
+		if err != nil {
+			t.Errorf("expected accept-as-noop for %q, got error: %v", line, err)
+			continue
+		}
+		if d.Op != OpNoOp {
+			t.Errorf("%q: Op = %v, want OpNoOp", line, d.Op)
+		}
+	}
+}
+
+func TestParseDirective_BeginEndRejectsMissingRegionKeyword(t *testing.T) {
+	// `begin` and `end` are only valid prefixes when followed by
+	// `region`. Anything else stays an unknown-op error so
+	// typos surface.
+	cases := []string{
+		"begin",
+		"begin foo",
+		"end",
+		"end foo",
+	}
+	for _, line := range cases {
+		if _, err := ParseDirective(line); err == nil {
+			t.Errorf("expected error for %q, got nil", line)
 		}
 	}
 }
 
 func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
-	// Slice B translates bold / italic / hidden into Kind bits;
-	// hrule / scale= / family= are accepted but ignored (their
-	// rendering arrives in Slice C / a follow-up). All four
-	// must succeed at the parse layer so producers emitting the
-	// full published protocol work without modification.
+	// Slice B / Phase B4 translates bold / italic / hidden /
+	// hrule / family=code into Kind bits; scale=N.N and
+	// family=NAME-other-than-code are still silently accepted
+	// but don't set bits (variable line height + non-code font
+	// families wait for Slice C). All forms must succeed at the
+	// parse layer so producers emitting the full published
+	// protocol work without modification.
 	cases := []struct {
 		line     string
 		wantKind frame.Kind
@@ -142,12 +212,14 @@ func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
 		{"s 0 5 #ff0000 bold", frame.KindBold},
 		{"s 0 5 #ff0000 italic", frame.KindItalic},
 		{"s 0 5 #ff0000 hidden", frame.KindHidden},
-		{"s 0 5 #ff0000 hrule", 0},
+		{"s 0 5 #ff0000 hrule", frame.KindHRule},
 		{"s 0 5 #ff0000 #00ff00 bold", frame.KindBold},
 		{"s 0 5 - bold italic", frame.KindBold | frame.KindItalic},
 		{"s 0 5 #ff0000 scale=2.0", 0},
-		{"s 0 5 #ff0000 family=code", 0},
-		{"s 0 5 - - bold scale=1.5 family=code", frame.KindBold},
+		{"s 0 5 #ff0000 family=code", frame.KindCodeFamily},
+		{"s 0 5 #ff0000 family=serif", 0},
+		{"s 0 5 - - bold scale=1.5 family=code", frame.KindBold | frame.KindCodeFamily},
+		{"s 0 5 #ff0000 hrule family=code", frame.KindHRule | frame.KindCodeFamily},
 	}
 	for _, c := range cases {
 		d, err := ParseDirective(c.line)
@@ -159,7 +231,7 @@ func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
 			t.Errorf("%q: Op = %v, want OpSetStyle", c.line, d.Op)
 		}
 		if d.Kind != c.wantKind {
-			t.Errorf("%q: Kind = %v, want %v", c.line, d.Kind, c.wantKind)
+			t.Errorf("%q: Kind = 0x%x, want 0x%x", c.line, d.Kind, c.wantKind)
 		}
 	}
 }
@@ -285,10 +357,62 @@ func TestParseAll_ClearAlone(t *testing.T) {
 }
 
 func TestParseAll_StopsAtFirstError(t *testing.T) {
-	input := "s 0 5 #ff0000\nb 5 1 0 0 - - image:x\ns 6 3 -"
+	// After Phase B4 a well-formed `b` line is OpNoOp; use an
+	// unknown op to provoke the same error class.
+	input := "s 0 5 #ff0000\nzzz garbage\ns 5 3 -"
 	_, err := ParseAll(input)
 	if err == nil {
-		t.Errorf("expected error from `b` directive, got nil")
+		t.Errorf("expected error from unknown op, got nil")
+	}
+}
+
+// R-B4.2: contiguity is enforced between consecutive OpSetStyle
+// directives even when OpNoOp directives (regions, replaced
+// elements) are interleaved. md2spans emits its `begin region`
+// markers between style spans; we must still catch a real gap.
+
+func TestParseAll_ContiguityAcrossNoOps(t *testing.T) {
+	// s 0 5, begin region, s 5 3 — contiguous at the SetStyle
+	// level despite the OpNoOp between them.
+	input := "s 0 5 #ff0000\nbegin region code\ns 5 3 -\nend region"
+	got, err := ParseAll(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Two OpSetStyle, two OpNoOp.
+	var nSet, nNoop int
+	for _, d := range got {
+		switch d.Op {
+		case OpSetStyle:
+			nSet++
+		case OpNoOp:
+			nNoop++
+		}
+	}
+	if nSet != 2 || nNoop != 2 {
+		t.Errorf("got %d SetStyle + %d NoOp, want 2 + 2: %+v", nSet, nNoop, got)
+	}
+}
+
+func TestParseAll_ContiguityViolationAcrossNoOps(t *testing.T) {
+	// s 0 5, begin region, s 7 3 — gap at the SetStyle level (5 → 7);
+	// the OpNoOp between them must NOT mask the violation.
+	input := "s 0 5 #ff0000\nbegin region code\ns 7 3 -"
+	if _, err := ParseAll(input); err == nil {
+		t.Errorf("expected contiguity violation across OpNoOp, got nil")
+	}
+}
+
+func TestParseAll_BAsNoOpDoesNotBreakContiguity(t *testing.T) {
+	// A `b` line stays inert at the contiguity layer too. The
+	// two `s` directives are contiguous and must parse cleanly.
+	input := "s 0 5 #ff0000\nb 5 0 80 80 - -\ns 5 3 -"
+	got, err := ParseAll(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("got %d directives, want 3: %+v", len(got), got)
 	}
 }
 

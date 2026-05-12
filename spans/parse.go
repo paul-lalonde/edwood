@@ -57,6 +57,13 @@ const (
 	// contiguous range. Fg / Bg are nil when the directive's
 	// corresponding token is `-` (default).
 	OpSetStyle
+	// OpNoOp marks a directive whose form is valid on the wire
+	// but whose semantics are inert in the current slice (Phase
+	// B4 silently accepts `b`, `begin region`, `end region` —
+	// see §6.4 / §12 Phase B4). ParseAll keeps OpNoOps in the
+	// returned slice so per-line diagnostics stay precise; the
+	// applier ignores them.
+	OpNoOp
 )
 
 // Directive is one parsed line of the spans-file protocol.
@@ -93,12 +100,67 @@ func ParseDirective(line string) (Directive, error) {
 	case "s":
 		return parseSet(fields[1:])
 	case "b":
-		return Directive{}, fmt.Errorf("spans: `b` directives not supported in Slice A (replaced elements live in Slice C)")
-	case "begin", "end":
-		return Directive{}, fmt.Errorf("spans: region directives not supported in Slice A")
+		return parseBoxAsNoOp(fields[1:])
+	case "begin":
+		return parseBeginRegionAsNoOp(fields[1:])
+	case "end":
+		return parseEndRegionAsNoOp(fields[1:])
 	default:
 		return Directive{}, fmt.Errorf("spans: unknown directive op %q", fields[0])
 	}
+}
+
+// parseBoxAsNoOp validates a `b` line's published-protocol shape
+// (off, len, width, height, fg, bg, [flags...]) and emits an
+// OpNoOp directive. Phase B4 silently accepts the line so md2spans
+// output flows through; Slice C C1 will translate it into real
+// replaced-element rendering.
+func parseBoxAsNoOp(rest []string) (Directive, error) {
+	if len(rest) < 6 {
+		return Directive{}, fmt.Errorf("spans: `b` requires <off> <len> <width> <height> <fg> <bg> [<flag>...] (got %d fields)", len(rest))
+	}
+	if _, err := parseUint(rest[0]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` off: %w", err)
+	}
+	if _, err := parseUint(rest[1]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` len: %w", err)
+	}
+	if _, err := parseUint(rest[2]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` width: %w", err)
+	}
+	if _, err := parseUint(rest[3]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` height: %w", err)
+	}
+	if _, err := parseColorToken(rest[4]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` fg: %w", err)
+	}
+	if _, err := parseColorToken(rest[5]); err != nil {
+		return Directive{}, fmt.Errorf("spans: `b` bg: %w", err)
+	}
+	// Trailing flag/payload tokens are not validated here; the
+	// published spec allows producer-defined keys (placement=,
+	// image:URL, etc.) and Slice C will tighten this up.
+	return Directive{Op: OpNoOp}, nil
+}
+
+// parseBeginRegionAsNoOp validates that the second token is
+// "region" and emits an OpNoOp. Block-context layout lives in
+// Slice C C4.
+func parseBeginRegionAsNoOp(rest []string) (Directive, error) {
+	if len(rest) < 2 || rest[0] != "region" {
+		return Directive{}, fmt.Errorf("spans: `begin` only valid as `begin region <kind> ...`")
+	}
+	return Directive{Op: OpNoOp}, nil
+}
+
+// parseEndRegionAsNoOp accepts `end region` (with optional
+// trailing tokens) and emits an OpNoOp. Anything else is an
+// unknown-op style error.
+func parseEndRegionAsNoOp(rest []string) (Directive, error) {
+	if len(rest) < 1 || rest[0] != "region" {
+		return Directive{}, fmt.Errorf("spans: `end` only valid as `end region [...]`")
+	}
+	return Directive{Op: OpNoOp}, nil
 }
 
 // ParseAll parses a single Twrite payload — a possibly
@@ -132,17 +194,20 @@ func ParseAll(text string) ([]Directive, error) {
 			return out, fmt.Errorf("spans: `c` must be alone in its write (line %d, but %d directives present)", j+1, len(out))
 		}
 	}
-	for j := 1; j < len(out); j++ {
-		if out[j].Op != OpSetStyle {
+	// `s` contiguity is enforced *across* OpNoOp directives —
+	// md2spans interleaves `begin region` markers between style
+	// spans, but the spans themselves must still tile the buffer
+	// without gaps. Find the most recent OpSetStyle predecessor.
+	var prevSet *Directive
+	for j := range out {
+		d := &out[j]
+		if d.Op != OpSetStyle {
 			continue
 		}
-		prev := out[j-1]
-		if prev.Op != OpSetStyle {
-			continue
+		if prevSet != nil && d.Off != prevSet.Off+prevSet.Len {
+			return out, fmt.Errorf("spans: contiguity violated at line %d: offset %d, expected %d", j+1, d.Off, prevSet.Off+prevSet.Len)
 		}
-		if out[j].Off != prev.Off+prev.Len {
-			return out, fmt.Errorf("spans: contiguity violated at line %d: offset %d, expected %d", j+1, out[j].Off, prev.Off+prev.Len)
-		}
+		prevSet = d
 	}
 	return out, nil
 }
@@ -202,11 +267,14 @@ func parseSet(rest []string) (Directive, error) {
 		case rest[i] == "hidden":
 			d.Kind |= frame.KindHidden
 		case rest[i] == "hrule":
-			// silent accept; Slice C will render
+			d.Kind |= frame.KindHRule
 		case strings.HasPrefix(rest[i], "scale="):
-			// silent accept; future slice will scale glyphs
+			// silent accept; variable line height lands in Slice C
+		case rest[i] == "family=code":
+			d.Kind |= frame.KindCodeFamily
 		case strings.HasPrefix(rest[i], "family="):
-			// silent accept; future slice will switch font family
+			// silent accept for non-`code` families; no defined
+			// rendering for them yet
 		default:
 			return Directive{}, fmt.Errorf("spans: `s` unknown flag %q", rest[i])
 		}

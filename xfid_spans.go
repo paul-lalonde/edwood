@@ -91,6 +91,11 @@ func applySpansDirective(w *Window, d spans.Directive) error {
 		}
 		w.body.spans.SetRegion(d.Off, end, style)
 		return nil
+	case spans.OpNoOp:
+		// Silently accepted on the wire (Phase B4): `b`,
+		// `begin region`, `end region`. Slice C will translate
+		// these into real rendering.
+		return nil
 	default:
 		return fmt.Errorf("xfid: invalid spans op %v", d.Op)
 	}

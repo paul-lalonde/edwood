@@ -47,9 +47,16 @@ const (
 	KindItalic // italic angle; renders with the italic font
 	KindHidden // glyph is not painted (frame still paints bg)
 
+	// Phase B4 (md2spans compatibility; still no line-height
+	// change). KindHRule draws a horizontal rule across the row
+	// containing this run; KindCodeFamily renders with a
+	// monospace variant.
+	KindHRule
+	KindCodeFamily
+
 	// Future bits (KindFontIdx for FontIdx-driven font picking,
-	// KindReplaced + Replaced* fields for Slice C, block-context
-	// bits) take the next iota steps in this block.
+	// KindUnderline, KindReplaced + Replaced* fields for Slice C,
+	// block-context bits) take the next iota steps in this block.
 )
 
 // IsPlain reports whether s carries no styling — i.e., a frame
