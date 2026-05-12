@@ -213,10 +213,24 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 		if x > f.rect.Max.X {
 			x = f.rect.Max.X
 		}
-		// f.drawBox(image.Rect(pt.X, pt.Y, x, pt.Y+f.Font.DefaultHeight()), text, back, pt)
-		f.background.Draw(image.Rect(pt.X, pt.Y, x, pt.Y+f.defaultfontheight), back, nil, pt)
+		// When `back` is the frame's default ColBack the caller
+		// is clearing the highlight, not painting a new one.
+		// Honor each box's Style so styled text survives the
+		// deselect; without this the symmetric flicker happens
+		// (selecting then deselecting styled text would flash
+		// to plain colors until the next redraw).
+		bg, glyph := back, text
+		if back == f.cols[ColBack] && b.Style.Kind&KindColored != 0 {
+			if b.Style.Bg != nil {
+				bg = b.Style.Bg
+			}
+			if b.Style.Fg != nil {
+				glyph = b.Style.Fg
+			}
+		}
+		f.background.Draw(image.Rect(pt.X, pt.Y, x, pt.Y+f.defaultfontheight), bg, nil, pt)
 		if b.Nrune >= 0 {
-			f.background.Bytes(pt, text, image.Point{}, f.font, ptr[0:runeindex(ptr, nr)])
+			f.background.Bytes(pt, glyph, image.Point{}, f.font, ptr[0:runeindex(ptr, nr)])
 		}
 		pt.X += w
 		p += nr

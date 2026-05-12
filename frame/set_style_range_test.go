@@ -2,6 +2,7 @@ package frame
 
 import (
 	"image"
+	"strings"
 	"testing"
 
 	"github.com/rjkroege/edwood/draw"
@@ -163,6 +164,47 @@ func TestSetStyleRange_DoesNotMoveSelection(t *testing.T) {
 
 	if fi.sp0 != 1 || fi.sp1 != 4 {
 		t.Errorf("selection moved: sp0=%d sp1=%d, want sp0=1 sp1=4", fi.sp0, fi.sp1)
+	}
+}
+
+func TestDrawSelClear_PreservesStyledForeground(t *testing.T) {
+	// Symmetric to TestSetStyleRange_PreservesHighlightOverOverlap:
+	// when drawsel0 clears a selection over styled text, the
+	// box's own Style.Fg / Bg should re-paint, not the frame
+	// defaults — otherwise the deselect flashes the text to
+	// plain colors until the next redraw.
+	//
+	// Sentinel: use a uniquely-named image as Style.Fg and look
+	// for that name in the drawops after the clear. The Bytes op
+	// records its fill color's name; without the fix the clear
+	// uses ColText (display.Black()), so the unique name is
+	// absent.
+	fr, display := setupStyledFrame(t)
+	fi := fr.(*frameimpl)
+
+	testFg := edwoodtest.NewImage(display, "TESTFG_DRAWSEL_CLEAR", image.Rect(0, 0, 1, 1))
+	colored := Style{Kind: KindColored, Fg: testFg}
+
+	fr.Insert([]rune("hello world"), 0)
+	fr.SetStyleRange(0, 5, []StyleRun{{Len: 5, Style: colored}})
+
+	pt := fi.ptofcharptb(0, fi.rect.Min, 0)
+	fi.drawselimpl(pt, 0, 5, true) // highlight
+	g := display.(edwoodtest.GettableDrawOps)
+	snapshot := len(g.DrawOps())
+
+	fi.drawselimpl(pt, 0, 0, false) // clear
+
+	clearOps := g.DrawOps()[snapshot:]
+	found := false
+	for _, op := range clearOps {
+		if strings.Contains(op, "TESTFG_DRAWSEL_CLEAR") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected drawsel0 clear to paint with Style.Fg; ops did not reference TESTFG_DRAWSEL_CLEAR:\n%s", strings.Join(clearOps, "\n"))
 	}
 }
 
