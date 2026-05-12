@@ -87,6 +87,18 @@ func OptBoldItalicFont(ft draw.Font) OptionClosure {
 	}
 }
 
+// OptCodeFont sets the monospace ("code") variant used for runs
+// whose Style.Kind has KindCodeFamily (md2spans's inline code and
+// fenced-code-block body). Family is a stronger choice than
+// weight or italic — code wins over bold/italic in fontFor — so
+// the variant is a single slot (no bold-code or italic-code
+// sub-variants in v1). nil falls back to the base font.
+func OptCodeFont(ft draw.Font) OptionClosure {
+	return func(f *frameimpl, ctx *optioncontext) {
+		f.fontCode = ft
+	}
+}
+
 // OptMaxTab sets the default tabwidth in `0` characters.
 func OptMaxTab(maxtabchars int) OptionClosure {
 	return func(f *frameimpl, ctx *optioncontext) {

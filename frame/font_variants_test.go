@@ -2,12 +2,47 @@ package frame
 
 import (
 	"image"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/rjkroege/edwood/draw"
 	"github.com/rjkroege/edwood/edwoodtest"
 )
+
+// rectRE matches the first `(x0,y0)-(x1,y1)` substring in a
+// recorded draw op. The mockDisplay records draw ops with the
+// rectangle in image.Rectangle's String() format; this regex
+// pulls it back out so tests can assert on rect dimensions.
+var rectRE = regexp.MustCompile(`\((-?\d+),(-?\d+)\)-\((-?\d+),(-?\d+)\)`)
+
+// drawOpsWithRectHeight returns the recorded draw ops whose first
+// rectangle has the given Dy (max.Y - min.Y). Used by hrule tests
+// to find the 1-pixel-high decoration rect amongst the per-box
+// background-paint rectangles (which are font-height tall).
+func drawOpsWithRectHeight(disp draw.Display, height int) []string {
+	g := disp.(edwoodtest.GettableDrawOps)
+	var out []string
+	for _, op := range g.DrawOps() {
+		m := rectRE.FindStringSubmatch(op)
+		if m == nil {
+			continue
+		}
+		y0, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		y1, err := strconv.Atoi(m[4])
+		if err != nil {
+			continue
+		}
+		if y1-y0 == height {
+			out = append(out, op)
+		}
+	}
+	return out
+}
 
 // setupVariantFrame mirrors setupStyledFrame but installs four
 // distinct named fonts so tests can confirm which variant the
@@ -81,6 +116,104 @@ func TestFontFor_PicksBoldItalicVariant(t *testing.T) {
 
 	if got := opsContaining(disp, "FONT_BOLDITALIC"); len(got) == 0 {
 		t.Errorf("no Bytes op recorded with FONT_BOLDITALIC font:\n%s", strings.Join(opsContaining(disp, "atpoint"), "\n"))
+	}
+}
+
+// R-B4.7: fontFor returns the code-family variant when
+// KindCodeFamily is set and the variant is configured.
+func TestFontFor_PicksCodeVariant(t *testing.T) {
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	const w, h = 10, 13
+	regular := edwoodtest.NewFontWithName("FONT_REGULAR", w, h)
+	code := edwoodtest.NewFontWithName("FONT_CODE", w, h)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptCodeFont(code),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+	cs := Style{Kind: KindCodeFamily}
+	f.InsertWithStyle([]rune("inline"), 0, []StyleRun{{Len: 6, Style: cs}})
+
+	if got := opsContaining(display, "FONT_CODE"); len(got) == 0 {
+		t.Errorf("no Bytes op recorded with FONT_CODE font:\n%s", strings.Join(opsContaining(display, "atpoint"), "\n"))
+	}
+}
+
+// R-B4.7: KindCodeFamily without OptCodeFont configured falls
+// back to the base font — graceful degradation, same shape as the
+// bold/italic fallback.
+func TestFontFor_CodeFamilyFallsBackToBaseWhenVariantMissing(t *testing.T) {
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	regular := edwoodtest.NewFontWithName("FONT_BASEONLY_CODE", 10, 13)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+	cs := Style{Kind: KindCodeFamily}
+	f.InsertWithStyle([]rune("inline"), 0, []StyleRun{{Len: 6, Style: cs}})
+
+	if got := opsContaining(display, "FONT_BASEONLY_CODE"); len(got) == 0 {
+		t.Errorf("expected fallback to base font; ops=%v", opsContaining(display, "atpoint"))
+	}
+}
+
+// R-B4.7: when both KindBold and KindCodeFamily are set, the code
+// variant wins — md2spans v1 doesn't emit bold-code so no
+// bold-code variant exists, and the simpler precedence keeps
+// fontFor cleanly two-axis (family > weight/italic).
+func TestFontFor_CodeFamilyTakesPrecedenceOverBold(t *testing.T) {
+	textarea := image.Rect(20, 10, 400, 100)
+	display := edwoodtest.NewDisplay(textarea)
+	var textcolors [NumColours]draw.Image
+	textcolors[ColBack] = display.AllocImageMix(draw.Paleyellow, draw.White)
+	textcolors[ColHigh], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Darkyellow)
+	textcolors[ColBord], _ = display.AllocImage(image.Rect(0, 0, 1, 1), display.ScreenImage().Pix(), true, draw.Yellowgreen)
+	textcolors[ColText] = display.Black()
+	textcolors[ColHText] = display.Black()
+
+	const w, h = 10, 13
+	regular := edwoodtest.NewFontWithName("FONT_REG_CB", w, h)
+	bold := edwoodtest.NewFontWithName("FONT_BOLD_CB", w, h)
+	code := edwoodtest.NewFontWithName("FONT_CODE_CB", w, h)
+	f := new(frameimpl)
+	f.Init(textarea,
+		OptColors(textcolors),
+		OptFont(regular),
+		OptBoldFont(bold),
+		OptCodeFont(code),
+		OptBackground(display.ScreenImage()),
+		OptMaxTab(8),
+	)
+	bc := Style{Kind: KindBold | KindCodeFamily}
+	f.InsertWithStyle([]rune("xy"), 0, []StyleRun{{Len: 2, Style: bc}})
+
+	if got := opsContaining(display, "FONT_CODE_CB"); len(got) == 0 {
+		t.Errorf("KindBold|KindCodeFamily must pick code font; ops=%v", opsContaining(display, "atpoint"))
+	}
+	if got := opsContaining(display, "FONT_BOLD_CB"); len(got) != 0 {
+		t.Errorf("KindBold|KindCodeFamily must NOT pick bold font; got %v", got)
 	}
 }
 
@@ -285,6 +418,49 @@ func TestSetStyleRange_PreservesTabWidth(t *testing.T) {
 			}
 			t.Errorf("after SetStyleRange a special box originally Wid=%d at idx=%d was not preserved; current special widths = %v", s.wid, s.idx, got)
 		}
+	}
+}
+
+// R-B4.8: a box with KindHRule produces a 1-pixel-tall Draw op
+// across its rect after the glyph paint. Tested via drawtext (the
+// initial-paint path).
+func TestKindHRule_DrawsRuleLineInDrawtext(t *testing.T) {
+	fr, disp := setupVariantFrame(t)
+	st := Style{Kind: KindHRule}
+	fr.InsertWithStyle([]rune("---"), 0, []StyleRun{{Len: 3, Style: st}})
+
+	got := drawOpsWithRectHeight(disp, 1)
+	if len(got) == 0 {
+		t.Errorf("expected at least one 1-pixel-high Draw op for KindHRule; ops=\n%s", strings.Join(disp.(edwoodtest.GettableDrawOps).DrawOps(), "\n"))
+	}
+}
+
+// R-B4.8: hrule paints on the repaint path too — re-styling a
+// plain run to KindHRule via SetStyleRange must produce the line.
+func TestKindHRule_DrawsRuleLineInRepaintBoxRange(t *testing.T) {
+	fr, disp := setupVariantFrame(t)
+	fr.InsertWithStyle([]rune("==="), 0, []StyleRun{{Len: 3, Style: Style{}}})
+
+	preCount := len(drawOpsWithRectHeight(disp, 1))
+
+	fr.SetStyleRange(0, 3, []StyleRun{{Len: 3, Style: Style{Kind: KindHRule}}})
+
+	post := drawOpsWithRectHeight(disp, 1)
+	if len(post) <= preCount {
+		t.Errorf("SetStyleRange to KindHRule did not add a 1-pixel-high Draw op (pre=%d post=%d)", preCount, len(post))
+	}
+}
+
+// R-B4.9: KindHRule does NOT suppress glyphs — the marker
+// characters stay visible (the "markers stay visible" stance
+// shared by every other v1 directive).
+func TestKindHRule_GlyphsStillRendered(t *testing.T) {
+	fr, disp := setupVariantFrame(t)
+	st := Style{Kind: KindHRule}
+	fr.InsertWithStyle([]rune("---"), 0, []StyleRun{{Len: 3, Style: st}})
+
+	if len(opsContaining(disp, `"---"`)) == 0 {
+		t.Errorf("KindHRule must still render glyphs; got no glyph-paint op for `---`")
 	}
 }
 

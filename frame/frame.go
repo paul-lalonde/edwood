@@ -304,6 +304,12 @@ type frameimpl struct {
 	fontBold       draw.Font
 	fontItalic     draw.Font
 	fontBoldItalic draw.Font
+	// fontCode is the monospace ("code") family variant. A
+	// box with Style.Kind & KindCodeFamily renders with it; it
+	// takes precedence over weight/italic variants (family is
+	// a stronger choice than weight). nil falls back to the
+	// base font, same as the other variants.
+	fontCode draw.Font
 
 	defaultfontheight int // height of default font
 

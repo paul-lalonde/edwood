@@ -58,13 +58,35 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 	if b.Style.Kind&KindHidden == 0 {
 		f.background.Bytes(pt, fg, image.Point{}, f.fontFor(b.Style), b.Ptr)
 	}
+	// KindHRule decoration: draw a 1-pixel horizontal line across
+	// the box's rect at the row's vertical center, in the box's
+	// effective foreground color. The glyphs are still painted
+	// above so the marker characters remain visible (the
+	// "markers stay visible" stance shared by every other v1
+	// directive).
+	if b.Style.Kind&KindHRule != 0 {
+		ymid := pt.Y + f.defaultfontheight/2
+		rect := image.Rect(pt.X, ymid, pt.X+b.Wid, ymid+1)
+		f.background.Draw(rect, fg, nil, image.Point{})
+	}
 }
 
 // fontFor picks the right font variant for a styled run. Falls
 // back to the base font when the requested variant hasn't been
 // configured (so styling degrades gracefully on installations
-// that don't have bold/italic font files).
+// that don't have bold/italic/code font files).
+//
+// KindCodeFamily takes precedence over weight/italic — family is
+// a stronger choice than weight, and md2spans v1 doesn't combine
+// code with bold or italic. If the code variant isn't configured
+// we still fall through to the weight/italic lookup before
+// reaching the base font, so a producer that requests
+// KindCodeFamily|KindBold still gets a bold variant when only
+// fontBold is available.
 func (f *frameimpl) fontFor(s Style) draw.Font {
+	if s.Kind&KindCodeFamily != 0 && f.fontCode != nil {
+		return f.fontCode
+	}
 	bold := s.Kind&KindBold != 0
 	italic := s.Kind&KindItalic != 0
 	switch {
