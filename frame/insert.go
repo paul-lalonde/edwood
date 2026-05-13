@@ -468,6 +468,10 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 		f.sp1 += f.nchars
 	}
 
+	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
+	// box-model mutation. No walk consumer reads these yet
+	// (R3 lands that); the pass exists so later rows can.
+	f.relayoutFrom(0)
 	return f.lastlinefull
 }
 

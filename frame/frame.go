@@ -328,19 +328,19 @@ type frbox struct {
 	Style Style
 
 	// Per-box layout fields (frame-rendering-spec §2.1, B2.2).
-	//
-	// R1 ships only the fields and their initialization at box-
-	// creation time:
-	//   - Y: 0, populated by R2's relayout pass with the line's
-	//     top Y.
-	//   - LineH: the frame's defaultfontheight as a per-line-
-	//     metric stand-in. R2 will overwrite with max box height
-	//     on the line; R4 introduces scaled fonts so this can
-	//     differ from defaultfontheight.
-	//   - LineA: same as LineH for now (Ascent stand-in until
-	//     R5 adds true baseline alignment).
-	//
-	// No consumer reads these fields in R1.
+	// Populated by (*frameimpl).relayoutFrom after any box-
+	// model mutation. R1 added the fields with safe defaults;
+	// R2 populates them from a single forward layout pass; R3
+	// migrates walk callers to read these instead of accumulating
+	// their own pt.
+	//   - X: box's left-edge X (absolute screen coord; matches
+	//     pt.X that the historical walks produce).
+	//   - Y: top Y of the line containing this box.
+	//   - LineH: height of the box's line in pixels. Until R4,
+	//     always defaultfontheight.
+	//   - LineA: ascent of the box's line. Until R5, equals
+	//     LineH (Ascent stand-in).
+	X     int
 	Y     int
 	LineH int
 	LineA int

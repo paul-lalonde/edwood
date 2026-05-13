@@ -170,5 +170,8 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 	}
 	// f.Logboxes("end of delete")
 
+	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
+	// box-model mutation. See relayout.go.
+	f.relayoutFrom(0)
 	return n - f.nlines
 }

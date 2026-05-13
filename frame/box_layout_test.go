@@ -82,25 +82,5 @@ func TestFrbox_LayoutFields_TabAndNewline(t *testing.T) {
 	}
 }
 
-// TestFrbox_LayoutFields_YIsZeroPreR2 confirms that R1 does not
-// populate Y (the line's top Y). The layout pass that fills Y
-// lands in R2; until then Y stays at its zero value so we have
-// a clean before/after to verify R2 against.
-func TestFrbox_LayoutFields_YIsZeroPreR2(t *testing.T) {
-	iv := &invariants{
-		topcorner: image.Pt(20, 10),
-		textarea:  image.Rect(20, 10, 200, 100),
-	}
-	fr := setupFrame(t, iv)
-	fr.Insert([]rune("line one\nline two"), 0)
-
-	fimpl := fr.(*frameimpl)
-	for i, b := range fimpl.box {
-		if b == nil {
-			continue
-		}
-		if b.Y != 0 {
-			t.Errorf("box[%d].Y = %d, want 0 (R1 doesn't populate Y; R2 does)", i, b.Y)
-		}
-	}
-}
+// (R1's "Y is zero pre-R2" pin was removed in R2; relayoutFrom
+// now populates Y. See relayout_test.go for the Y assertions.)

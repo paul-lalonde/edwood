@@ -179,4 +179,9 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		cleanEnd = len(f.box)
 	}
 	f.clean(f.ptofcharptb(p0, f.rect.Min, 0), nb0, cleanEnd)
+
+	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
+	// style range may have changed box widths (R-B4.7) and
+	// box count (splitbox/clean).
+	f.relayoutFrom(0)
 }
