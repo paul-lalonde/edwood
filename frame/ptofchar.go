@@ -43,7 +43,49 @@ func (f *frameimpl) ptofcharptb(p int, pt image.Point, bn int) image.Point {
 func (f *frameimpl) Ptofchar(p int) image.Point {
 	f.lk.Lock()
 	defer f.lk.Unlock()
-	return f.ptofcharptb(p, f.rect.Min, 0)
+	return f.ptOfCharReader(p)
+}
+
+// ptOfCharReader is the B2.2 R3 pure-reader implementation of
+// Ptofchar. It reads each box's stored X / Y (populated by
+// relayoutFrom) rather than re-deriving pt via cklinewrap and
+// advance. The result must equal ptofcharptb for the same p
+// under constant line height (pre-R4); under variable height
+// (R4+) only the reader produces correct results — the
+// accumulator walk's assumption that each line is
+// defaultfontheight breaks once Style.Scale paints a tall line.
+//
+// Internal mutation paths (deleteimpl, insertbyteimpl
+// intermediate computations) still call the legacy
+// ptofcharptb because they run BEFORE relayoutFrom has
+// produced consistent box.X / box.Y.
+func (f *frameimpl) ptOfCharReader(p int) image.Point {
+	if len(f.box) == 0 {
+		return f.rect.Min
+	}
+	if p < 0 {
+		p = 0
+	}
+	for _, b := range f.box {
+		l := nrune(b)
+		if p < l {
+			pt := image.Pt(b.X, b.Y)
+			if b.Nrune > 0 {
+				font := f.fontFor(b.Style)
+				s := 0
+				for ; s < len(b.Ptr) && p > 0; p-- {
+					_, w := utf8.DecodeRune(b.Ptr[s:])
+					pt.X += font.BytesWidth(b.Ptr[s : s+w])
+					s += w
+				}
+			}
+			return pt
+		}
+		p -= l
+	}
+	// p past end: return position one past the last box.
+	last := f.box[len(f.box)-1]
+	return image.Pt(last.X+last.Wid, last.Y)
 }
 
 func (f *frameimpl) ptofcharnb(p int, _ int) image.Point {
@@ -64,7 +106,57 @@ func (f *frameimpl) grid(p image.Point) image.Point {
 func (f *frameimpl) Charofpt(pt image.Point) int {
 	f.lk.Lock()
 	defer f.lk.Unlock()
-	return f.charofptimpl(pt)
+	return f.charOfPtReader(pt)
+}
+
+// charOfPtReader is the B2.2 R3 pure-reader Charofpt. It finds
+// the box whose stored rect (X, Y, X+Wid, Y+LineH) contains pt
+// and walks runes within that box to identify the exact rune.
+// Same rationale as ptOfCharReader.
+func (f *frameimpl) charOfPtReader(pt image.Point) int {
+	p := 0
+	for _, b := range f.box {
+		// Skip boxes whose line is fully above pt.Y.
+		if b.Y+b.LineH <= pt.Y {
+			p += nrune(b)
+			continue
+		}
+		// Stop once we've passed pt vertically.
+		if b.Y > pt.Y {
+			break
+		}
+		// b is on the line containing pt.Y. Skip boxes left
+		// of pt.X.
+		if b.X+b.Wid <= pt.X {
+			p += nrune(b)
+			continue
+		}
+		// b overlaps pt.X. If b is special (tab/newline),
+		// the whole box maps to "before pt" or "after pt"
+		// based on X.
+		if b.Nrune < 0 {
+			if b.X > pt.X {
+				break
+			}
+			p += nrune(b)
+			continue
+		}
+		// Content box: walk runes.
+		font := f.fontFor(b.Style)
+		x := b.X
+		s := 0
+		for s < len(b.Ptr) {
+			_, w := utf8.DecodeRune(b.Ptr[s:])
+			x += font.BytesWidth(b.Ptr[s : s+w])
+			if x > pt.X {
+				break
+			}
+			p++
+			s += w
+		}
+		return p
+	}
+	return p
 }
 
 func (f *frameimpl) charofptimpl(pt image.Point) int {

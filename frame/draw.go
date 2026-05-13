@@ -6,6 +6,15 @@ import (
 	"github.com/rjkroege/edwood/draw"
 )
 
+// drawtext paints every box in f.box starting at pt. The pt
+// accumulator walk is intentional: drawtext is only ever called
+// on a child frame (nframe) built by bxscan, whose boxes are
+// not run through relayoutFrom. The child frame inherits f.rect
+// but its boxes occupy a sub-region beginning at the caller-
+// supplied pt. The legacy cklinewrap+advance accumulator
+// produces the right per-box position from that pt — read
+// paths on the parent frame (repaintBoxRange) use box.X / box.Y
+// directly because those boxes ARE relayouted.
 func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
 	for _, b := range f.box {
 		pt = f.cklinewrap(pt, b)
@@ -124,11 +133,12 @@ func (f *frameimpl) repaintBoxRange(pt image.Point, nb0, nb1 int, text draw.Imag
 	if nb1 > len(f.box) {
 		nb1 = len(f.box)
 	}
+	// B2.2 R3: pt arg unused; boxes know their position via
+	// relayoutFrom. See drawtext comment.
+	_ = pt
 	for nb := nb0; nb < nb1; nb++ {
 		b := f.box[nb]
-		pt = f.cklinewrap(pt, b)
-		f.paintBox(b, pt, text, back, true)
-		pt.X += b.Wid
+		f.paintBox(b, image.Pt(b.X, b.Y), text, back, true)
 	}
 }
 

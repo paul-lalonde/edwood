@@ -152,6 +152,12 @@ func TestCharofpt(t *testing.T) {
 			11,
 		},
 	} {
+		// B2.2 R3: charOfPtReader (the public-API impl) reads
+		// box.X / box.Y populated by relayoutFrom. Tests that
+		// construct a frame inline must call relayoutFrom so
+		// the box list is geometrically consistent with the
+		// frame's rect.
+		tv.frame.relayoutFrom(0)
 		if got, want := tv.frame.Charofpt(tv.stim), tv.expected; got != want {
 			t.Errorf("TestCharofpt(%v), case %s, got %d, want %d", tv.stim, tv.name, got, want)
 		}
