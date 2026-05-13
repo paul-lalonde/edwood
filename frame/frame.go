@@ -326,6 +326,24 @@ type frbox struct {
 	// continue to compare equal across the upstream and styled
 	// insert paths. See style.go for the field's semantics.
 	Style Style
+
+	// Per-box layout fields (frame-rendering-spec §2.1, B2.2).
+	//
+	// R1 ships only the fields and their initialization at box-
+	// creation time:
+	//   - Y: 0, populated by R2's relayout pass with the line's
+	//     top Y.
+	//   - LineH: the frame's defaultfontheight as a per-line-
+	//     metric stand-in. R2 will overwrite with max box height
+	//     on the line; R4 introduces scaled fonts so this can
+	//     differ from defaultfontheight.
+	//   - LineA: same as LineH for now (Ascent stand-in until
+	//     R5 adds true baseline alignment).
+	//
+	// No consumer reads these fields in R1.
+	Y     int
+	LineH int
+	LineA int
 }
 
 // Helpful code for debugging reentrancy.

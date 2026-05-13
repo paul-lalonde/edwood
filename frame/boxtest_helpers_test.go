@@ -11,8 +11,13 @@ import (
 )
 
 const fixedwidth = 10
+const mockfontheight = 13
 
-// makeBox creates somewhat realistic test boxes in 10pt fixed width font.
+// makeBox creates somewhat realistic test boxes in 10pt fixed
+// width / 13pt high font. The LineH and LineA fields match
+// `defaultfontheight = mockfontheight` so TestBxscan can compare
+// against bxscan output post-B2.2.R1 (which sets these defaults
+// on every produced box; see frame/insert.go setBoxLineDefaults).
 func makeBox(s string) *frbox {
 	r, _ := utf8.DecodeRuneInString(s)
 
@@ -23,6 +28,8 @@ func makeBox(s string) *frbox {
 			Nrune:  -1,
 			Bc:     r,
 			Minwid: 10,
+			LineH:  mockfontheight,
+			LineA:  mockfontheight,
 		}
 
 	case "\n":
@@ -31,6 +38,8 @@ func makeBox(s string) *frbox {
 			Nrune:  -1,
 			Bc:     r,
 			Minwid: 0,
+			LineH:  mockfontheight,
+			LineA:  mockfontheight,
 		}
 	default:
 		nrune := strings.Count(s, "") - 1
@@ -38,7 +47,8 @@ func makeBox(s string) *frbox {
 			Wid:   fixedwidth * nrune,
 			Nrune: nrune,
 			Ptr:   []byte(s),
-			// Remaining fields not used.
+			LineH: mockfontheight,
+			LineA: mockfontheight,
 		}
 	}
 }

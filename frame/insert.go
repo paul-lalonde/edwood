@@ -16,6 +16,18 @@ func wipboxIsSpace(b *frbox) bool {
 	return len(b.Ptr) > 0 && b.Ptr[0] == ' '
 }
 
+// setBoxLineDefaults seeds a box's per-line metrics (LineH,
+// LineA) with the frame's `defaultfontheight`. B2.2 R2's
+// layout pass overwrites these with per-line max values; until
+// then the seeded defaults keep the fields meaningful for any
+// consumer that reads them. R1 has no such consumer — the
+// defaults exist so R2 has a clean before/after baseline.
+func (frame *frameimpl) setBoxLineDefaults(b *frbox) {
+	dh := frame.defaultfontheight
+	b.LineH = dh
+	b.LineA = dh
+}
+
 func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
 	if box == nil {
 		return &frbox{
@@ -25,6 +37,7 @@ func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
 
 	if len(box.Ptr) > 0 {
 		box.Wid = frame.boxWid(box)
+		frame.setBoxLineDefaults(box)
 		frame.box = append(frame.box, box)
 		return &frbox{
 			Ptr: inby,
@@ -85,26 +98,30 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 		case '\t':
 			wipbox = frame.addifnonempty(wipbox, inby[i+1:i+1])
 
-			frame.box = append(frame.box, &frbox{
+			tabBox := &frbox{
 				Bc:     '\t',
 				Wid:    10000,
 				Minwid: byte(frame.font.StringWidth(" ")),
 				Nrune:  -1,
 				Style:  curStyle,
-			})
+			}
+			frame.setBoxLineDefaults(tabBox)
+			frame.box = append(frame.box, tabBox)
 
 			i++
 			runeIdx++
 		case '\n':
 			wipbox = frame.addifnonempty(wipbox, inby[i+1:i+1])
 
-			frame.box = append(frame.box, &frbox{
+			nlBox := &frbox{
 				Bc:     '\n',
 				Wid:    10000,
 				Minwid: 0,
 				Nrune:  -1,
 				Style:  curStyle,
-			})
+			}
+			frame.setBoxLineDefaults(nlBox)
+			frame.box = append(frame.box, nlBox)
 
 			i++
 			nl++
