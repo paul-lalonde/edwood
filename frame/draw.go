@@ -99,6 +99,15 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 // KindCodeFamily|KindBold still gets a bold variant when only
 // fontBold is available.
 func (f *frameimpl) fontFor(s Style) draw.Font {
+	// KindScale takes precedence: a heading carries its scale-
+	// font selection regardless of bold/italic/family. md2spans
+	// doesn't combine scale with code-family in v1, and weight
+	// variants of scaled fonts aren't yet in the protocol.
+	if s.Kind&KindScale != 0 && f.fontByScale != nil {
+		if ft, ok := f.fontByScale[s.Scale]; ok && ft != nil {
+			return ft
+		}
+	}
 	if s.Kind&KindCodeFamily != 0 && f.fontCode != nil {
 		return f.fontCode
 	}

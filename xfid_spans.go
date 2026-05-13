@@ -72,7 +72,7 @@ func applySpansDirective(w *Window, d spans.Directive) error {
 		if end > n {
 			end = n
 		}
-		style := frame.Style{Kind: d.Kind}
+		style := frame.Style{Kind: d.Kind, Scale: d.Scale}
 		if d.Fg != nil {
 			img, err := allocColorImage(w.display, d.Fg)
 			if err != nil {

@@ -26,6 +26,13 @@ type Style struct {
 	// Meaningful iff Kind & KindColored != 0.
 	Fg draw.Image
 	Bg draw.Image
+
+	// Meaningful iff Kind & KindScale != 0. The scale factor
+	// names which entry of the frame's scale-font map (see
+	// OptScaleFonts) drives this run's font and line height.
+	// Heading runs (md2spans's scale=N.N) carry this; body
+	// runs leave it zero.
+	Scale float32
 }
 
 // Kind is a bitmask of active style attributes. KindPlain is the
@@ -53,6 +60,12 @@ const (
 	// monospace variant.
 	KindHRule
 	KindCodeFamily
+
+	// Phase B2.2 (variable line height). KindScale gates
+	// Style.Scale; combined with a frame.OptScaleFonts map,
+	// the run paints with the scaled font and contributes the
+	// scaled font's height to its line's LineH.
+	KindScale
 
 	// Future bits (KindFontIdx for FontIdx-driven font picking,
 	// KindUnderline, KindReplaced + Replaced* fields for Slice C,

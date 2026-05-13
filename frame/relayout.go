@@ -72,7 +72,7 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 				break
 			}
 			// b stays on this line.
-			updateLineMaxes(b, &lineH, &lineA, f.defaultfontheight)
+			f.updateLineMaxes(b, &lineH, &lineA)
 			pt.X += b.Wid
 			nb++
 			if b.Nrune < 0 && b.Bc == '\n' {
@@ -109,18 +109,19 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 
 // updateLineMaxes folds box b's height and ascent into the
 // running line maximums. Special boxes (Nrune<0) contribute
-// only the default font height; content boxes use boxHeight.
-// Until R4 there is only one font height in play, so this is
-// effectively a constant.
-func updateLineMaxes(b *frbox, lineH, lineA *int, defaultH int) {
-	h := defaultH
-	a := defaultH
+// only the default font height. Content boxes use the height
+// of the font fontFor would return for the box's Style — so
+// a KindScale box contributes the scaled font's height, and a
+// plain box contributes defaultfontheight.
+//
+// Until R5 the line's ascent equals its height (Ascent stand-
+// in); R5 adds true baseline-aligned glyph paint.
+func (f *frameimpl) updateLineMaxes(b *frbox, lineH, lineA *int) {
+	h := f.defaultfontheight
 	if b.Nrune >= 0 {
-		// Content box. Pre-R4 every font has the same
-		// height; R4 will switch on Style.Kind&KindScale.
-		h = defaultH
-		a = defaultH
+		h = f.fontFor(b.Style).Height()
 	}
+	a := h
 	if h > *lineH {
 		*lineH = h
 	}

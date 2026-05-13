@@ -99,6 +99,25 @@ func OptCodeFont(ft draw.Font) OptionClosure {
 	}
 }
 
+// OptScaleFonts installs the scale-factor → font lookup used
+// by fontFor when a run carries Style.Kind & KindScale. The
+// map keys are the protocol's scale=N.N values (e.g., 1.5,
+// 2.0) and the values are pre-loaded fonts at the matching
+// size. Replacing the map on a subsequent frame.Init re-
+// derives line heights at the next relayout pass — the path
+// the Font tag-bar command exercises when the user picks a
+// new base font.
+//
+// A nil map (or a Style.Scale missing from the map) is a
+// graceful-degradation case: the run renders with the base
+// font and contributes only defaultfontheight to its line's
+// LineH.
+func OptScaleFonts(m map[float32]draw.Font) OptionClosure {
+	return func(f *frameimpl, ctx *optioncontext) {
+		f.fontByScale = m
+	}
+}
+
 // OptMaxTab sets the default tabwidth in `0` characters.
 func OptMaxTab(maxtabchars int) OptionClosure {
 	return func(f *frameimpl, ctx *optioncontext) {

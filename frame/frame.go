@@ -395,6 +395,16 @@ type frameimpl struct {
 	// base font, same as the other variants.
 	fontCode draw.Font
 
+	// fontByScale maps Style.Scale → draw.Font for KindScale
+	// runs (B2.2 R4). md2spans emits scale=1.5 / 2.0 etc. on
+	// headings; the consumer (Text/acme) loads matching scaled
+	// fonts and installs them via OptScaleFonts. A missing key
+	// (or nil map) means the run renders with the base font,
+	// graceful degradation. Replacing the map on a subsequent
+	// frame.Init (as the Font command path does) re-derives
+	// line heights on next relayout.
+	fontByScale map[float32]draw.Font
+
 	defaultfontheight int // height of default font
 
 	// Debug overlays toggled by tag-bar commands. showBoxOutlines

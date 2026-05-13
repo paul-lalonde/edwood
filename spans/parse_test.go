@@ -199,12 +199,13 @@ func TestParseDirective_BeginEndRejectsMissingRegionKeyword(t *testing.T) {
 
 func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
 	// Slice B / Phase B4 translates bold / italic / hidden /
-	// hrule / family=code into Kind bits; scale=N.N and
-	// family=NAME-other-than-code are still silently accepted
-	// but don't set bits (variable line height + non-code font
-	// families wait for Slice C). All forms must succeed at the
-	// parse layer so producers emitting the full published
-	// protocol work without modification.
+	// hrule / family=code into Kind bits. Phase B2.2 R4 adds
+	// scale=N.N → KindScale (with Directive.Scale carrying the
+	// float). family=NAME-other-than-code is still silently
+	// accepted (no bits) — non-code font families wait for
+	// Slice C. All forms must succeed at the parse layer so
+	// producers emitting the full published protocol work
+	// without modification.
 	cases := []struct {
 		line     string
 		wantKind frame.Kind
@@ -215,10 +216,10 @@ func TestParseDirective_AcceptsKnownFlags(t *testing.T) {
 		{"s 0 5 #ff0000 hrule", frame.KindHRule},
 		{"s 0 5 #ff0000 #00ff00 bold", frame.KindBold},
 		{"s 0 5 - bold italic", frame.KindBold | frame.KindItalic},
-		{"s 0 5 #ff0000 scale=2.0", 0},
+		{"s 0 5 #ff0000 scale=2.0", frame.KindScale},
 		{"s 0 5 #ff0000 family=code", frame.KindCodeFamily},
 		{"s 0 5 #ff0000 family=serif", 0},
-		{"s 0 5 - - bold scale=1.5 family=code", frame.KindBold | frame.KindCodeFamily},
+		{"s 0 5 - - bold scale=1.5 family=code", frame.KindBold | frame.KindCodeFamily | frame.KindScale},
 		{"s 0 5 #ff0000 hrule family=code", frame.KindHRule | frame.KindCodeFamily},
 	}
 	for _, c := range cases {

@@ -77,13 +77,19 @@ type Directive struct {
 	Fg  color.Color // nil = default (the `-` token)
 	Bg  color.Color // nil = default (the `-` token or omitted)
 
-	// Kind carries the protocol's flag tokens that Slice B+
-	// translates into frame.Style.Kind bits — currently
-	// `bold` → frame.KindBold, `italic` → frame.KindItalic,
-	// `hidden` → frame.KindHidden. Other recognised flags
-	// (`hrule`, `scale=N.N`, `family=NAME`) are still
-	// silently accepted on the wire but don't yet set bits.
+	// Kind carries the protocol's flag tokens translated to
+	// frame.Style.Kind bits — `bold` → KindBold, `italic` →
+	// KindItalic, `hidden` → KindHidden, `hrule` → KindHRule,
+	// `family=code` → KindCodeFamily, `scale=N.N` →
+	// KindScale (B2.2 R4). Other recognised flags
+	// (`family=NAME` for non-code values) are silently
+	// accepted on the wire but don't yet set bits.
 	Kind frame.Kind
+
+	// Scale carries scale=N.N's parsed value when
+	// Kind & frame.KindScale is set. The frame applier
+	// installs it into frame.Style.Scale.
+	Scale float32
 }
 
 // ParseDirective parses one non-empty line. Returns an error
@@ -269,7 +275,15 @@ func parseSet(rest []string) (Directive, error) {
 		case rest[i] == "hrule":
 			d.Kind |= frame.KindHRule
 		case strings.HasPrefix(rest[i], "scale="):
-			// silent accept; variable line height lands in Slice C
+			// B2.2 R4: parse the value and surface both the
+			// bit and the float so the frame can pick the
+			// matching scaled font.
+			v, err := strconv.ParseFloat(rest[i][len("scale="):], 32)
+			if err != nil {
+				return Directive{}, fmt.Errorf("spans: scale= bad value: %w", err)
+			}
+			d.Kind |= frame.KindScale
+			d.Scale = float32(v)
 		case rest[i] == "family=code":
 			d.Kind |= frame.KindCodeFamily
 		case strings.HasPrefix(rest[i], "family="):

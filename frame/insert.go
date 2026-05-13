@@ -64,6 +64,7 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 		fontItalic:        f.fontItalic,
 		fontBoldItalic:    f.fontBoldItalic,
 		fontCode:          f.fontCode,
+		fontByScale:       f.fontByScale,
 		defaultfontheight: f.defaultfontheight,
 		maxtab:            f.maxtab,
 		nchars:            0,
