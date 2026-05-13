@@ -396,12 +396,23 @@ func (f *frameimpl) Redraw(enclosing image.Rectangle) {
 
 func (f *frameimpl) tick(pt image.Point, ticked bool) {
 	//	log.Println("_tick")
-	if f.ticked == ticked || f.tickimage == nil || !pt.In(f.rect) {
+	if f.ticked == ticked || !pt.In(f.rect) {
+		return
+	}
+
+	// B2.2 R6: size the caret to the line's actual height,
+	// reallocating tickimage if needed. A heading line gets a
+	// tall caret; a body line gets a normal-height one.
+	lineH := f.lineHAtPt(pt)
+	if f.tickimage == nil || f.tickimage.R().Dy() != lineH {
+		f.initTickAtHeight(lineH)
+	}
+	if f.tickimage == nil {
 		return
 	}
 
 	pt.X -= f.tickscale
-	r := image.Rect(pt.X, pt.Y, pt.X+frtickw*f.tickscale, pt.Y+f.defaultfontheight)
+	r := image.Rect(pt.X, pt.Y, pt.X+frtickw*f.tickscale, pt.Y+lineH)
 
 	if r.Max.X > f.rect.Max.X {
 		r.Max.X = f.rect.Max.X
