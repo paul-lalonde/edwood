@@ -107,6 +107,36 @@ require touching both.
 **Tests:** `TestPaintParity_DrawtextAndRepaintAgreeOnFont`,
 `TestKindHidden_SkipsGlyphPaintInRepaintBoxRange`.
 
+## I-12: Spans overlay emits one rect per visual line
+
+The "Spans" debug overlay (`Text.paintSpansOverlay` →
+`Frame.DrawOutlineRect`) draws one outlined rectangle per
+**visual line** of every non-plain styled region — not one
+hull rectangle per styled region. When a styled region soft-
+wraps across multiple visual lines, each line gets its own
+outline.
+
+Per-line geometry:
+- **First line of the region:** left edge = `Ptofchar(s)`.X;
+  right edge = `f.rect.Max.X` if the region continues onto a
+  next line, else `Ptofchar(e)`.X (one past the region's last
+  rune).
+- **Intermediate lines:** left edge = `f.rect.Min.X`; right
+  edge = `f.rect.Max.X`.
+- **Last line:** left edge = `f.rect.Min.X`; right edge =
+  `Ptofchar(e)`.X. Top edge = the line's top Y; bottom edge =
+  top + `DefaultFontHeight()`.
+
+**Failure mode:** a single hull rectangle from `Ptofchar(s)` to
+`Ptofchar(e)` produces a visually wrong outline whenever the
+region wraps — its left edge cuts into mid-line continuation
+text on line 2+ and its right edge clips the original line's
+right-side glyphs. The user-visible result is a box that does
+not enclose the styled glyphs.
+
+**Tests:** `TestPaintSpansOverlay_*` cover single-line,
+multi-line, and edge cases.
+
 ## Architectural notes (carried over from B2.2-attempt-1)
 
 These weren't "invariants" but lessons learned. Document them

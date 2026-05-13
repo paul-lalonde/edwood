@@ -55,6 +55,12 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 		maxtab:            f.maxtab,
 		nchars:            0,
 		box:               []*frbox{},
+		// Debug overlay state: propagate so the nframe's paintBox
+		// draws outlines for the just-inserted content. The hook
+		// is intentionally not propagated — it must fire only on
+		// the parent frame, where f.box is consistent.
+		showBoxOutlines: f.showBoxOutlines,
+		boxOutlineColor: f.boxOutlineColor,
 	}
 
 	// TODO(rjk): This is probably unnecessary.
@@ -183,14 +189,24 @@ type points struct {
 
 func (f *frameimpl) Insert(r []rune, p0 int) bool {
 	f.lk.Lock()
-	defer f.lk.Unlock()
-	return f.insertimpl(r, p0)
+	ret := f.insertimpl(r, p0)
+	hook := f.afterPaintHook
+	f.lk.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return ret
 }
 
 func (f *frameimpl) InsertByte(b []byte, p0 int) bool {
 	f.lk.Lock()
-	defer f.lk.Unlock()
-	return f.insertbyteimpl(b, p0, nil)
+	ret := f.insertbyteimpl(b, p0, nil)
+	hook := f.afterPaintHook
+	f.lk.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return ret
 }
 
 func (f *frameimpl) insertimpl(r []rune, p0 int) bool {

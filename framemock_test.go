@@ -46,3 +46,7 @@ func (mf *MockFrame) SelectOpt(*draw.Mousectl, *draw.Mouse, func(frame.SelectScr
 	return 0, 0
 }
 func (mf *MockFrame) DrawSel(image.Point, int, int, bool) {}
+
+func (mf *MockFrame) ToggleBoxOutlines() bool                     { return false }
+func (mf *MockFrame) SetAfterPaintHook(fn func())                 {}
+func (mf *MockFrame) DrawOutlineRect(image.Rectangle, draw.Image) {}

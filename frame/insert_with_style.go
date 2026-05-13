@@ -20,11 +20,18 @@ func (f *frameimpl) InsertWithStyle(r []rune, p0 int, styles []StyleRun) bool {
 		validateStyleRunsLen(styles, len(r))
 	}
 	f.lk.Lock()
-	defer f.lk.Unlock()
+	var ret bool
 	if allPlain(styles) {
-		return f.insertimpl(r, p0)
+		ret = f.insertimpl(r, p0)
+	} else {
+		ret = f.insertbyteimpl([]byte(string(r)), p0, expandStyles(styles, len(r)))
 	}
-	return f.insertbyteimpl([]byte(string(r)), p0, expandStyles(styles, len(r)))
+	hook := f.afterPaintHook
+	f.lk.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return ret
 }
 
 // validateStyleRunsLen enforces §5.4's invariant that the styles
@@ -75,7 +82,13 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		return
 	}
 	f.lk.Lock()
-	defer f.lk.Unlock()
+	defer func() {
+		hook := f.afterPaintHook
+		f.lk.Unlock()
+		if hook != nil {
+			hook()
+		}
+	}()
 
 	if p0 < 0 || p0 > p1 || p1 > f.nchars {
 		panic(fmt.Sprintf("frame.SetStyleRange: out-of-range p0=%d p1=%d nchars=%d", p0, p1, f.nchars))

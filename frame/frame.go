@@ -184,6 +184,28 @@ type Frame interface {
 	// arrives in Slice C alongside replaced-element rendering.
 	SetOriginYOffset(yPx int)
 	GetOriginYOffset() int
+
+	// ── debug overlays ──────────────────────────────────────
+
+	// ToggleBoxOutlines flips the per-paint box-outline overlay.
+	// When on, paintBox draws a 1-pixel Purpleblue rectangle around
+	// every painted box's rect immediately after its glyph. The
+	// "Box" tag-bar command toggles this. Returns the new state.
+	ToggleBoxOutlines() bool
+
+	// SetAfterPaintHook registers a callback fired once per
+	// public paint-causing call (Insert / InsertByte /
+	// InsertWithStyle / SetStyleRange) after the box model has
+	// been updated and the frame lock has been released. The
+	// hook may freely call back into Frame methods. nil clears.
+	// The "Spans" tag-bar command uses this to overlay span
+	// boundaries on top of frame paint.
+	SetAfterPaintHook(fn func())
+
+	// DrawOutlineRect draws a 1-pixel outline of r in color col.
+	// No fill. Used by debug overlays (the "Spans" hook outlines
+	// each non-plain region).
+	DrawOutlineRect(r image.Rectangle, col draw.Image)
 }
 
 // TODO(rjk): Consider calling this SetMaxtab?
@@ -195,6 +217,50 @@ func (f *frameimpl) Maxtab(m int) {
 }
 
 func (f *frameimpl) GetMaxtab() int { return f.maxtab }
+
+// ToggleBoxOutlines flips the box-outline debug overlay and
+// returns the new state. Lazy-allocates the Purpleblue outline
+// color on first enable.
+func (f *frameimpl) ToggleBoxOutlines() bool {
+	f.lk.Lock()
+	defer f.lk.Unlock()
+	f.showBoxOutlines = !f.showBoxOutlines
+	if f.showBoxOutlines && f.boxOutlineColor == nil && f.display != nil {
+		if img, err := f.display.AllocImage(image.Rect(0, 0, 1, 1), f.display.ScreenImage().Pix(), true, draw.Purpleblue); err == nil {
+			f.boxOutlineColor = img
+		}
+	}
+	return f.showBoxOutlines
+}
+
+// SetAfterPaintHook registers fn as the per-paint callback.
+// Public paint-causing entry points (Insert / InsertByte /
+// InsertWithStyle / SetStyleRange) fire fn after releasing
+// f.lk, so the hook may freely call back into Frame methods.
+// nil clears.
+func (f *frameimpl) SetAfterPaintHook(fn func()) {
+	f.lk.Lock()
+	defer f.lk.Unlock()
+	f.afterPaintHook = fn
+}
+
+// DrawOutlineRect draws a 1-pixel border at r in color col on
+// the frame's background image. Clipped to f.rect so debug
+// overlays never bleed outside the frame.
+func (f *frameimpl) DrawOutlineRect(r image.Rectangle, col draw.Image) {
+	if f.background == nil || col == nil {
+		return
+	}
+	r = r.Intersect(f.rect)
+	if r.Empty() {
+		return
+	}
+	// Top, bottom, left, right.
+	f.background.Draw(image.Rect(r.Min.X, r.Min.Y, r.Max.X, r.Min.Y+1), col, nil, image.Point{})
+	f.background.Draw(image.Rect(r.Min.X, r.Max.Y-1, r.Max.X, r.Max.Y), col, nil, image.Point{})
+	f.background.Draw(image.Rect(r.Min.X, r.Min.Y, r.Min.X+1, r.Max.Y), col, nil, image.Point{})
+	f.background.Draw(image.Rect(r.Max.X-1, r.Min.Y, r.Max.X, r.Max.Y), col, nil, image.Point{})
+}
 
 // FrameFillStatus is a snapshot of the capacity of the Frame.
 type FrameFillStatus struct {
@@ -312,6 +378,16 @@ type frameimpl struct {
 	fontCode draw.Font
 
 	defaultfontheight int // height of default font
+
+	// Debug overlays toggled by tag-bar commands. showBoxOutlines
+	// makes paintBox draw a 1-px Purpleblue rect around every
+	// painted box; boxOutlineColor is lazily allocated on first
+	// enable. afterPaintHook fires at the end of drawtext /
+	// repaintBoxRange so the "Spans" tag command can overlay
+	// span boundaries on top of the frame's normal paint.
+	showBoxOutlines bool
+	boxOutlineColor draw.Image
+	afterPaintHook  func()
 
 	box []*frbox // the boxes of text in this frame.
 

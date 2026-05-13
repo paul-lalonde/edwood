@@ -55,6 +55,7 @@ type Exectab struct {
 
 var globalexectab = []Exectab{
 	//	{ "Abort",		doabort,	false,	true /*unused*/,		true /*unused*/,		},
+	{"Box", boxoutlines, false, true /*unused*/, true /*unused*/},
 	{"Cut", cut, true, true, true},
 	{"Del", del, false, false, true /*unused*/},
 	{"Delcol", delcol, false, true /*unused*/, true /*unused*/},
@@ -80,6 +81,7 @@ var globalexectab = []Exectab{
 	{"Send", sendx, true, true /*unused*/, true /*unused*/},
 	{"Snarf", cut, false, true, false},
 	{"Sort", sortx, false, true /*unused*/, true /*unused*/},
+	{"Spans", spansoverlay, false, true /*unused*/, true /*unused*/},
 	{"Tab", tab, false, true /*unused*/, true /*unused*/},
 	{"Tabexpand", expandtab, false, true /*unused*/, true /*unused*/},
 	{"Undo", undo, false, true, true /*unused*/},
@@ -513,6 +515,46 @@ func xkill(_, _ *Text, argt *Text, _, _ bool, args string) {
 	for _, cmd := range strings.Fields(args) {
 		global.ckill <- cmd
 	}
+}
+
+// boxoutlines is the "Box" tag command. Toggles the frame's
+// box-outline debug overlay on the et window's body and triggers
+// a redraw so the change is visible immediately.
+func boxoutlines(et, _, _ *Text, _, _ bool, _ string) {
+	if et == nil || et.w == nil {
+		return
+	}
+	body := &et.w.body
+	if body.fr == nil {
+		return
+	}
+	on := body.fr.ToggleBoxOutlines()
+	body.Redraw(body.fr.Rect(), -1, false)
+	state := "off"
+	if on {
+		state = "on"
+	}
+	warning(nil, "Box outlines %s for %s\n", state, et.w.body.file.Name())
+}
+
+// spansoverlay is the "Spans" tag command. Toggles the Text's
+// per-paint spans-overlay hook on the et window's body and
+// triggers a redraw so the change is visible immediately.
+func spansoverlay(et, _, _ *Text, _, _ bool, _ string) {
+	if et == nil || et.w == nil {
+		return
+	}
+	body := &et.w.body
+	if body.fr == nil {
+		return
+	}
+	on := body.ToggleSpansOverlay()
+	body.Redraw(body.fr.Rect(), -1, false)
+	state := "off"
+	if on {
+		state = "on"
+	}
+	warning(nil, "Spans overlay %s for %s\n", state, et.w.body.file.Name())
 }
 
 func local(et, _, argt *Text, _, _ bool, arg string) {

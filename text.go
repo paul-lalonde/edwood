@@ -23,6 +23,77 @@ import (
 	"github.com/rjkroege/edwood/util"
 )
 
+// ToggleSpansOverlay flips the per-paint spans-overlay debug
+// hook. When on, after every frame paint pass that goes through
+// drawtext / repaintBoxRange the registered hook walks the spans
+// store and outlines each non-plain region. Returns the new
+// state. Invoked by the "Spans" tag-bar command.
+func (t *Text) ToggleSpansOverlay() bool {
+	t.showSpans = !t.showSpans
+	if t.fr == nil {
+		return t.showSpans
+	}
+	if t.showSpans {
+		if t.spansOverlayColor == nil && t.display != nil {
+			if img, err := t.display.AllocImage(image.Rect(0, 0, 1, 1), t.display.ScreenImage().Pix(), true, draw.Black); err == nil {
+				t.spansOverlayColor = img
+			}
+		}
+		t.fr.SetAfterPaintHook(t.paintSpansOverlay)
+	} else {
+		t.fr.SetAfterPaintHook(nil)
+	}
+	return t.showSpans
+}
+
+// paintSpansOverlay draws an outline rectangle per non-plain
+// region in the spans store. Per invariant I-12, a region that
+// soft-wraps across multiple visual lines produces one outline
+// per line — not one hull rect covering all lines. The hook
+// fires from Frame's after-paint callback so this runs when
+// f.box is consistent with the spans store.
+func (t *Text) paintSpansOverlay() {
+	if t.spans == nil || t.spans.Empty() || t.fr == nil || t.suppressSpansOverlay {
+		return
+	}
+	col := t.spansOverlayColor
+	v0 := t.org
+	nFrame := t.fr.GetFrameFillStatus().Nchars
+	v1 := t.org + nFrame
+	lineH := t.fr.DefaultFontHeight()
+	rectMaxX := t.fr.Rect().Max.X
+	for _, r := range t.spans.Snapshot() {
+		if r.Style.IsPlain() {
+			continue
+		}
+		s := r.Start
+		e := r.Start + r.Length
+		if e <= v0 || s >= v1 {
+			continue
+		}
+		if s < v0 {
+			s = v0
+		}
+		if e > v1 {
+			e = v1
+		}
+		// Walk runes [s, e), emitting a rect each time
+		// Ptofchar's Y crosses a visual-line boundary. A
+		// wrapped segment ends at the frame's right edge; the
+		// final segment ends at Ptofchar(e).X.
+		segPt := t.fr.Ptofchar(s - v0)
+		for i := s + 1; i <= e; i++ {
+			pt := t.fr.Ptofchar(i - v0)
+			if pt.Y != segPt.Y {
+				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, rectMaxX, segPt.Y+lineH), col)
+				segPt = pt
+			} else if i == e {
+				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, pt.X, segPt.Y+lineH), col)
+			}
+		}
+	}
+}
+
 // attachSpans installs s as this Text's spans sidecar and
 // registers a style-change Observe callback. The callback
 // (per design §7.6) clips the changed rune range [p0, p1) to
@@ -100,6 +171,18 @@ type Text struct {
 	// Texts when no producer has attached. See spans.Store and
 	// design §7.1.
 	spans spans.Store
+
+	// showSpans is the debug-overlay toggle for the "Spans"
+	// tag-bar command. When true, t.paintSpansOverlay is wired
+	// into the frame's after-paint hook and outlines each
+	// non-plain region after every paint pass.
+	showSpans         bool
+	spansOverlayColor draw.Image
+	// suppressSpansOverlay disables paintSpansOverlay while
+	// setorigin is mid-scroll. The pre-t.org-update fr.Insert
+	// (used to shift content) would otherwise fire the hook
+	// with a stale t.org and draw overlays at wrong positions.
+	suppressSpansOverlay bool
 
 	org       int // Origin of the frame within the buffer
 	q0        int
@@ -1742,6 +1825,12 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 			org++
 		}
 	}
+	// Suppress paintSpansOverlay while we shift content. These
+	// fr.Insert / fr.Delete calls fire the after-paint hook with
+	// the *old* t.org still in place, which would draw the
+	// spans overlay at stale frame coordinates. The post-update
+	// t.fill below fires the hook with correct t.org.
+	t.suppressSpansOverlay = true
 	a = org - t.org
 	if a >= 0 && a < fr.GetFrameFillStatus().Nchars {
 		fr.Delete(0, a)
@@ -1761,6 +1850,7 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 		}
 	}
 	t.org = org
+	t.suppressSpansOverlay = false
 	t.fill(fr)
 	// Drive the tall-element y-offset (§7.5). For Slice A the
 	// frame's SetOriginYOffset is a stub returning 0; Slice C C2
@@ -1769,6 +1859,13 @@ func (t *Text) setorigin(fr frame.SelectScrollUpdater, org int, exact bool, call
 		t.fr.SetOriginYOffset(0)
 	}
 	t.ScrDraw(fr.GetFrameFillStatus().Nchars)
+	// Backward-scroll case: the suppressed fr.Insert at the top
+	// brought in new content without firing the overlay hook, and
+	// t.fill above is a no-op because the frame is already full.
+	// Fire once now so the new top lines show their overlay.
+	if t.showSpans {
+		t.paintSpansOverlay()
+	}
 
 	if !calledfromscroll {
 		t.SetSelect(t.q0, t.q1)

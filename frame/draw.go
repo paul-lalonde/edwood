@@ -69,6 +69,12 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 		rect := image.Rect(pt.X, ymid, pt.X+b.Wid, ymid+1)
 		f.background.Draw(rect, fg, nil, image.Point{})
 	}
+	// Debug overlay: outline the painted box's line-extent rect
+	// in Medblue. Drawn last so the outline sits on top of glyphs
+	// and any decoration.
+	if f.showBoxOutlines && f.boxOutlineColor != nil {
+		f.DrawOutlineRect(image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight), f.boxOutlineColor)
+	}
 }
 
 // fontFor picks the right font variant for a styled run. Falls
