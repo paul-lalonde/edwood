@@ -557,17 +557,49 @@ that doesn't fit". The scanner+wrap mechanics are in. Smoke
 test pending: confirm md2spans-produced bold lead lines wrap
 correctly in a running edwood, before B5.3.
 
+### 2026-05-12 (latest) — Phase B5 smoke + debug overlays
+
+Smoke test confirmed: md2spans paragraph wrap looks clean,
+including the bold lead-line case. Phase B5 exit criterion met.
+
+Debug overlays restored from B2.2-attempt-1 and rebuilt cleanly
+on the B5 base (f54a40a):
+- `Box` tag command — Purpleblue 1-px outline per painted box,
+  state propagated through bxscan's nframe so Insert paths
+  paint outlines for new content.
+- `Spans` tag command — Black 1-px outline per non-plain
+  region, **one rect per visual line** (invariant I-12;
+  multi-line regions split at wrap, not hull).
+- `Frame.SetAfterPaintHook(fn)` fires fn once per public
+  paint-causing entry point AFTER `f.lk` is released — so the
+  hook may freely call back into Frame methods without
+  deadlock. (The first attempt fired the hook under the lock
+  and deadlocked when paintSpansOverlay re-entered
+  `GetFrameFillStatus`.)
+- `Text.suppressSpansOverlay` short-circuits the hook during
+  `setorigin`'s pre-`t.org`-update shift work; setorigin
+  explicitly fires `paintSpansOverlay` at the end so
+  backward-scroll-into-top-content gets covered when fill is
+  a no-op.
+
+Known overlay limitations (debug feature; acceptable for v1):
+- Forward scroll relies on `t.fill`'s Inserts to fire the
+  hook; if fill is a no-op the overlay can show stale pixels
+  in the blitted area until the next paint. (`setorigin` does
+  an explicit fire at the end, mitigating most cases.)
+- `scale=N.N` (md2spans heading sizing) silently accepted →
+  headings don't show overlays.
+- `begin region` / `end region` → NoOp → block-region runes
+  not in the overlay unless they have inline styling on top.
+- md2spans deliberately leaves inline markup (`**`, `[]()`,
+  `#`) plain (markup-stays-visible stance), so those never
+  show overlays.
+
 ## Next-session candidates
 
-1. Smoke-test md2spans paragraph wrap in the rebuilt
-   `./edwood` binary (open a long bold paragraph; confirm it
-   wraps before the offending word, not mid-word). If that's
-   clean, Phase B5 exit criterion is met.
-2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
-   the B5 layout. Use `frame/testdata/*/_trial.html` as the
-   reference; verify each one shows the intended wrap
-   behavior before promoting it to baseline.
-3. Restart Phase B2.2 with the per-box Y architecture:
+1. **Phase B2.2 (variable line height)** — restart with the
+   per-box-Y architecture spec'd in
+   `docs/designs/features/frame-rendering-spec.md`:
    - Each box stores `Y` (its line's top Y) and `Asc` (its
      line's baseline ascent — the max ascent of any font on
      the line).
@@ -578,9 +610,16 @@ correctly in a running edwood, before B5.3.
      so glyphs share a baseline regardless of font size.
    - Cursor (tick) and scroll (`Delete`'s blit, fill
      semantics) get explicit subrows.
-4. Slice C C1 — Replaced-element rendering for `b` directive.
-5. The Externalize-font-variant-map idea (project memory).
-6. Scrollbar refactor — `docs/designs/features/frame-scrollbar-spec.md`
+   Solves the user-visible "headings same size as body"
+   issue and the debug-overlay "no overlay on headings" side
+   effect.
+2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
+   the B5 layout. Use `frame/testdata/*/_trial.html` as the
+   reference; verify each one shows the intended wrap
+   behavior before promoting it to baseline.
+3. Slice C C1 — Replaced-element rendering for `b` directive.
+4. The Externalize-font-variant-map idea (project memory).
+5. Scrollbar refactor — `docs/designs/features/frame-scrollbar-spec.md`
    is a stub capturing the scroll-direction-alignment rule
    (B1 → SnapBottom; B3 / B2 / programmatic → SnapTop; file-top
    and tall-line edge cases override). Expand to a full design
