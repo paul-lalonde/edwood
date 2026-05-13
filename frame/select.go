@@ -30,7 +30,7 @@ func (f *frameimpl) SelectOpt(mc *draw.Mousectl, downevent *draw.Mouse, getmorel
 	osp0 := f.sp0
 	osp1 := f.sp1
 
-	f.drawselimpl(f.ptofcharptb(osp0, f.rect.Min, 0), osp0, osp1, false)
+	f.drawselimpl(f.ptOfCharReader(osp0), osp0, osp1, false)
 
 	f.cols[ColHigh] = bg
 	f.cols[ColHText] = fg
@@ -38,7 +38,7 @@ func (f *frameimpl) SelectOpt(mc *draw.Mousectl, downevent *draw.Mouse, getmorel
 	defer func() {
 		f.cols[ColHigh] = oback
 		f.cols[ColHText] = otext
-		f.drawselimpl(f.ptofcharptb(osp0, f.rect.Min, 0), osp0, osp1, true)
+		f.drawselimpl(f.ptOfCharReader(osp0), osp0, osp1, true)
 	}()
 
 	return f.selectimpl(mc, downevent, getmorelines)
@@ -62,9 +62,15 @@ func (f *frameimpl) selectimpl(mc *draw.Mousectl, downevent *draw.Mouse, getmore
 	// Hypothesis: track if we have had inserts and removals during the selection loop.
 	f.modified = false
 
-	p0 := f.charofptimpl(omp)
+	// B2.2 R7: charofptimpl walks via cklinewrap+advance with
+	// constant defaultfontheight per line; on a frame with a
+	// scaled heading line that walk lands on the wrong rune.
+	// Use the pure-reader charOfPtReader (R3) which reads
+	// box.Y / box.LineH for variable-height layouts. Same
+	// story for ptOfCharReader.
+	p0 := f.charOfPtReader(omp)
 	p1 := p0
-	f.drawselimpl(f.ptofcharptb(p0, f.rect.Min, 0), p0, p1, true)
+	f.drawselimpl(f.ptOfCharReader(p0), p0, p1, true)
 
 	reg := 0
 	pin := 0
@@ -99,7 +105,7 @@ func (f *frameimpl) selectimpl(mc *draw.Mousectl, downevent *draw.Mouse, getmore
 			reg = region(p1, p0)
 		}
 
-		q := f.charofptimpl(mp)
+		q := f.charOfPtReader(mp)
 
 		// log.Printf("select, before state table p0=%d p1=%d q=%d pin=%d", p0, p1, q, pin)
 		switch {
@@ -134,7 +140,7 @@ func (f *frameimpl) selectimpl(mc *draw.Mousectl, downevent *draw.Mouse, getmore
 		}
 		// log.Printf("select, after state table p0=%d p1=%d q=%d pin=%d", p0, p1, q, pin)
 
-		f.drawselimpl(f.ptofcharptb(p0, f.rect.Min, 0), p0, p1, true)
+		f.drawselimpl(f.ptOfCharReader(p0), p0, p1, true)
 
 		if scrled {
 			// TODO(rjk): Document why we need this call and what it's for.

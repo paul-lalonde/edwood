@@ -168,12 +168,22 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	newboxes := frame.box
 
 	// Temporarily create prefixboxes to find the position of (a possibly
-	// infinitely thin) rune immediately at position p.
+	// infinitely thin) rune immediately at position p. The
+	// prefix slice points at the parent's already-relayouted
+	// boxes, so the R3 reader returns the correct position
+	// even on variable-height layouts (the legacy walk's
+	// constant-height accumulator would land at the wrong Y).
 	prefixboxes := f.box[0:bn]
 	frame.box = prefixboxes
-	pt0 := frame.ptofcharptb(p, f.rect.Min, 0)
+	pt0 := frame.ptOfCharReader(p)
 
 	frame.box = newboxes
+	// B2.2 R7: full relayout BEFORE _draw so cklinewrap's
+	// lineHForAdvance has correct line-by-line LineH lookups
+	// and nframe.drawtext's offset walk reads accurate
+	// b.X/b.Y. The parent's post-merge relayoutFrom redoes
+	// this against the merged box list.
+	frame.relayoutFrom(0)
 	pt1 := frame._draw(pt0)
 	f.lastlinefull = frame.lastlinefull
 
@@ -291,7 +301,9 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 	// Scrolling is the only time that we need to be particularly careful
 	// with this. Small edits won't have a selection? Given however the cost
 	// of selection drawing, we should do the right thing once?
-	f.drawselimpl(f.ptofcharptb(f.sp0, f.rect.Min, 0), f.sp0, f.sp1, false)
+	// B2.2 R7: pre-mutation; box.X/Y still reflect the prior
+	// relayout so the reader gives the correct position.
+	f.drawselimpl(f.ptOfCharReader(f.sp0), f.sp0, f.sp1, false)
 
 	/*
 	 * Find point where old and new x's line up
@@ -348,9 +360,14 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 			f.nlines++
 		}
 	} else if pt1.Y != pt0.Y {
+		// R7: q0 / q1 use the actual line height at pt0 —
+		// pt1 is just pt0 shifted vertically by the insertion,
+		// so the line containing pt0 (pre-mutation) determines
+		// both ends of the blit's strip height.
 		y := f.rect.Max.Y
-		q0 := pt0.Y + f.defaultfontheight
-		q1 := pt1.Y + f.defaultfontheight
+		d0 := f.lineHAtPt(pt0)
+		q0 := pt0.Y + d0
+		q1 := pt1.Y + d0
 		f.nlines += (q1 - q0) / f.defaultfontheight
 		if f.nlines > f.maxlines {
 			// log.Println("f.chop", ppt1, p0, nn0, len(f.box), f.nbox)
@@ -391,11 +408,19 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 		b := f.box[n0]
 		pt := pts[npts].pt1
 
+		// R7: each blit rect's height is the box's line
+		// height, not a constant defaultfontheight. b.LineH
+		// is the relayout-fresh value; fall back to
+		// defaultfontheight when unset (pre-relayout state).
+		bLineH := b.LineH
+		if bLineH == 0 {
+			bLineH = f.defaultfontheight
+		}
 		if b.Nrune > 0 {
 			rect.Min = pt
 			rect.Max = rect.Min
 			rect.Max.X += b.Wid
-			rect.Max.Y += f.defaultfontheight
+			rect.Max.Y += bLineH
 
 			f.background.Draw(rect, f.background, nil, pts[npts].pt0)
 			// clear bit hanging off right
@@ -403,7 +428,7 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 				rect.Min = opt0
 				rect.Max = opt0
 				rect.Max.X = f.rect.Max.X
-				rect.Max.Y += f.defaultfontheight
+				rect.Max.Y += bLineH
 
 				f.background.Draw(rect, col, nil, rect.Min)
 			} else if pt.Y < y {
@@ -411,7 +436,7 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 				rect.Max = pt
 				rect.Min.X += b.Wid
 				rect.Max.X = f.rect.Max.X
-				rect.Max.Y += f.defaultfontheight
+				rect.Max.Y += bLineH
 
 				f.background.Draw(rect, col, nil, rect.Min)
 			}
@@ -422,7 +447,7 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 			rect.Min = pt
 			rect.Max = pt
 			rect.Max.X += b.Wid
-			rect.Max.Y += f.defaultfontheight
+			rect.Max.Y += bLineH
 			if rect.Max.X >= f.rect.Max.X {
 				rect.Max.X = f.rect.Max.X
 			}
@@ -437,13 +462,9 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 	}
 
 	f.fillNonGlyphAreas(ppt0, ppt1, col)
-	// B2.2 R5: refresh the child frame's per-box LineA so
-	// drawtext's call to paintBox computes a correct baseline
-	// offset (paintBox uses b.LineA, which setBoxLineDefaults
-	// seeded with the base-font ascent only — without this
-	// relayout a scaled box on the child would paint with
-	// offset = baseAscent - scaledAscent, i.e., shifted up).
-	nframe.relayoutFrom(0)
+	// Child relayout already ran inside bxscan (R7) before
+	// _draw, so nframe.box has fresh X/Y/LineH/LineA when
+	// drawtext paints.
 	nframe.drawtext(ppt0, tcol, col)
 
 	// Skip the rest if nothing is added. This means that f.lastlinefull is valid.
@@ -480,8 +501,7 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 	}
 
 	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
-	// box-model mutation. No walk consumer reads these yet
-	// (R3 lands that); the pass exists so later rows can.
+	// box-model mutation.
 	f.relayoutFrom(0)
 	return f.lastlinefull
 }

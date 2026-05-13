@@ -78,10 +78,21 @@ func comparecore(t *testing.T, prefix string, testvector []BoxTester) {
 
 // expectedboxesequal tests that the expected box slice afterboxes equals the
 // computed box found in frame. prefix and name describe the test and i is the
-// box index.
+// box index. X/Y are layout outputs (set by relayoutFrom from the frame's
+// actual rect) and aren't structural; we compare boxes structurally by
+// zeroing X/Y on the got side before DeepEqual.
 func expectedboxesequal(t *testing.T, prefix, name string, i int, frame *frameimpl, afterboxes []*frbox) {
 	t.Helper()
-	if got, want := frame.box[i], afterboxes[i]; !reflect.DeepEqual(got, want) {
+	gotBox := frame.box[i]
+	wantBox := afterboxes[i]
+	gotCopy := gotBox
+	if gotCopy != nil {
+		c := *gotCopy
+		c.X = 0
+		c.Y = 0
+		gotCopy = &c
+	}
+	if got, want := gotCopy, wantBox; !reflect.DeepEqual(got, want) {
 		switch {
 		case got == nil && want != nil:
 			t.Errorf("%s-%s: result box [%d] mismatch: got nil want %#v (%s)", prefix, name, i, want, string(want.Ptr))

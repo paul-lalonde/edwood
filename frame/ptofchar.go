@@ -83,8 +83,18 @@ func (f *frameimpl) ptOfCharReader(p int) image.Point {
 		}
 		p -= l
 	}
-	// p past end: return position one past the last box.
+	// p past end: return position one past the last box. If
+	// the last box is a hard newline, "one past" lands at the
+	// start of the next line (rect.Min.X, last.Y + last.LineH)
+	// — matching the legacy walk's advance() behavior.
 	last := f.box[len(f.box)-1]
+	if last.Nrune < 0 && last.Bc == '\n' {
+		lineH := last.LineH
+		if lineH == 0 {
+			lineH = f.defaultfontheight
+		}
+		return image.Pt(f.rect.Min.X, last.Y+lineH)
+	}
 	return image.Pt(last.X+last.Wid, last.Y)
 }
 

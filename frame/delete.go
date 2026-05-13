@@ -34,7 +34,9 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 	// TODO(rjk): Why do this after the splitting? It has already increased the work by this point?
 	// There are more boxes. And so drawing will be slower?
 	// Remove the selection or tick.
-	f.drawselimpl(f.ptofcharptb(f.sp0, f.rect.Min, 0), f.sp0, f.sp1, false)
+	// B2.2 R7: pre-mutation; box.X/Y reflect the prior
+	// relayout so the reader is correct here.
+	f.drawselimpl(f.ptOfCharReader(f.sp0), f.sp0, f.sp1, false)
 
 	nn0 := n0
 	ppt0 := pt0
@@ -62,10 +64,12 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 		}
 
 		// r is the rectangle corresponding to the area that must be replaced to update
-		// the display with the removal of the text.
+		// the display with the removal of the text. R7: use
+		// the actual line height at pt0 so variable-height
+		// lines (scaled headings) get the right blit extent.
 		r.Min = pt0
 		r.Max = pt0
-		r.Max.Y += f.defaultfontheight
+		r.Max.Y += f.lineHAtPt(pt0)
 
 		if b.Nrune > 0 {
 			w0 := b.Wid
@@ -117,10 +121,18 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 		}
 
 		if n1 < len(f.box) {
-			height := f.defaultfontheight
-			q0 := pt0.Y + height
-			q1 := pt1.Y + height
-			q2 := pt2.Y + height
+			// B2.2 R7: blit math uses the actual LineH of the
+			// line at pt1 — the first line being shifted up
+			// into the vacated rect. The blit's src and dst
+			// rects must be the same size, so both q0 (dst
+			// bottom) and q1 (src bottom) use the SAME height.
+			// For pure constant-height frames (no scaled
+			// boxes) this collapses to h = defaultfontheight,
+			// the upstream behavior.
+			h := f.lineHAtPt(pt1)
+			q0 := pt0.Y + h
+			q1 := pt1.Y + h
+			q2 := pt2.Y + h
 
 			if q2 > f.rect.Max.Y {
 				q2 = f.rect.Max.Y
@@ -159,19 +171,22 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 	}
 
 	f.nchars -= int(p1 - p0)
+
+	// B2.2 R2/R7: refresh per-box geometry BEFORE the Tick
+	// and final pt lookups so they use up-to-date box.Y on
+	// variable-height layouts (a Delete that crossed a
+	// scaled-heading line otherwise leaves Tick at a stale
+	// constant-height-walk position).
+	f.relayoutFrom(0)
+
 	if f.sp0 == f.sp1 {
-		f.Tick(f.ptofcharptb(f.sp0, f.rect.Min, 0), true)
+		f.Tick(f.ptOfCharReader(f.sp0), true)
 	}
-	pt0 = f.ptofcharptb(f.nchars, f.rect.Min, 0)
+	pt0 = f.ptOfCharReader(f.nchars)
 	n := f.nlines
 	f.nlines = (pt0.Y - f.rect.Min.Y) / f.defaultfontheight
 	if pt0.X > f.rect.Min.X {
 		f.nlines++
 	}
-	// f.Logboxes("end of delete")
-
-	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
-	// box-model mutation. See relayout.go.
-	f.relayoutFrom(0)
 	return n - f.nlines
 }

@@ -27,6 +27,12 @@ type InsertTest struct {
 }
 
 func (bx InsertTest) Try() interface{} {
+	// B2.2 R7: bxscan's prefix-position lookup now uses the
+	// post-R3 reader which reads box.X/Y. Tests construct
+	// frames inline with un-laid-out boxes (X=0, Y=0); run
+	// relayoutFrom so positions are populated against the
+	// frame's actual rect before exercising bxscan.
+	bx.frame.relayoutFrom(0)
 	a, b, c := bx.stim(bx.frame)
 	return InsertTestResult{a, b, c}
 }

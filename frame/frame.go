@@ -462,10 +462,11 @@ type frameimpl struct {
 	lastlinefull bool
 	modified     bool
 
-	tickimage   draw.Image // typing tick
-	tickback    draw.Image // image under tick
-	ticked      bool       // Is the tick on.
-	highlighton bool       // True if the highlight is painted.
+	tickimage   draw.Image      // typing tick
+	tickback    draw.Image      // image under tick
+	tickRect    image.Rectangle // rect of the currently-drawn tick (used to erase)
+	ticked      bool            // Is the tick on.
+	highlighton bool            // True if the highlight is painted.
 
 	// Set this to true to indicate that the Frame should not emit drawing ops.
 	// Use this if the Frame is being used "headless" to measure some text.

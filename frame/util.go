@@ -48,12 +48,12 @@ func (f *frameimpl) cklinewrap(p image.Point, b *frbox) (ret image.Point) {
 	if b.Nrune < 0 {
 		if int(b.Minwid) > f.rect.Max.X-p.X {
 			ret.X = f.rect.Min.X
-			ret.Y = p.Y + f.defaultfontheight
+			ret.Y = p.Y + f.lineHForAdvance(p)
 		}
 	} else {
 		if b.Wid > f.rect.Max.X-p.X {
 			ret.X = f.rect.Min.X
-			ret.Y = p.Y + f.defaultfontheight
+			ret.Y = p.Y + f.lineHForAdvance(p)
 		}
 	}
 	if ret.Y > f.rect.Max.Y {
@@ -90,7 +90,7 @@ func (f *frameimpl) cklinewrap0(p image.Point, b *frbox) (ret image.Point) {
 	}
 	if wrap {
 		ret.X = f.rect.Min.X
-		ret.Y = p.Y + f.defaultfontheight
+		ret.Y = p.Y + f.lineHForAdvance(p)
 		if ret.Y > f.rect.Max.Y {
 			ret.Y = f.rect.Max.Y
 		}
@@ -98,10 +98,39 @@ func (f *frameimpl) cklinewrap0(p image.Point, b *frbox) (ret image.Point) {
 	return ret
 }
 
+// lineHForAdvance returns the height of the line at point p
+// for use by cklinewrap/cklinewrap0/advance when stepping
+// pt.Y to the next line. Looks up the box whose stored line
+// extent contains p.Y; falls back to defaultfontheight when
+// p.Y is past all known boxes (e.g., walks during early
+// Insert layout before the parent has its post-merge
+// relayout).
+func (f *frameimpl) lineHForAdvance(p image.Point) int {
+	for _, b := range f.box {
+		if b.LineH <= 0 {
+			continue
+		}
+		if p.Y >= b.Y && p.Y < b.Y+b.LineH {
+			return b.LineH
+		}
+	}
+	return f.defaultfontheight
+}
+
 func (f *frameimpl) advance(p image.Point, b *frbox) image.Point {
 	if b.Nrune < 0 && b.Bc == '\n' {
 		p.X = f.rect.Min.X
-		p.Y += f.defaultfontheight
+		// Advance by the line's actual height — using the
+		// box b's own LineH when populated (relayout-fresh),
+		// else fall back to looking up the line at p, else
+		// defaultfontheight. Without this, cklinewrap-driven
+		// walks on a frame containing scaled-heading lines
+		// drift away from the true layout's Y.
+		h := b.LineH
+		if h == 0 {
+			h = f.lineHForAdvance(p)
+		}
+		p.Y += h
 		if p.Y > f.rect.Max.Y {
 			p.Y = f.rect.Max.Y
 		}

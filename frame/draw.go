@@ -6,20 +6,37 @@ import (
 	"github.com/rjkroege/edwood/draw"
 )
 
-// drawtext paints every box in f.box starting at pt. The pt
-// accumulator walk is intentional: drawtext is only ever called
-// on a child frame (nframe) built by bxscan, whose boxes are
-// not run through relayoutFrom. The child frame inherits f.rect
-// but its boxes occupy a sub-region beginning at the caller-
-// supplied pt. The legacy cklinewrap+advance accumulator
-// produces the right per-box position from that pt — read
-// paths on the parent frame (repaintBoxRange) use box.X / box.Y
-// directly because those boxes ARE relayouted.
+// drawtext paints every box in f.box starting at pt. It runs
+// only on bxscan's child frame (nframe), whose boxes were
+// laid out by nframe.relayoutFrom starting at rect.Min. The
+// caller passes pt = the parent's insert position (mid-frame
+// in general). We map the child's relayout coordinates onto
+// the parent's frame by:
+//
+//   - Y shift: every box's Y advances by (pt.Y - rect.Min.Y),
+//     so the child's first line lands on the parent's insert
+//     line and subsequent lines stack below with their stored
+//     LineH spacing.
+//   - X shift (first line only): the parent's insert may
+//     start mid-line, so the FIRST line's boxes shift by
+//     (pt.X - rect.Min.X). Wrapped / newline-induced lines
+//     start at rect.Min.X — same as the child's relayout —
+//     and need no X shift.
+//
+// This keeps paintBox's bg rect, glyph baseline offset, and
+// box outline all consistent with where the parent's
+// post-merge relayoutFrom will place the boxes. Without it,
+// a scale-styled insert would paint at a constant-height
+// accumulator's Y while box.LineH is variable.
 func (f *frameimpl) drawtext(pt image.Point, text draw.Image, back draw.Image) {
+	offY := pt.Y - f.rect.Min.Y
+	firstLineOffX := pt.X - f.rect.Min.X
 	for _, b := range f.box {
-		pt = f.cklinewrap(pt, b)
-		f.paintBox(b, pt, text, back, false)
-		pt.X += b.Wid
+		bpt := image.Pt(b.X, b.Y+offY)
+		if b.Y == f.rect.Min.Y {
+			bpt.X += firstLineOffX
+		}
+		f.paintBox(b, bpt, text, back, false)
 	}
 }
 
@@ -118,7 +135,12 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 	// in Medblue. Drawn last so the outline sits on top of glyphs
 	// and any decoration.
 	if f.showBoxOutlines && f.boxOutlineColor != nil {
-		f.DrawOutlineRect(image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight), f.boxOutlineColor)
+		// Outline rect matches the box's line height (and is
+		// placed at the caller-supplied pt so it tracks the
+		// glyph paint regardless of whether we were called
+		// from the parent's repaintBoxRange or the child's
+		// nframe.drawtext).
+		f.DrawOutlineRect(image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+lineH), f.boxOutlineColor)
 	}
 }
 
@@ -217,7 +239,10 @@ func (f *frameimpl) drawselimpl(pt image.Point, p0, p1 int, highlighted bool) {
 
 	// TODO(rjk): one of ticked and highlighton seems sometimes redundant.
 	if f.ticked {
-		f.Tick(f.ptofcharptb(f.sp0, f.rect.Min, 0), false)
+		// B2.2 R7: use the post-R3 reader so the tick erase
+		// rect aligns with the box geometry the previous
+		// paint actually used, not a constant-height walk.
+		f.Tick(f.ptOfCharReader(f.sp0), false)
 	}
 
 	if f.sp0 != f.sp1 && f.highlighton {
@@ -225,7 +250,7 @@ func (f *frameimpl) drawselimpl(pt image.Point, p0, p1 int, highlighted bool) {
 		// update correctly.
 		back := f.cols[ColBack]
 		text := f.cols[ColText]
-		f.drawsel0(f.ptofcharptb(f.sp0, f.rect.Min, 0), f.sp0, f.sp1, back, text)
+		f.drawsel0(f.ptOfCharReader(f.sp0), f.sp0, f.sp1, back, text)
 
 		// Avoid multiple draws.
 		f.highlighton = false
@@ -283,6 +308,7 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 
 	nb := 0
 	var w int
+	prevY := pt.Y
 	for ; nb < len(f.box) && p < p1; nb++ {
 		b := f.box[nb]
 		nr := nrune(b)
@@ -291,22 +317,31 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 			p += nr
 			continue
 		}
+		// B2.2 R7: read this box's stored geometry rather
+		// than accumulating pt via cklinewrap — cklinewrap
+		// assumes defaultfontheight per line, but boxes on
+		// scaled-heading lines have LineH > defaultfontheight.
+		// Using b.X / b.Y / b.LineH keeps the highlight rect
+		// aligned with where paintBox actually drew the glyph.
 		if p >= p0 {
-			// Fills in the end of the previous line with selection highlight when the line has
-			// has been wrapped.
-			qt := pt
-			pt = f.cklinewrap(pt, b)
-			if pt.Y > qt.Y {
-				if qt.X > f.rect.Max.X {
-					qt.X = f.rect.Max.X
+			// Fill the trailing pixels of the prior wrapped
+			// line (between the last box's end and rect.Max.X).
+			if b.Y > prevY {
+				if pt.X < f.rect.Max.X {
+					f.background.Draw(image.Rect(pt.X, prevY, f.rect.Max.X, b.Y), back, nil, image.Pt(pt.X, prevY))
 				}
-				//f.drawBox(image.Rect(qt.X, qt.Y, f.Rect.Max.X, pt.Y), text, back,qt)
-				f.background.Draw(image.Rect(qt.X, qt.Y, f.rect.Max.X, pt.Y), back, nil, qt)
 			}
+			pt = image.Pt(b.X, b.Y)
 		}
 		ptr := b.Ptr
 		if p < p0 {
-			// beginning of region: advance into box
+			// beginning of region: advance into box, but
+			// reset pt to the box's stored origin first so
+			// we're computing the partial-box X from the
+			// right starting place.
+			pt = image.Pt(b.X, b.Y)
+			off := f.fontFor(b.Style).BytesWidth(ptr[0:runeindex(ptr, p0-p)])
+			pt.X += off
 			ptr = ptr[runeindex(ptr, p0-p):]
 			nr -= p0 - p
 			p = p0
@@ -342,7 +377,11 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 				glyph = b.Style.Fg
 			}
 		}
-		f.background.Draw(image.Rect(pt.X, pt.Y, x, pt.Y+f.defaultfontheight), bg, nil, pt)
+		lineH := b.LineH
+		if lineH == 0 {
+			lineH = f.defaultfontheight
+		}
+		f.background.Draw(image.Rect(pt.X, pt.Y, x, pt.Y+lineH), bg, nil, pt)
 		// Pick the bold/italic font variant per the box's Style.
 		// In highlight mode the glyph color is ColHText but the
 		// font weight/angle still comes from the box's Style so
@@ -354,19 +393,24 @@ func (f *frameimpl) drawsel0(pt image.Point, p0, p1 int, back draw.Image, text d
 			if back == f.cols[ColBack] && b.Style.Kind&KindHidden != 0 {
 				// hidden + clearing → no glyph
 			} else {
-				f.background.Bytes(pt, glyph, image.Point{}, f.fontFor(b.Style), ptr[0:runeindex(ptr, nr)])
+				// Same baseline-align offset paintBox uses.
+				font := f.fontFor(b.Style)
+				glyphPt := pt
+				if b.LineA > 0 {
+					glyphPt.Y += b.LineA - font.Ascent()
+				}
+				f.background.Bytes(glyphPt, glyph, image.Point{}, font, ptr[0:runeindex(ptr, nr)])
 			}
 		}
 		pt.X += w
+		prevY = pt.Y
 		p += nr
 	}
 
 	if p1 > p0 && nb > 0 && nb < len(f.box) && f.box[nb-1].Nrune > 0 && !trim {
-		qt := pt
-		pt = f.cklinewrap(pt, f.box[nb])
-		if pt.Y > qt.Y {
-			f.drawBox(image.Rect(qt.X, qt.Y, f.rect.Max.X, pt.Y), f.cols[ColHigh], back, qt)
-			// f.Background.Draw(image.Rect(qt.X, qt.Y, f.Rect.Max.X, pt.Y), back, nil, qt)
+		next := f.box[nb]
+		if next.Y > pt.Y {
+			f.drawBox(image.Rect(pt.X, pt.Y, f.rect.Max.X, next.Y), f.cols[ColHigh], back, pt)
 		}
 	}
 
@@ -400,30 +444,35 @@ func (f *frameimpl) tick(pt image.Point, ticked bool) {
 		return
 	}
 
-	// B2.2 R6: size the caret to the line's actual height,
-	// reallocating tickimage if needed. A heading line gets a
-	// tall caret; a body line gets a normal-height one.
-	lineH := f.lineHAtPt(pt)
-	if f.tickimage == nil || f.tickimage.R().Dy() != lineH {
-		f.initTickAtHeight(lineH)
-	}
-	if f.tickimage == nil {
-		return
-	}
-
-	pt.X -= f.tickscale
-	r := image.Rect(pt.X, pt.Y, pt.X+frtickw*f.tickscale, pt.Y+lineH)
-
-	if r.Max.X > f.rect.Max.X {
-		r.Max.X = f.rect.Max.X
-	}
-
+	// B2.2 R6/R7: size the caret to the line's actual height.
+	// Only resize tickimage/tickback when DRAWING — erase
+	// must use the rect+tickback in whatever state the
+	// previous draw left them, otherwise we lose the saved
+	// background pixels and old tick pixels stay on screen.
 	if ticked {
+		lineH := f.lineHAtPt(pt)
+		if f.tickimage == nil || f.tickimage.R().Dy() != lineH {
+			f.initTickAtHeight(lineH)
+		}
+		if f.tickimage == nil {
+			return
+		}
+		pt.X -= f.tickscale
+		r := image.Rect(pt.X, pt.Y, pt.X+frtickw*f.tickscale, pt.Y+lineH)
+		if r.Max.X > f.rect.Max.X {
+			r.Max.X = f.rect.Max.X
+		}
 		f.tickback.Draw(f.tickback.R(), f.background, nil, pt)
-		f.background.Draw(r, f.display.Black(), f.tickimage, image.Point{}) // draws an alpha-blended box
+		f.background.Draw(r, f.display.Black(), f.tickimage, image.Point{})
+		f.tickRect = r
 	} else {
-		// There is an issue with tick management
-		f.background.Draw(r, f.tickback, nil, image.Point{})
+		if f.tickback == nil || f.tickRect.Empty() {
+			return
+		}
+		// Erase using the rect we drew over; tickback holds
+		// the saved-bg pixels for that exact rect.
+		f.background.Draw(f.tickRect, f.tickback, nil, image.Point{})
+		f.tickRect = image.Rectangle{}
 	}
 	f.ticked = ticked
 }
@@ -473,7 +522,21 @@ func (f *frameimpl) _draw(pt image.Point) image.Point {
 		} else {
 			if b.Bc == '\n' {
 				pt.X = f.rect.Min.X
-				pt.Y += f.defaultfontheight
+				// B2.2 R7: advance by the line's actual
+				// height. b.LineH was set by the child's
+				// relayout (R5); fall back to
+				// defaultfontheight when unset. Clamp to
+				// rect.Max.Y so the post-_draw pt1 value
+				// the caller compares against the frame's
+				// bottom edge doesn't overshoot.
+				h := b.LineH
+				if h == 0 {
+					h = f.defaultfontheight
+				}
+				pt.Y += h
+				if pt.Y > f.rect.Max.Y {
+					pt.Y = f.rect.Max.Y
+				}
 			} else {
 				pt.X += f.newwid(pt, b)
 			}

@@ -193,10 +193,26 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 			ov1 = p1
 		}
 		if ov0 < ov1 {
-			hpt := f.ptofcharptb(ov0, f.rect.Min, 0)
+			// B2.2 R7: post-relayout — reader gives correct
+			// per-line position.
+			hpt := f.ptOfCharReader(ov0)
 			f.drawsel0(hpt, ov0, ov1, f.cols[ColHigh], f.cols[ColHText])
 		}
 	}
+}
+
+// hasNonDefaultLineHeight scans f.box for any box whose
+// LineH != defaultfontheight — the "is the frame in variable-
+// height mode?" predicate. Used by Delete (R7) to decide
+// whether the in-place blit shift is safe (constant-height
+// mode) or a full clear+repaint is needed.
+func (f *frameimpl) hasNonDefaultLineHeight() bool {
+	for _, b := range f.box {
+		if b.LineH != 0 && b.LineH != f.defaultfontheight {
+			return true
+		}
+	}
+	return false
 }
 
 // contentBottomY returns the Y just past the last box —
