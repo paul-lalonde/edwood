@@ -48,6 +48,19 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 	if f.noredraw || b.Nrune < 0 {
 		return
 	}
+	// B2.2 R4.1: bail when the box is fully off-screen. After
+	// relayoutFrom truncates layout at rect.Max.Y, boxes past
+	// the cutoff keep stale X/Y/LineH from earlier mutations
+	// — painting them would leak pixels into / past the
+	// visible region. The two Y checks cover off-screen below
+	// (Y >= rect.Max.Y) and above (Y + LineH <= rect.Min.Y).
+	lineH := b.LineH
+	if lineH == 0 {
+		lineH = f.defaultfontheight
+	}
+	if pt.Y >= f.rect.Max.Y || pt.Y+lineH <= f.rect.Min.Y {
+		return
+	}
 	fg := text
 	bg := back
 	hasBgOverride := false
@@ -61,7 +74,19 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 		}
 	}
 	if clearBg || hasBgOverride {
-		rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+f.defaultfontheight)
+		// B2.2: bg rect covers the box's LINE height, not the
+		// base font height — a scaled box on a tall line leaves
+		// stale pixels above/below its glyph if we only cover
+		// defaultfontheight. b.LineH is populated by
+		// relayoutFrom on the parent frame; on bxscan's
+		// non-relayouted child frame addifnonempty seeded it
+		// with defaultfontheight (R1), so the rect is the same
+		// as before in the pre-relayout case.
+		lineH := b.LineH
+		if lineH == 0 {
+			lineH = f.defaultfontheight
+		}
+		rect := image.Rect(pt.X, pt.Y, pt.X+b.Wid, pt.Y+lineH)
 		f.background.Draw(rect, bg, nil, image.Point{})
 	}
 	if b.Style.Kind&KindHidden == 0 {

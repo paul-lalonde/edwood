@@ -170,6 +170,8 @@ func (g *gridPtofcharFrame) Ptofchar(i int) image.Point {
 
 func (g *gridPtofcharFrame) DefaultFontHeight() int { return g.lineH }
 
+func (g *gridPtofcharFrame) LineHAt(int) int { return g.lineH }
+
 func (g *gridPtofcharFrame) GetFrameFillStatus() frame.FrameFillStatus {
 	return frame.FrameFillStatus{Nchars: g.nchars, Maxlines: 1 << 20}
 }

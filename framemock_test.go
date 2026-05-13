@@ -50,3 +50,4 @@ func (mf *MockFrame) DrawSel(image.Point, int, int, bool) {}
 func (mf *MockFrame) ToggleBoxOutlines() bool                     { return false }
 func (mf *MockFrame) SetAfterPaintHook(fn func())                 {}
 func (mf *MockFrame) DrawOutlineRect(image.Rectangle, draw.Image) {}
+func (mf *MockFrame) LineHAt(int) int                             { return 10 }

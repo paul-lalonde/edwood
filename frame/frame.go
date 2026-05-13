@@ -206,6 +206,15 @@ type Frame interface {
 	// No fill. Used by debug overlays (the "Spans" hook outlines
 	// each non-plain region).
 	DrawOutlineRect(r image.Rectangle, col draw.Image)
+
+	// LineHAt returns the line height (in pixels) of the box
+	// containing rune offset p. Used by Text.paintSpansOverlay
+	// to size span outlines correctly on variable-height lines
+	// — heading lines are taller than body lines, so the
+	// overlay rect needs the per-line height, not the frame's
+	// default font height. Returns DefaultFontHeight for an
+	// out-of-range p or an empty box list.
+	LineHAt(p int) int
 }
 
 // TODO(rjk): Consider calling this SetMaxtab?
@@ -242,6 +251,30 @@ func (f *frameimpl) SetAfterPaintHook(fn func()) {
 	f.lk.Lock()
 	defer f.lk.Unlock()
 	f.afterPaintHook = fn
+}
+
+// LineHAt walks f.box, finds the box containing rune p, and
+// returns its LineH. Falls back to defaultfontheight when p is
+// out of range, the box list is empty, or the matching box's
+// LineH is unset (zero). Pure reader of the post-relayout box
+// model.
+func (f *frameimpl) LineHAt(p int) int {
+	f.lk.Lock()
+	defer f.lk.Unlock()
+	if p < 0 {
+		p = 0
+	}
+	for _, b := range f.box {
+		l := nrune(b)
+		if p < l {
+			if b.LineH > 0 {
+				return b.LineH
+			}
+			return f.defaultfontheight
+		}
+		p -= l
+	}
+	return f.defaultfontheight
 }
 
 // DrawOutlineRect draws a 1-pixel border at r in color col on

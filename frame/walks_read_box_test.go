@@ -64,11 +64,12 @@ func TestR3_Ptofchar_ReadsBoxX(t *testing.T) {
 	}
 }
 
-// TestR3_PaintBox_PaintsAtBoxXY confirms that drawtext /
-// paintBox writes the glyph Bytes op at the box's stored X/Y,
-// not at the pt the walk accumulator would compute. We poke
-// box.X to a sentinel and verify the recorded paint op's
-// atpoint reflects it.
+// TestR3_PaintBox_PaintsAtBoxXY confirms that repaintBoxRange
+// writes the glyph Bytes op at the box's stored X/Y, not at
+// the pt the walk accumulator would compute. We poke box.X/Y
+// to sentinel values and call repaintBoxRange directly so the
+// public SetStyleRange path (which runs relayoutFrom and
+// would overwrite the poke) doesn't interfere.
 func TestR3_PaintBox_PaintsAtBoxXY(t *testing.T) {
 	iv := &invariants{
 		topcorner: image.Pt(20, 10),
@@ -86,10 +87,11 @@ func TestR3_PaintBox_PaintsAtBoxXY(t *testing.T) {
 	g := gdo(t, fr)
 	g.Clear()
 
-	// Drive a repaint via SetStyleRange (uses repaintBoxRange).
-	// We can't repaint without changing styles, so set the
-	// same plain style — repaintBoxRange still fires.
-	fr.SetStyleRange(0, 1, []StyleRun{{Len: 1, Style: Style{}}})
+	// Drive a repaint via repaintBoxRange directly so the
+	// sentinel X/Y survives to the paint call.
+	fimpl.lk.Lock()
+	fimpl.repaintBoxRange(image.Point{}, 0, 1, fimpl.cols[ColText], fimpl.cols[ColBack])
+	fimpl.lk.Unlock()
 
 	// Look for a screen-string op at the sentinel point.
 	want := "atpoint: (88,55)"

@@ -94,16 +94,15 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 			x += b.Wid
 		}
 
-		// Advance pt to the next line's top.
+		// Advance pt to the next line's top. We continue past
+		// rect.Max.Y rather than breaking — boxes past the
+		// visible cutoff still need their X/Y/LineH refreshed
+		// so layout-shift detection (contentBottomY in
+		// SetStyleRange, etc.) sees the true post-mutation
+		// extent. Paint walks (paintBox) bail when a box's Y
+		// is outside the rect, so off-screen rows aren't
+		// drawn — but their geometry is current.
 		pt = image.Pt(f.rect.Min.X, lineStartY+lineH)
-
-		// Off-screen guard: stop once we've passed
-		// rect.Max.Y. Out-of-view boxes keep stale fields;
-		// the visible region (which is what walks care
-		// about) is current.
-		if pt.Y >= f.rect.Max.Y {
-			break
-		}
 	}
 }
 

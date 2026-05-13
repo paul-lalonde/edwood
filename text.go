@@ -60,7 +60,6 @@ func (t *Text) paintSpansOverlay() {
 	v0 := t.org
 	nFrame := t.fr.GetFrameFillStatus().Nchars
 	v1 := t.org + nFrame
-	lineH := t.fr.DefaultFontHeight()
 	rectMaxX := t.fr.Rect().Max.X
 	for _, r := range t.spans.Snapshot() {
 		if r.Style.IsPlain() {
@@ -80,17 +79,24 @@ func (t *Text) paintSpansOverlay() {
 		// Walk runes [s, e), emitting a rect each time
 		// Ptofchar's Y crosses a visual-line boundary. A
 		// wrapped segment ends at the frame's right edge; the
-		// final segment ends at Ptofchar(e).X.
+		// final segment ends at Ptofchar(e).X. Use the per-
+		// segment LineH so outlines around heading-scaled
+		// lines size correctly.
 		segPt := t.fr.Ptofchar(s - v0)
+		segLineH := t.fr.LineHAt(s - v0)
+		segStart := s
 		for i := s + 1; i <= e; i++ {
 			pt := t.fr.Ptofchar(i - v0)
 			if pt.Y != segPt.Y {
-				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, rectMaxX, segPt.Y+lineH), col)
+				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, rectMaxX, segPt.Y+segLineH), col)
 				segPt = pt
+				segLineH = t.fr.LineHAt(i - v0)
+				segStart = i
 			} else if i == e {
-				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, pt.X, segPt.Y+lineH), col)
+				t.fr.DrawOutlineRect(image.Rect(segPt.X, segPt.Y, pt.X, segPt.Y+segLineH), col)
 			}
 		}
+		_ = segStart
 	}
 }
 
@@ -245,6 +251,15 @@ func (t *Text) Init(r image.Rectangle, rf string, cols [frame.NumColours]draw.Im
 	}
 	if v := tryLoadFontVariant(t.display, rf, "code"); v != nil {
 		extra = append(extra, frame.OptCodeFont(v))
+	}
+	// B2.2 R4.1: load same-family scaled fonts for each
+	// md2spans heading scale; install via OptScaleFonts so
+	// fontFor selects the matching size when a Style carries
+	// KindScale + Style.Scale. A failed load (no matching
+	// fontsrv path or fontsrv unreachable) falls through to
+	// the base font — graceful degradation.
+	if scaleMap := loadScaleFonts(t.display, rf); len(scaleMap) > 0 {
+		extra = append(extra, frame.OptScaleFonts(scaleMap))
 	}
 	t.fr = frame.NewFrame(r, baseFont, t.display.ScreenImage(), cols, extra...)
 	t.Redraw(r, -1, false /* noredraw */)

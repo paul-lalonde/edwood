@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -262,6 +264,90 @@ func tryLoadFontVariant(display draw.Display, baseFont, variant string) draw.Fon
 	}
 	fontCache[p] = f
 	return f
+}
+
+// fontsrvSizeRE matches the size segment of a fontsrv font path:
+//
+//	/mnt/font/<family>/<NN>a/font
+//
+// captures NN. The `a` suffix is fontsrv's anti-aliased marker;
+// non-`a` sizes exist but the renderer almost always picks the
+// `a` variant.
+var fontsrvSizeRE = regexp.MustCompile(`/(\d+)a/`)
+
+// scaledFontPathFor returns the fontsrv path for `baseFont`
+// scaled by `scale`. If the base path doesn't match the fontsrv
+// pattern (or scale is non-positive), returns "" so the caller
+// can fall back to the base font without rendering scaling.
+// Scale 1.0 returns the base unchanged (identity).
+//
+// Pure function — testable without a display. Used by
+// Text.Init to build the OptScaleFonts map.
+func scaledFontPathFor(baseFont string, scale float32) string {
+	if baseFont == "" || scale <= 0 {
+		return ""
+	}
+	if scale == 1.0 {
+		return baseFont
+	}
+	m := fontsrvSizeRE.FindStringSubmatchIndex(baseFont)
+	if m == nil {
+		return ""
+	}
+	size, err := strconv.Atoi(baseFont[m[2]:m[3]])
+	if err != nil {
+		return ""
+	}
+	scaled := int(float32(size)*scale + 0.5)
+	if scaled <= 0 {
+		return ""
+	}
+	return baseFont[:m[2]] + strconv.Itoa(scaled) + baseFont[m[3]:]
+}
+
+// tryLoadScaledFont returns the scaled variant of baseFont, or
+// nil if no fontsrv-style match or the scaled font fails to
+// open. fontCache memoizes successful loads.
+func tryLoadScaledFont(display draw.Display, baseFont string, scale float32) draw.Font {
+	p := scaledFontPathFor(baseFont, scale)
+	if p == "" {
+		return nil
+	}
+	if cached, ok := fontCache[p]; ok {
+		return cached
+	}
+	f, err := display.OpenFont(p)
+	if err != nil {
+		return nil
+	}
+	fontCache[p] = f
+	return f
+}
+
+// md2spansScales lists the heading scales md2spans currently
+// emits (per /Users/paul/dev/edwood/cmd/md2spans/parser.go's
+// headingScale table). Text.Init iterates these to build the
+// OptScaleFonts map.
+var md2spansScales = []float32{1.05, 1.1, 1.25, 1.5, 2.0}
+
+// loadScaleFonts returns the OptScaleFonts map for baseFont:
+// for each md2spans heading scale we can resolve a scaled
+// fontsrv path for, the result of opening that path. Scales
+// whose rounded size collapses to the base (e.g., 1.05 of
+// size-13 → 14, but with size-16 base 1.05 → 17 which has no
+// installed variant) and scales whose font fails to open are
+// silently dropped. An empty map means "no scaled fonts" —
+// the frame renders headings at base size, the layout still
+// flows (KindScale boxes contribute defaultfontheight in
+// fontFor's fallback).
+func loadScaleFonts(display draw.Display, baseFont string) map[float32]draw.Font {
+	out := make(map[float32]draw.Font)
+	for _, s := range md2spansScales {
+		if f := tryLoadScaledFont(display, baseFont, s); f != nil {
+			out[s] = f
+		}
+	}
+	return out
 }
 
 var boxcursor = draw.Cursor{

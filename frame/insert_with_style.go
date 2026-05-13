@@ -2,6 +2,7 @@ package frame
 
 import (
 	"fmt"
+	"image"
 )
 
 // InsertWithStyle inserts r at rune offset p0 with per-rune
@@ -97,6 +98,14 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 
 	runeStyles := expandStyles(styles, p1-p0)
 
+	// B2.2 R4.1: snapshot the Y just past the last box —
+	// effectively the total content height. If a SetStyleRange
+	// shifts any line vertically (LineH change on some
+	// preceding line), this value moves. Colour swaps and
+	// bold-at-constant-height leave it unchanged → keep the
+	// narrow repaint.
+	preBottomY := f.contentBottomY()
+
 	// Split at the [p0, p1) boundaries so the affected runes
 	// occupy a contiguous box range.
 	nb0 := f.findbox(0, 0, p0)
@@ -143,45 +152,69 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		nb1++
 	}
 
-	// Repaint the affected box range.
-	if f.background != nil {
-		col := f.cols[ColBack]
-		tcol := f.cols[ColText]
-		pt := f.ptofcharptb(p0, f.rect.Min, 0)
-		f.repaintBoxRange(pt, nb0, nb1, tcol, col)
-
-		// Preserve the user's selection highlight if it overlaps
-		// the styled range. repaintBoxRange has just painted
-		// with style/default colors over the selection's pixels;
-		// without this re-paint the highlight would visibly
-		// flicker off when a producer (edcolor, md2spans, …)
-		// reacts to the S event by re-styling the just-selected
-		// token.
-		if f.highlighton && f.sp0 < f.sp1 {
-			ov0, ov1 := f.sp0, f.sp1
-			if ov0 < p0 {
-				ov0 = p0
-			}
-			if ov1 > p1 {
-				ov1 = p1
-			}
-			if ov0 < ov1 {
-				hpt := f.ptofcharptb(ov0, f.rect.Min, 0)
-				f.drawsel0(hpt, ov0, ov1, f.cols[ColHigh], f.cols[ColHText])
-			}
-		}
-	}
-
-	// Merge adjacent same-Style boxes within the affected range.
-	// clean's per-pair guard already requires equal Style.
+	// Merge adjacent same-Style boxes within the affected range,
+	// then refresh per-box X/Y/LineH/LineA. Both run BEFORE
+	// paint so the narrow repaint reads fresh box geometry.
 	cleanEnd := nb1 + 1
 	if cleanEnd > len(f.box) {
 		cleanEnd = len(f.box)
 	}
 	f.clean(f.ptofcharptb(p0, f.rect.Min, 0), nb0, cleanEnd)
-
-	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
-	// style range may have changed box widths (R-B4.7) and
-	// box count (splitbox/clean).
 	f.relayoutFrom(0)
+
+	// If the layout shifted vertically (preBottomY changed),
+	// the visible old-position pixels no longer match new-
+	// position geometry. Clear the body rect and repaint
+	// everything. Otherwise the narrow repaint suffices.
+	if f.background == nil {
+		return
+	}
+	col := f.cols[ColBack]
+	tcol := f.cols[ColText]
+	if f.contentBottomY() != preBottomY {
+		f.background.Draw(f.rect, col, nil, image.Point{})
+		f.repaintBoxRange(f.rect.Min, 0, len(f.box), tcol, col)
+	} else {
+		f.repaintBoxRange(f.rect.Min, nb0, nb1, tcol, col)
+	}
+
+	// Preserve the user's selection highlight if it overlaps
+	// the styled range. The repaint just painted over the
+	// selection's pixels; without this re-paint the highlight
+	// would visibly flicker off when a producer (edcolor,
+	// md2spans, …) reacts to the S event by re-styling the
+	// just-selected token.
+	if f.highlighton && f.sp0 < f.sp1 {
+		ov0, ov1 := f.sp0, f.sp1
+		if ov0 < p0 {
+			ov0 = p0
+		}
+		if ov1 > p1 {
+			ov1 = p1
+		}
+		if ov0 < ov1 {
+			hpt := f.ptofcharptb(ov0, f.rect.Min, 0)
+			f.drawsel0(hpt, ov0, ov1, f.cols[ColHigh], f.cols[ColHText])
+		}
+	}
+}
+
+// contentBottomY returns the Y just past the last box —
+// effectively the total content height as laid out. If the
+// last box is on a line of height H starting at Y, returns
+// Y+H. Empty frame returns rect.Min.Y. Used by SetStyleRange
+// to detect a vertical shift (line-height change) that
+// invalidates the existing pixel layout, so we know whether
+// to trigger a full clear+repaint or stay on the parsimonious
+// narrow path.
+func (f *frameimpl) contentBottomY() int {
+	if len(f.box) == 0 {
+		return f.rect.Min.Y
+	}
+	last := f.box[len(f.box)-1]
+	lineH := last.LineH
+	if lineH == 0 {
+		lineH = f.defaultfontheight
+	}
+	return last.Y + lineH
 }
