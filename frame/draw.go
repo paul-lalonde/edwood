@@ -90,7 +90,18 @@ func (f *frameimpl) paintBox(b *frbox, pt image.Point, text, back draw.Image, cl
 		f.background.Draw(rect, bg, nil, image.Point{})
 	}
 	if b.Style.Kind&KindHidden == 0 {
-		f.background.Bytes(pt, fg, image.Point{}, f.fontFor(b.Style), b.Ptr)
+		// B2.2 R5: baseline-align. The box's line has a shared
+		// LineA (max ascent on the line); paint each glyph
+		// shifted down so its ascent aligns with that
+		// baseline. For a single-font line this offset is
+		// zero (LineA == fontAscent), so plain-text frames
+		// remain visually identical to pre-R5.
+		font := f.fontFor(b.Style)
+		glyphPt := pt
+		if b.LineA > 0 {
+			glyphPt.Y += b.LineA - font.Ascent()
+		}
+		f.background.Bytes(glyphPt, fg, image.Point{}, font, b.Ptr)
 	}
 	// KindHRule decoration: draw a 1-pixel horizontal line across
 	// the box's rect at the row's vertical center, in the box's

@@ -23,9 +23,12 @@ func wipboxIsSpace(b *frbox) bool {
 // consumer that reads them. R1 has no such consumer — the
 // defaults exist so R2 has a clean before/after baseline.
 func (frame *frameimpl) setBoxLineDefaults(b *frbox) {
-	dh := frame.defaultfontheight
-	b.LineH = dh
-	b.LineA = dh
+	b.LineH = frame.defaultfontheight
+	if frame.font != nil {
+		b.LineA = frame.font.Ascent()
+	} else {
+		b.LineA = frame.defaultfontheight
+	}
 }
 
 func (frame *frameimpl) addifnonempty(box *frbox, inby []byte) *frbox {
@@ -434,6 +437,13 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 	}
 
 	f.fillNonGlyphAreas(ppt0, ppt1, col)
+	// B2.2 R5: refresh the child frame's per-box LineA so
+	// drawtext's call to paintBox computes a correct baseline
+	// offset (paintBox uses b.LineA, which setBoxLineDefaults
+	// seeded with the base-font ascent only — without this
+	// relayout a scaled box on the child would paint with
+	// offset = baseAscent - scaledAscent, i.e., shifted up).
+	nframe.relayoutFrom(0)
 	nframe.drawtext(ppt0, tcol, col)
 
 	// Skip the rest if nothing is added. This means that f.lastlinefull is valid.

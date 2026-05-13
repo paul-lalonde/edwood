@@ -139,7 +139,9 @@ func TestRelayout_SoftWrap_AdvancesY(t *testing.T) {
 }
 
 // TestRelayout_LineH_DefaultFontHeight confirms LineH equals
-// defaultfontheight on every line (pre-R4: constant height).
+// defaultfontheight on every line (no KindScale boxes →
+// constant height). After R5 LineA tracks the base font's
+// real Ascent rather than a Height stand-in.
 func TestRelayout_LineH_DefaultFontHeight(t *testing.T) {
 	iv := &invariants{
 		topcorner: image.Pt(20, 10),
@@ -150,12 +152,13 @@ func TestRelayout_LineH_DefaultFontHeight(t *testing.T) {
 
 	fimpl := fr.(*frameimpl)
 	dh := fimpl.defaultfontheight
+	wantA := fimpl.font.Ascent()
 	for i, b := range fimpl.box {
 		if b.LineH != dh {
-			t.Errorf("box[%d].LineH = %d, want %d (constant height pre-R4)", i, b.LineH, dh)
+			t.Errorf("box[%d].LineH = %d, want %d (constant height, no scale)", i, b.LineH, dh)
 		}
-		if b.LineA != dh {
-			t.Errorf("box[%d].LineA = %d, want %d (Ascent stand-in)", i, b.LineA, dh)
+		if b.LineA != wantA {
+			t.Errorf("box[%d].LineA = %d, want %d (base font Ascent)", i, b.LineA, wantA)
 		}
 	}
 }

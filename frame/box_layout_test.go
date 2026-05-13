@@ -13,8 +13,8 @@ import (
 
 // TestFrbox_LayoutFields_DefaultsAfterInsert confirms that
 // every box produced by Insert carries LineH = the frame's
-// defaultfontheight and LineA = the same (Ascent stand-in
-// until real Ascent is plumbed in R5).
+// defaultfontheight and LineA = the base font's Ascent (set by
+// setBoxLineDefaults seed + relayoutFrom's per-line max).
 func TestFrbox_LayoutFields_DefaultsAfterInsert(t *testing.T) {
 	iv := &invariants{
 		topcorner: image.Pt(20, 10),
@@ -25,6 +25,7 @@ func TestFrbox_LayoutFields_DefaultsAfterInsert(t *testing.T) {
 
 	fimpl := fr.(*frameimpl)
 	dh := fimpl.defaultfontheight
+	wantA := fimpl.font.Ascent()
 	for i, b := range fimpl.box {
 		if b == nil {
 			t.Errorf("box[%d] is nil", i)
@@ -33,8 +34,8 @@ func TestFrbox_LayoutFields_DefaultsAfterInsert(t *testing.T) {
 		if b.LineH != dh {
 			t.Errorf("box[%d].LineH = %d, want defaultfontheight = %d", i, b.LineH, dh)
 		}
-		if b.LineA != dh {
-			t.Errorf("box[%d].LineA = %d, want %d (Ascent stand-in)", i, b.LineA, dh)
+		if b.LineA != wantA {
+			t.Errorf("box[%d].LineA = %d, want %d (base font Ascent)", i, b.LineA, wantA)
 		}
 	}
 }
@@ -53,6 +54,7 @@ func TestFrbox_LayoutFields_TabAndNewline(t *testing.T) {
 
 	fimpl := fr.(*frameimpl)
 	dh := fimpl.defaultfontheight
+	wantA := fimpl.font.Ascent()
 
 	sawTab, sawNewline := false, false
 	for i, b := range fimpl.box {
@@ -70,8 +72,8 @@ func TestFrbox_LayoutFields_TabAndNewline(t *testing.T) {
 		if b.LineH != dh {
 			t.Errorf("special box[%d] (Bc=%q).LineH = %d, want %d", i, b.Bc, b.LineH, dh)
 		}
-		if b.LineA != dh {
-			t.Errorf("special box[%d] (Bc=%q).LineA = %d, want %d", i, b.Bc, b.LineA, dh)
+		if b.LineA != wantA {
+			t.Errorf("special box[%d] (Bc=%q).LineA = %d, want %d", i, b.Bc, b.LineA, wantA)
 		}
 	}
 	if !sawTab {

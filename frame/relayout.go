@@ -53,7 +53,7 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		lineStartX := pt.X
 		lineStartY := pt.Y
 		lineH := f.defaultfontheight
-		lineA := f.defaultfontheight // Ascent stand-in (R5)
+		lineA := f.font.Ascent()
 		for nb < len(f.box) {
 			b := f.box[nb]
 			// Wrap decision mirrors cklinewrap0: content
@@ -108,19 +108,25 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 
 // updateLineMaxes folds box b's height and ascent into the
 // running line maximums. Special boxes (Nrune<0) contribute
-// only the default font height. Content boxes use the height
-// of the font fontFor would return for the box's Style — so
-// a KindScale box contributes the scaled font's height, and a
-// plain box contributes defaultfontheight.
+// only the default font's height/ascent. Content boxes use
+// fontFor(b.Style).Height() and .Ascent() — so a KindScale
+// box contributes the scaled font's metrics, driving the
+// line's LineH and LineA from the dominant font on the line.
 //
-// Until R5 the line's ascent equals its height (Ascent stand-
-// in); R5 adds true baseline-aligned glyph paint.
+// LineA (max Ascent) is what paintBox uses to align glyphs at
+// a shared baseline: each box paints at
+//
+//	Y + (LineA - fontAscent(box))
+//
+// (see frame-rendering-spec §3.3 / §6.3).
 func (f *frameimpl) updateLineMaxes(b *frbox, lineH, lineA *int) {
 	h := f.defaultfontheight
+	a := f.font.Ascent()
 	if b.Nrune >= 0 {
-		h = f.fontFor(b.Style).Height()
+		ft := f.fontFor(b.Style)
+		h = ft.Height()
+		a = ft.Ascent()
 	}
-	a := h
 	if h > *lineH {
 		*lineH = h
 	}

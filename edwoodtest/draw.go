@@ -412,7 +412,14 @@ func (f *mockFont) Name() string {
 	}
 	return Plan9FontPath(MockFontName)
 }
-func (f *mockFont) Height() int              { return f.height }
+func (f *mockFont) Height() int { return f.height }
+
+// Ascent mocks the baseline distance for a fixed-mock font.
+// We model a font with descent = 1px so ascent = height-1.
+// Tests that care about the exact baseline can use
+// NewFontWithName + assertion; the value just has to be
+// consistent and smaller than Height.
+func (f *mockFont) Ascent() int              { return f.height - 1 }
 func (f *mockFont) BytesWidth(b []byte) int  { return f.width * utf8.RuneCount(b) }
 func (f *mockFont) RunesWidth(r []rune) int  { return f.width * len(r) }
 func (f *mockFont) StringWidth(s string) int { return f.width * utf8.RuneCountInString(s) }

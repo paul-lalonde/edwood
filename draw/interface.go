@@ -37,6 +37,7 @@ type Image interface {
 type Font interface {
 	Name() string
 	Height() int
+	Ascent() int
 	BytesWidth(b []byte) int
 	RunesWidth(r []rune) int
 	StringWidth(s string) int
@@ -111,6 +112,7 @@ type fontImpl struct {
 
 func (f *fontImpl) Name() string { return f.drawFont.Name }
 func (f *fontImpl) Height() int  { return f.drawFont.Height }
+func (f *fontImpl) Ascent() int  { return f.drawFont.Ascent }
 
 // Imported from a newer version of 9fans.draw
 func WithAlpha(c Color, alpha uint8) Color {
