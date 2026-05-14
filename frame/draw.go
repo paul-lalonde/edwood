@@ -495,18 +495,57 @@ func (f *frameimpl) Tick(pt image.Point, ticked bool) {
 
 func (f *frameimpl) _draw(pt image.Point) image.Point {
 	// f.Logboxes("_draw -- start")
+	//
+	// B2.2 layout-once: track the current line's height as we
+	// walk. cklinewrap-driven wraps use lineHForAdvance(p)
+	// internally, which scans the box list looking for a box
+	// whose stored Y matches p.Y. For the CHILD frame in
+	// bxscan, _draw's pt accumulator starts at pt0 (parent
+	// coords, mid-frame) but child b.Y is in child coords
+	// (rect.Min based), so the scan never finds a match and
+	// falls back to defaultfontheight — wrong for scaled
+	// content. By tracking lineH explicitly we side-step that
+	// lookup and use the actual per-box height we've seen on
+	// this line.
+	lineH := f.defaultfontheight
 	for nb := 0; nb < len(f.box); nb++ {
 		b := f.box[nb]
 		if b == nil {
 			f.Logboxes("-- Frame._draw has invalid box mode --")
 			panic("-- Frame._draw has invalid box mode --")
 		}
-		pt = f.cklinewrap0(pt, b)
+
+		// Inline wrap check (replacing cklinewrap0's call so
+		// we can use our local lineH instead of the global
+		// box-lookup).
+		var wrap bool
+		if b.Nrune < 0 {
+			wrap = int(b.Minwid) > f.rect.Max.X-pt.X
+		} else {
+			wrap = b.Wid > f.rect.Max.X-pt.X
+		}
+		if wrap {
+			pt.X = f.rect.Min.X
+			pt.Y += lineH
+			if pt.Y > f.rect.Max.Y {
+				pt.Y = f.rect.Max.Y
+			}
+			lineH = f.defaultfontheight
+		}
+
 		if pt.Y == f.rect.Max.Y {
 			f.lastlinefull = true
 			f.nchars -= f.strlen(nb)
 			f.delbox(nb, len(f.box)-1)
 			break
+		}
+
+		// Update the current line's max height as boxes land
+		// on it. b.LineH was set by relayoutFrom; falls back
+		// to defaultfontheight if unset (shouldn't happen
+		// after R7's bxscan-relayouts-before-_draw fix).
+		if b.LineH > lineH {
+			lineH = b.LineH
 		}
 
 		if b.Nrune > 0 {
@@ -522,21 +561,17 @@ func (f *frameimpl) _draw(pt image.Point) image.Point {
 		} else {
 			if b.Bc == '\n' {
 				pt.X = f.rect.Min.X
-				// B2.2 R7: advance by the line's actual
-				// height. b.LineH was set by the child's
-				// relayout (R5); fall back to
-				// defaultfontheight when unset. Clamp to
-				// rect.Max.Y so the post-_draw pt1 value
-				// the caller compares against the frame's
-				// bottom edge doesn't overshoot.
-				h := b.LineH
-				if h == 0 {
-					h = f.defaultfontheight
-				}
-				pt.Y += h
+				// Use the (just-accumulated) line height,
+				// not the newline box's own LineH — those
+				// are usually the same (relayoutFrom shares
+				// LineH across boxes on a line) but tracking
+				// it locally keeps _draw independent of
+				// box-state assumptions.
+				pt.Y += lineH
 				if pt.Y > f.rect.Max.Y {
 					pt.Y = f.rect.Max.Y
 				}
+				lineH = f.defaultfontheight
 			} else {
 				pt.X += f.newwid(pt, b)
 			}

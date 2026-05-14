@@ -178,11 +178,14 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	pt0 := frame.ptOfCharReader(p)
 
 	frame.box = newboxes
-	// B2.2 R7: full relayout BEFORE _draw so cklinewrap's
-	// lineHForAdvance has correct line-by-line LineH lookups
-	// and nframe.drawtext's offset walk reads accurate
-	// b.X/b.Y. The parent's post-merge relayoutFrom redoes
-	// this against the merged box list.
+	// B2.2: relayout populates LineH/LineA per line so the
+	// subsequent _draw walk advances by the right per-line
+	// height for variable layouts. _draw also performs the
+	// layout MUTATIONS that relayoutFrom doesn't do today —
+	// long-word splitbox via canfit, tab newwid — so it stays
+	// the pass that finalizes the child's box list shape.
+	// Removing _draw entirely is on the layout-once roadmap
+	// (see docs/designs/features/layout-once-invariant.md).
 	frame.relayoutFrom(0)
 	pt1 := frame._draw(pt0)
 	f.lastlinefull = frame.lastlinefull
