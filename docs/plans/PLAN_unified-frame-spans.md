@@ -118,7 +118,8 @@ frame learns variable line heights.
 |---|---|---|---|---|---|
 | B2.1 | [x] §5.4 InsertWithStyle font handling | [x] Bold/italic render correctly; mixed-flag run on one line | [x] Extend frame render path to honor font flags | [x] (landed in Slice B B1 + B4) | Still constant-height. |
 | B2.2 | (restart — see B2.2.Rx rows below) | | | | The substantive piece of Slice B. First attempt at this row used walk-time `f.curLineH` state; was abandoned and reverted (tag `b22-attempt-1`) when the walk-coherence assumption broke. Restart uses per-box `Y`/`LineH`/`LineA` fields with a single forward layout pass and walks-as-readers. Design lives at `docs/designs/features/frame-rendering-spec.md`. |
-| B2.3 | [ ] §13.3 perf | [ ] Plain-text Insert throughput within 5% of upstream after this change | [ ] Profile + optimize hot path | [ ] (only if regression observed) | Confirm the new code didn't slow the fast path. |
+| B2.3 | (architectural — see B2.3.Rx rows below) | | | | First-principles rewrite: make `relayoutFrom` the single source of truth, add a per-line summary table, and migrate every consumer to readers. Motivated by the duplicate-recompute audit in `layout-once-invariant.md` and the visible scroll/overlap glitches that surfaced after B2.2 R7. Design lives at `docs/designs/features/frame-layout-design.md`. |
+| B2.4 | [ ] §13.3 perf | [ ] Plain-text Insert throughput within 5% of upstream after this change | [ ] Profile + optimize hot path | [ ] (only if regression observed) | Confirm the new code didn't slow the fast path. |
 
 ### Phase B2.2 (restart) — per-box-Y architecture
 
@@ -138,6 +139,32 @@ scaled size; a heading and adjacent body share a common
 baseline; tick and scroll behave correctly across mixed-
 height lines; the Spans overlay outlines headings (because
 `scale=` now sets `KindScale`, making the region non-plain).
+
+### Phase B2.3 — Layout-once architectural rewrite
+
+First-principles rewrite per `docs/designs/features/frame-layout-design.md`.
+Each row is one CODING-PROCESS pass; ordering matters (later
+rows depend on the readers added by earlier ones).
+
+| # | Design | Tests | Iterate | Commit |
+|---|---|---|---|---|
+| B2.3.R1 | [ ] frame-layout-design §2.2 + §3 (per-line summary table) | [ ] After `relayoutFrom`, `f.lines` is non-empty iff `f.box` is non-empty; `lines[i].TopY / LineH / LineA` match `box[lines[i].FirstBox]`; line count matches visual-line count for plain text and for the test-md-layout fixture; I-LAYOUT-2 and I-LAYOUT-3 fixtures pass | [ ] Add `lineSummary` struct + `frameimpl.lines []lineSummary`; populate during `relayoutFrom`'s phase B; keep all existing consumers reading per-box fields (no consumer migration yet) | [ ] `frame: per-line summary table (no consumer migration)` |
+| B2.3.R2 | [ ] frame-layout-design §2.3 + I-LAYOUT-4 | [ ] After every mutator, `f.lastlinefull == (lines[last].TopY + LineH >= rect.Max.Y)`; Insert / Delete / SetStyleRange scenarios across the boundary | [ ] Move `lastlinefull` assignment into `relayoutFrom`; drop the explicit reset in `deleteimpl`; remove any other ad-hoc assignments | [ ] `frame: lastlinefull owned by relayoutFrom` |
+| B2.3.R3 | [ ] frame-layout-design §4.2 + §4.4 | [ ] `Charofpt(pt)` resolves through `f.lines` binary search; click-on-heading hits a rune inside the heading (not the next-line first rune); plain-text frames unchanged; benchmark shows O(log lines) — instrumentation counter for box-walk steps | [ ] Implement line-table-driven `charOfPtReader`; remove the per-box `pt.Y` accumulator scan; legacy `charofptimpl` kept (still used by `Charofpt` callers via the reader switch) | [ ] `frame: Charofpt routes through line-summary table` |
+| B2.3.R4 | [ ] frame-layout-design §6.4 ("Scroll / fill") | [ ] After bxscan on a child frame, `pt1` read from the child's last line equals the post-relayout authoritative position; `Text.fill` and `Text.scroll` no longer call `_draw` as a walker; manual test against `test-md-layout.md` shows no scroll-overlap glitches across one full scroll cycle | [ ] In `bxscan` (and any other `_draw` caller), replace the `_draw` accumulator walk with: relayoutFrom on the staging frame, then read `pt1` from `lines[last].TopY + LineH`; remove the `_draw` walk body (truncation logic moves into relayoutFrom or its caller) | [ ] `frame: eliminate _draw accumulator walker` |
+| B2.3.R5 | [ ] frame-layout-design §6.2 | [ ] `Delete` pre-mutation `pt0` / `pt1` computed via reader; box-list splice happens between reads and relayout; single bulk blit; no per-box inner blit loop; existing `TestDelete*` green; manual fixture across selection delete + scroll-up still passes | [ ] Rewrite `deleteimpl`: read pt0/pt1, splice boxes (closebox / splitbox at edges), `relayoutFrom(0)`, blit shift, paint affected region; remove the cklinewrap/cklinewrap0/advance inner loop | [ ] `frame: deleteimpl uses pre-mutation reader + single relayout` |
+| B2.3.R6 | [ ] frame-layout-design §6.1 | [ ] Same structure as R5 for `insertbyteimpl`; `Insert` / `InsertByte` / `InsertWithStyle` all converge on one mutator flow; the bxscan→\_draw→bulk-blit divergence is gone | [ ] Rewrite `insertbyteimpl`: read pt0, splice, relayoutFrom, read pt1, blit, paint; remove `pts[]` parallel-walk array | [ ] `frame: insertbyteimpl uses pre-mutation reader + single relayout` |
+| B2.3.R7 | [ ] frame-layout-design §6.3 | [ ] `SetStyleRange` detects shifts via line-table diff (not `contentBottomY` snapshot); narrow repaint for no-shift, full repaint from first changed line for shift; existing `TestSetStyleRange*` green | [ ] Replace `contentBottomY` mechanism with a snapshot of relevant `lines[i].TopY` values pre-mutation; compare post-relayout; route the repaint range from the diff | [ ] `frame: SetStyleRange uses line-table diff for shift detection` |
+| B2.3.R8 | [ ] frame-layout-design §5 (removed code paths) | [ ] Package builds and tests pass with the named functions deleted; no `lineHForAdvance` / `lineHAtPt` / `cklinewrap*` / `advance` / `ptofcharptb` / `ptofcharnb` / `charofptimpl` callers remain | [ ] Delete the legacy walker functions; compile errors are the migration checklist for any straggler call sites | [ ] `frame: delete legacy walkers (cklinewrap, ptofcharptb, etc.)` |
+| B2.3.R9 | [ ] frame-layout-design §7 (I-LAYOUT-* invariants) | [ ] `-validateboxes` asserts I-LAYOUT-2 / I-LAYOUT-3; `-validatelayout` asserts I-LAYOUT-5; `-validatelayout` runs of the full `frame/` suite green | [ ] Wire layout assertions in `validateboxmodel` and the paint walks; flag-gate behind the existing test flags; add fixtures for the test-md-layout scenarios that I-LAYOUT-* should pin | [ ] `frame: enforce I-LAYOUT-* under validateboxes/validatelayout` |
+
+**Phase B2.3 exit criterion.** `relayoutFrom` is the only
+writer of box geometry. Every consumer reads box fields or
+the line-summary table. The legacy walker functions are
+deleted. Manual exercise of `test-md-layout.md` shows no
+visible overlap, no stale glyphs, and correct click-to-rune
+resolution across one full scroll cycle. `regression.sh`
+green at every commit.
 
 ## Phase B3 — (optional) heading-only `md2spans` — **SKIPPED**
 

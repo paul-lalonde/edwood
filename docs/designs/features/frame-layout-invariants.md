@@ -13,6 +13,14 @@ variable-line-height work (Phase B2.2) added more invariants
 specific to that case; those have been removed pending a
 restart with a cleaner per-box-Y architecture.
 
+**Phase B2.3 forward-pointer.** The layout-once rewrite
+(`docs/designs/features/frame-layout-design.md`, §7) introduces
+**I-LAYOUT-1..5** covering layout-once, line-table consistency,
+monotone line tops, `lastlinefull` ownership, and paint↔layout
+agreement. They are listed there during the rewrite (so the
+design and the invariants travel together). Once Phase B2.3
+exits, they fold into this doc and supersede I-5.
+
 ## I-1: paintBox stays inside f.rect
 
 Every paint op `paintBox` emits resolves to pixels entirely
@@ -42,20 +50,25 @@ be partially visible (overly-aggressive suppression).
 **Tests:** `TestPaintWithinBounds_*` (to be re-added during
 B2.2 restart — they referenced KindScale).
 
-## I-2: layout-walking functions break at f.rect.Max.Y
+## I-2: paint walks bail on off-screen boxes
 
-`drawtext`, `repaintBoxRange`, and any future paint walk break
-out of their box loop as soon as `cklinewrap` returns
-`pt.Y >= f.rect.Max.Y`. Off-screen boxes never enter `paintBox`.
+`drawtext`, `repaintBoxRange`, and any future paint walk read
+`box[i].Y` directly and skip boxes with `Y >= f.rect.Max.Y`
+or `Y + LineH <= f.rect.Min.Y`. Off-screen boxes never enter
+`paintBox`.
 
 **Failure mode:** the "row of overlapping glyphs" effect at the
 frame's bottom when content from the buffer extends past the
-visible area and every off-screen box clamps to
-`pt.Y = rect.Max.Y`.
+visible area.
 
 **Tests:** covered by I-1 (same fixtures).
 
-## I-5: paint walks produce the same pt as ptofcharptb
+**Note (B2.3):** the old phrasing referenced `cklinewrap` as
+the line-advance primitive. Post-B2.3 the paint walks read
+`box[i].Y` directly — the bail condition is the same, the
+source of the Y is just the box field, not an accumulator.
+
+## I-5: paint walks produce the same pt as ptofcharptb *(superseded by I-LAYOUT-5 in B2.3)*
 
 For every box the paint walk hands to `paintBox`, the pt must
 equal `ptofcharptb(firstRune(box))`. Any divergence means the
@@ -69,6 +82,13 @@ ten-fix cascade).
 **Tests:** `-validatelayout` flag (to be re-added). Runtime
 audit in `repaintBoxRange` that panics on drift; frame test
 suite runs cleanly under `go test -args -validatelayout`.
+
+**Supersession (B2.3).** Once `ptofcharptb` is deleted (B2.3.R8),
+this invariant collapses into **I-LAYOUT-5** (paint matches
+layout): for every painted box, the (X, Y) handed to `paintBox`
+equals `box[i].X`, `box[i].Y`. The two-walks-agree formulation
+is replaced by a paint↔layout-state agreement. The fold-in
+happens in the B2.3.R9 commit.
 
 ## I-10: boxWid is the single content-box width helper
 
