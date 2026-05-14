@@ -595,24 +595,60 @@ Known overlay limitations (debug feature; acceptable for v1):
   `#`) plain (markup-stays-visible stance), so those never
   show overlays.
 
+### 2026-05-14 — B2.3 reset (layout-once rewrite)
+
+B2.2 R1–R7 + R4.1 all landed but produced user-visible
+glitches on scaled headings: bottom-line clipping, mid-screen
+spacing wrong after scroll, and overlap on backward scroll. The
+later commits (`677ab5e` "_draw tracks per-line height locally",
+`e488f22` "re-relayout child after _draw") were attempts to
+paper over a deeper issue and introduced their own regressions.
+
+User decision: stop patching `_draw` / `bxscan` from the
+outside; write a first-principles design for the layout
+function and migrate every consumer to readers.
+
+This session:
+- Selectively reverted the thrash (`2a917a7`). Kept the
+  `lastlinefull` reset in `deleteimpl` (small isolated fix),
+  kept `test-md-layout.md` (controlled fixture), kept
+  `layout-once-invariant.md` (audit doc that motivates the
+  rewrite). Restored `frame/draw.go` and `frame/insert.go` to
+  their state before `677ab5e`.
+- Wrote `docs/designs/features/frame-layout-design.md` (new):
+  the layout-once spec. Single forward pass owns geometry;
+  adds a per-line summary table (`lineSummary {FirstBox,
+  TopY, LineH, LineA}`); uniform mutator flow (read pt0/pt1
+  pre-mutation, mutate box list, `relayoutFrom`, blit shift,
+  paint from box state); lists the legacy walkers slated for
+  deletion (`cklinewrap`, `cklinewrap0`, `advance`,
+  `ptofcharptb`, `ptofcharnb`, `charofptimpl`,
+  `lineHForAdvance`, `lineHAtPt`); adds I-LAYOUT-1..5 (§7).
+- Added Phase B2.3 to PLAN_unified-frame-spans.md with nine
+  subrows R1..R9. The old B2.3 (perf) is renumbered B2.4.
+- Forward-pointer in `frame-layout-invariants.md`: I-5 (paint
+  == ptofcharptb) marked for supersession by I-LAYOUT-5 once
+  ptofcharptb is gone; I-2's wording moved off `cklinewrap`.
+
+All landed as `fdecc91` "docs: B2.3 layout-once design + plan
+rows + invariants forward-pointer".
+
+Test status: `./regression.sh` green at `fdecc91`.
+
+Next: B2.3.R1 (per-line summary table). One CODING-PROCESS
+pass — write the lineSummary type + populate from
+`relayoutFrom`'s phase B, no consumer migration yet, assert
+I-LAYOUT-2 / I-LAYOUT-3 fixtures.
+
 ## Next-session candidates
 
-1. **Phase B2.2 (variable line height)** — restart with the
-   per-box-Y architecture spec'd in
-   `docs/designs/features/frame-rendering-spec.md`:
-   - Each box stores `Y` (its line's top Y) and `Asc` (its
-     line's baseline ascent — the max ascent of any font on
-     the line).
-   - Insert / Delete / SetStyleRange compute Y / Asc for
-     affected boxes in a SINGLE forward pass; ALL subsequent
-     layout walks just read box.Y / box.Asc.
-   - paintBox paints at `pt.Y + (line.Asc - font.Ascent())`
-     so glyphs share a baseline regardless of font size.
-   - Cursor (tick) and scroll (`Delete`'s blit, fill
-     semantics) get explicit subrows.
-   Solves the user-visible "headings same size as body"
-   issue and the debug-overlay "no overlay on headings" side
-   effect.
+1. **B2.3.R1 — per-line summary table.** First row of the
+   layout-once rewrite. See
+   `docs/designs/features/frame-layout-design.md` §2.2 +
+   §3 and PLAN row B2.3.R1. Add `lineSummary` struct +
+   `frameimpl.lines []lineSummary`; populate during
+   `relayoutFrom` phase B. No consumer migration — that's
+   R3 onward. Test gates: I-LAYOUT-2 / I-LAYOUT-3 fixtures.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
