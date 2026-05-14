@@ -178,21 +178,13 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	pt0 := frame.ptOfCharReader(p)
 
 	frame.box = newboxes
-	// B2.2: relayout populates LineH/LineA per line so the
-	// subsequent _draw walk advances by the right per-line
-	// height for variable layouts. _draw performs layout
-	// MUTATIONS that relayoutFrom doesn't do today — long-
-	// word splitbox via canfit, tab newwid — and the new
-	// boxes inherit stale b.X/Y from the split source. Run
-	// relayoutFrom AGAIN afterward so the merged box list has
-	// fresh geometry; without this, drawtext (which reads
-	// b.X/Y) paints split-suffix boxes at the parent box's
-	// old position. The layout-once roadmap will fold these
-	// mutations into relayoutFrom (see
-	// docs/designs/features/layout-once-invariant.md).
+	// B2.2 R7: full relayout BEFORE _draw so cklinewrap's
+	// lineHForAdvance has correct line-by-line LineH lookups
+	// and nframe.drawtext's offset walk reads accurate
+	// b.X/b.Y. The parent's post-merge relayoutFrom redoes
+	// this against the merged box list.
 	frame.relayoutFrom(0)
 	pt1 := frame._draw(pt0)
-	frame.relayoutFrom(0)
 	f.lastlinefull = frame.lastlinefull
 
 	return pt0, pt1, frame
