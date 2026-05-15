@@ -185,7 +185,11 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	// this against the merged box list.
 	frame.relayoutFrom(0)
 	pt1 := frame._draw(pt0)
-	f.lastlinefull = frame.lastlinefull
+	// B2.3 R2: the parent's f.lastlinefull is set by the
+	// post-splice f.relayoutFrom(0) at insertbyteimpl's end
+	// (see insert.go bottom). The child→parent copy was an
+	// intermediate step from the legacy bxscan→_draw chain
+	// and is now redundant.
 
 	return pt0, pt1, frame
 }

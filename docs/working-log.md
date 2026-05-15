@@ -720,13 +720,49 @@ Next: B2.3.R2 — move `lastlinefull` ownership into
 (commit `677ab5e`'s carryover); assert I-LAYOUT-4. Should be
 a small row given R1's groundwork.
 
+### 2026-05-14 (later still) — R2 landed
+
+8 numbered requirements (R2.1–R2.8) in
+`frame/lastlinefull_test.go` covering empty / fits / exactly-
+fills / overflows + post-Insert / post-Delete / post-
+SetStyleRange / sole-writer.
+
+Implementation: a `defer` at the top of `relayoutFrom` sets
+`f.lastlinefull` from the line-table formula
+(`lines[-1].TopY + lines[-1].LineH >= rect.Max.Y`, false for
+empty). Removed every other writer:
+- `deleteimpl`'s explicit reset (commit `677ab5e`).
+- `clean()`'s pt-walk setter in `util.go`.
+- `bxscan`'s child→parent copy `f.lastlinefull = frame.lastlinefull`.
+- `_draw`'s truncation setter at `draw.go:506` (truncation
+  still happens; `lastlinefull` is re-derived by the parent
+  `relayoutFrom`).
+
+`frame.go` Init's `f.lastlinefull = false` stays as the
+setup-time zero, scoped out of the "no other writer" rule.
+
+Semantic refinement: for exact-fill (last line bottom ==
+rect.Max.Y), the new formula gives `true` where the prior
+pt-walk gave `false`. Intentional per design §2.3 — "no more
+vertical room for content" is the better semantic of
+"lastlinefull."
+
+`./regression.sh` green. No tests outside R2's own changed
+expectations; the existing Insert/Delete/SetStyleRange paths
+already produced correct lastlinefull under the new formula.
+
+Next: B2.3.R3 — route `Charofpt` through the line-summary
+table. Binary search by `TopY`; the inner walk uses
+`FirstRune` to identify rune offsets inside a line.
+
 ## Next-session candidates
 
-1. **B2.3.R2 — `lastlinefull` ownership.** Move into
-   `relayoutFrom` (derive from `lines[-1].TopY +
-   lines[-1].LineH >= rect.Max.Y`). Drop the explicit reset
-   in `deleteimpl`. Assert I-LAYOUT-4 across Insert / Delete /
-   SetStyleRange scenarios.
+1. **B2.3.R3 — `Charofpt` through line-summary table.**
+   Implement `charOfPtReader` to binary-search `f.lines` by
+   `TopY`, then walk that line's boxes by `X`. Click-on-
+   heading must hit a rune inside the heading. Plain-text
+   frames byte-identical. Instrumentation counter for box-
+   walk steps to confirm the O(log lines) shape.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

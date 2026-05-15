@@ -172,32 +172,12 @@ func (f *frameimpl) deleteimpl(p0, p1 int) int {
 
 	f.nchars -= int(p1 - p0)
 
-	// B2.2 R2/R7: refresh per-box geometry BEFORE the Tick
-	// and final pt lookups so they use up-to-date box.Y on
-	// variable-height layouts.
+	// B2.3 R2: relayoutFrom owns lastlinefull, derived from
+	// the line table per I-LAYOUT-4. The explicit reset
+	// commit 677ab5e added here is now folded into the layout
+	// pass — Delete that vacates the bottom is no longer a
+	// special case.
 	f.relayoutFrom(0)
-
-	// If Delete vacated the bottom, the frame is no longer
-	// full and Text.fill must be allowed to top it back up.
-	// Without this reset the fill at the next scroll step
-	// short-circuits at its IsLastLineFull check and the new
-	// bottom line never gets inserted — visible as a missing
-	// line where the next content (e.g. a scaled heading)
-	// belongs. relayoutFrom itself can't decide this because
-	// the "frame is full" signal historically comes from the
-	// _draw walker's overflow-truncation step; after a Delete
-	// nothing has been truncated, so we explicitly reset.
-	f.lastlinefull = false
-	if len(f.box) > 0 {
-		last := f.box[len(f.box)-1]
-		bottom := last.Y + last.LineH
-		if last.LineH == 0 {
-			bottom = last.Y + f.defaultfontheight
-		}
-		if bottom >= f.rect.Max.Y {
-			f.lastlinefull = true
-		}
-	}
 
 	if f.sp0 == f.sp1 {
 		f.Tick(f.ptOfCharReader(f.sp0), true)

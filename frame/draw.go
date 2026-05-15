@@ -503,7 +503,14 @@ func (f *frameimpl) _draw(pt image.Point) image.Point {
 		}
 		pt = f.cklinewrap0(pt, b)
 		if pt.Y == f.rect.Max.Y {
-			f.lastlinefull = true
+			// B2.3 R2: lastlinefull is owned by
+			// relayoutFrom and derived from the line
+			// table; _draw is on its way out (R4). The
+			// truncation here still removes off-screen
+			// boxes so subsequent paint walks don't see
+			// stale geometry; the bxscan path's parent
+			// relayoutFrom will then re-derive
+			// lastlinefull from the truncated state.
 			f.nchars -= f.strlen(nb)
 			f.delbox(nb, len(f.box)-1)
 			break

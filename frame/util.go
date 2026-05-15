@@ -211,14 +211,11 @@ func (f *frameimpl) clean(pt image.Point, n0, n1 int) {
 		pt = f.cklinewrap(pt, b)
 		pt = f.advance(pt, b)
 	}
-	// Because we strip the boxes past the end in _draw, this will wrongly
-	// change lastlinefull when we run this at the end of of insert.
-	// Consequently, I modified insert to not clean if there was nothing to
-	// add.
-	f.lastlinefull = false
-	if pt.Y >= f.rect.Max.Y {
-		f.lastlinefull = true
-	}
+	// B2.3 R2: lastlinefull is owned by relayoutFrom. Every
+	// clean() call site (Insert / Delete / SetStyleRange)
+	// invokes relayoutFrom afterwards, which derives
+	// lastlinefull from the line table per I-LAYOUT-4. The
+	// historical pt-walk setter here was redundant.
 	//	f.Logboxes("--- clean: end")
 }
 

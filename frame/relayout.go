@@ -91,6 +91,18 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		}
 	}
 
+	// I-LAYOUT-4: lastlinefull is derived from the line table.
+	// Set at every return path including the empty-content case.
+	defer func() {
+		f.lastlinefull = false
+		if n := len(f.lines); n > 0 {
+			last := f.lines[n-1]
+			if last.TopY+last.LineH >= f.rect.Max.Y {
+				f.lastlinefull = true
+			}
+		}
+	}()
+
 	nb := nb0
 	for nb < len(f.box) {
 		// Phase A: find the line's box range and compute its
