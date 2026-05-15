@@ -244,4 +244,86 @@ func (f *frameimpl) validateboxmodel(format string, args ...interface{}) {
 
 	// TODO(rjk): Every box fits in Rect.
 
+	// B2.3 R12: I-LAYOUT-* invariants from
+	// frame-layout-design.md §7. I-LAYOUT-1 (sole-writer)
+	// is structurally guaranteed by the code shape and
+	// can't easily be checked at runtime; I-LAYOUT-5 (paint
+	// matches layout) is paint-time and lives in paintBox
+	// when -validatelayout is added. The static line-table
+	// invariants below fire whenever -validateboxes is set.
+
+	// I-LAYOUT-2: line-table consistency.
+	for i, line := range f.lines {
+		if line.FirstBox < 0 || line.FirstBox >= len(f.box) {
+			log.Printf(format, args...)
+			f.Logboxes("-- I-LAYOUT-2: lines[%d].FirstBox=%d out of range --", i, line.FirstBox)
+			panic("-- I-LAYOUT-2 violated --")
+		}
+		fb := f.box[line.FirstBox]
+		if fb.Y != line.TopY || fb.LineH != line.LineH || fb.LineA != line.LineA {
+			log.Printf(format, args...)
+			f.Logboxes("-- I-LAYOUT-2: lines[%d]={Y=%d LineH=%d LineA=%d}, box[FirstBox]={Y=%d LineH=%d LineA=%d} --",
+				i, line.TopY, line.LineH, line.LineA, fb.Y, fb.LineH, fb.LineA)
+			panic("-- I-LAYOUT-2 violated --")
+		}
+		end := len(f.box)
+		if i+1 < len(f.lines) {
+			end = f.lines[i+1].FirstBox
+		}
+		for j := line.FirstBox; j < end; j++ {
+			b := f.box[j]
+			if b.Y != line.TopY || b.LineH != line.LineH || b.LineA != line.LineA {
+				log.Printf(format, args...)
+				f.Logboxes("-- I-LAYOUT-2: box[%d] doesn't match its line[%d] metrics --", j, i)
+				panic("-- I-LAYOUT-2 violated --")
+			}
+		}
+	}
+
+	// I-LAYOUT-3: monotone TopY across adjacent lines.
+	for i := 1; i < len(f.lines); i++ {
+		prev, cur := f.lines[i-1], f.lines[i]
+		want := prev.TopY + prev.LineH
+		if cur.TopY != want {
+			log.Printf(format, args...)
+			f.Logboxes("-- I-LAYOUT-3: lines[%d].TopY=%d, want %d (prev.TopY=%d + prev.LineH=%d) --",
+				i, cur.TopY, want, prev.TopY, prev.LineH)
+			panic("-- I-LAYOUT-3 violated --")
+		}
+	}
+
+	// I-LAYOUT-4: lastlinefull is derived from the line table.
+	wantLLF := false
+	if n := len(f.lines); n > 0 {
+		last := f.lines[n-1]
+		wantLLF = last.TopY+last.LineH >= f.rect.Max.Y
+	}
+	if f.lastlinefull != wantLLF {
+		log.Printf(format, args...)
+		f.Logboxes("-- I-LAYOUT-4: lastlinefull=%v, want %v --", f.lastlinefull, wantLLF)
+		panic("-- I-LAYOUT-4 violated --")
+	}
+
+	// I-LAYOUT-6: no layout-only fragmentation.
+	for i := 0; i+1 < len(f.box); i++ {
+		a, c := f.box[i], f.box[i+1]
+		if a.Nrune <= 0 || c.Nrune <= 0 {
+			continue
+		}
+		if a.Style != c.Style {
+			continue
+		}
+		if isSpaceOnlyBox(a) != isSpaceOnlyBox(c) {
+			continue
+		}
+		if a.Y != c.Y {
+			continue
+		}
+		if a.Wid+c.Wid <= f.rect.Max.X-a.X {
+			log.Printf(format, args...)
+			f.Logboxes("-- I-LAYOUT-6: box[%d] (%q) and box[%d] (%q) could be coalesced at Y=%d --",
+				i, string(a.Ptr), i+1, string(c.Ptr), a.Y)
+			panic("-- I-LAYOUT-6 violated --")
+		}
+	}
 }

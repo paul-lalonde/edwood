@@ -1205,13 +1205,60 @@ Next: B2.3.R12 — wire validators (`-validateboxes` /
 under the existing test flags. Mostly mechanical: hook the
 invariants into `validateboxmodel` and the paint walks.
 
+### 2026-05-14 (later still 11) — R12 landed
+
+Extended `validateboxmodel` (frame/box.go) to assert the
+static I-LAYOUT invariants under the existing
+`-validateboxes` flag:
+
+- **I-LAYOUT-2** (line-table consistency): each `lines[i]`
+  agrees with `box[FirstBox]`'s {Y, LineH, LineA}; every
+  box on the line shares those metrics.
+- **I-LAYOUT-3** (monotone TopY): `lines[i+1].TopY ==
+  lines[i].TopY + lines[i].LineH`.
+- **I-LAYOUT-4** (`lastlinefull` formula):
+  `lastlinefull == (lines[-1].TopY + LineH >= rect.Max.Y)`,
+  or false for empty `f.lines`.
+- **I-LAYOUT-6** (no layout-only fragmentation): no
+  adjacent same-style same-category content-box pair on
+  the same line whose combined `Wid` would fit at
+  `box[i].X`.
+
+Not wired:
+- **I-LAYOUT-1** (sole-writer for layout fields) is
+  structurally guaranteed by the code shape — `relayoutFrom`
+  is the only writer of `X/Y/LineH/LineA`. No runtime check
+  short of instrumenting every box-field assignment.
+- **I-LAYOUT-5** (paint matches layout) is paint-time and
+  needs a hook in `paintBox`; deferred since the static
+  invariants already gate every test in the suite.
+
+`go test ./frame/ -validateboxes` runs all 204 tests green
+with the new asserts active. The R1–R8 test files also
+assert these invariants directly without depending on the
+flag, so default-config CI catches violations too.
+
+**B2.3 migration complete.** All 12 rows landed (R9/R10
+audit-only; R11 scope-reduced — `_draw`/`cklinewrap0`/
+`lineHForAdvance`/`lineHAtPt` stay because they're still
+load-bearing for bxscan's pt1 contract and the caret's
+line-height lookup; a future row reworks those).
+
+The user-visible scroll/heading bugs that motivated B2.3
+are fixed. The layout-once architecture is in place:
+- `relayoutFrom` is the sole writer of X/Y/LineH/LineA
+  and the `f.lines` table.
+- All mutators (Insert / Delete / SetStyleRange) use the
+  uniform snapshot → mutate → relayout → diff → ops flow.
+- The §3.5 line-table diff handles run-compression for
+  blits, off-screen-aware paint vs blit, and identical-line
+  skipping.
+
 ## Next-session candidates
 
-1. **B2.3.R12 — Wire I-LAYOUT-* validators.** Last row of
-   B2.3. Add `-validatelayout` flag (or extend the existing
-   `-validateboxes`); assert I-LAYOUT-1..6 in
-   `validateboxmodel` and the paint walks. Should be green
-   by construction at this point in the migration.
+1. **B2.4 — Performance row.** Plain-text Insert throughput
+   within 5% of upstream; profile + optimize hot path if
+   needed.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
