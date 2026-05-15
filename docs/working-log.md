@@ -1098,12 +1098,45 @@ happening because Insert now does this internally (R7);
 R9 may collapse to "audit + verify the Text-side has no
 remaining direct frame-pixel manipulation."
 
+### 2026-05-14 (later still 8) — R9 audit-only
+
+Audit confirmed R6+R7 already cover R9's intent. No
+production code changes.
+
+Text-side scroll/fill paths inventoried:
+- `Text.fill` → `fr.Insert` / `fr.InsertWithStyle`
+- `Text.setorigin` → `fr.Delete` + `t.fill`
+- `Text.FrameScroll` → `Text.setorigin`
+- `Text.Redraw` → `frame.Init` + `frame.Redraw` (bg fill) +
+  `t.fill`
+
+Every mutator-style path now uses snapshot+diff via R6
+(Delete) or R7 (Insert). `frame.Redraw` is just a bg fill
+before `t.fill` paints content; OpPaint also clears with the
+same bg color, so the two paths agree.
+
+`grep -rn "_draw\b"` outside frame/ → no callers. Frame's
+`_draw` retains its pt-walk for the legacy bxscan path
+(R7's insertbyteimpl drops the staging-frame return value
+but bxscan still invokes _draw for tab Wid recompute and
+nframe truncation). R11 deletes `_draw` along with the
+other legacy walkers.
+
+Next: B2.3.R10 — frame rect resize. The §6.5 path:
+snap → set `f.rect` → `relayoutFrom(0)` → `diffLines` →
+issue ops; `Text` inspects `lastlinefull` post-resize and
+calls `fill` if the new rect is taller. Mostly verifying
+the existing resize path handles this correctly (it should,
+since `frame.Init` already nils `f.lines` and `t.fill`
+follows).
+
 ## Next-session candidates
 
-1. **B2.3.R9 — Scroll/fill via parent snapshot+diff.** Audit
-   the Text-side fill loop and any direct frame paint paths.
-   With R6+R7 in place, much of this may already work
-   correctly without code changes; R9 is mostly verification.
+1. **B2.3.R10 — Frame rect resize.** Most likely also
+   audit-only since `Text.Resize` → `t.fr.Clear(false)` +
+   `t.Redraw(r, odx, noredraw)` which does Init + Redraw +
+   fill. Test by resizing windows that contain styled
+   content and watching for layout corruption.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
