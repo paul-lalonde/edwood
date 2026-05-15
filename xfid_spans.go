@@ -28,12 +28,22 @@ func writeSpansToStore(w *Window, payload string) error {
 	if err != nil {
 		return err
 	}
-	for _, d := range directives {
-		if err := applySpansDirective(w, d); err != nil {
-			return err
+	// Apply the whole payload as a single batch so md2spans's
+	// typical `c` (clear all) + `s ...` (re-set) sequence
+	// produces one observer notification covering the union
+	// range, rather than a clear-paint immediately followed by
+	// a set-paint. The clear-paint was the user-visible
+	// "flash unstyled" stutter on every keystroke.
+	var applyErr error
+	w.body.spans.Batch(func() {
+		for _, d := range directives {
+			if err := applySpansDirective(w, d); err != nil {
+				applyErr = err
+				return
+			}
 		}
-	}
-	return nil
+	})
+	return applyErr
 }
 
 // applySpansDirective converts one parsed Directive into a

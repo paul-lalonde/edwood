@@ -586,9 +586,24 @@ faithful round-trip serialization needs a side-channel that
 hasn't been added yet. Defer until needed (Slice B will likely
 add it alongside the font-aware producers).
 
-**Atomicity.** Each 9P Twrite is parsed independently. The two-
-write idiom (`c\n` followed by a contiguous `s` block in a
-separate write) is the recommended way to fully replace styling.
+**Atomicity.** Each 9P Twrite is parsed independently. Producers
+that want to fully replace styling on every refresh should use
+the **tiled-`s` idiom**: emit one Twrite per refresh containing
+a contiguous block of `s` directives that tiles the affected
+range (gaps filled with `s <off> <len> -` for plain). The
+consumer applies the whole write atomically and the user sees a
+single state transition.
+
+The legacy two-write idiom (`c\n` followed by a separate `s`
+block) is **deprecated for routine refreshes** — because each
+Twrite is parsed independently, the consumer paints "all plain"
+when it sees `c`, then re-paints styled when the next Twrite
+arrives, producing a visible "flash unstyled" transient between
+the two writes. `c` remains in the protocol for explicit-reset
+workflows (an "unstyle this buffer entirely" command, or a
+producer that genuinely wants the buffer to go plain with no
+follow-up), but producers like `md2spans` that re-emit the full
+state on every refresh should not use it.
 
 ## 7. Text Changes
 

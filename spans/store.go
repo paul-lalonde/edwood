@@ -55,6 +55,16 @@ type Store interface {
 	// are bookkeeping and do NOT fire fn.
 	Observe(fn func(p0, p1 int))
 
+	// Batch runs fn with notifications suspended. Calls to
+	// SetRegion / ClearRegion inside fn update the regions but
+	// do not fire Observe callbacks. After fn returns, a single
+	// Observe call covers the union of all ranges touched during
+	// the batch. Used by the xfid spans-write path so a payload
+	// containing `c` (clear all) + `s ...` directives produces
+	// one paint of the final state, not a paint of the cleared
+	// state followed by a paint of the styled state.
+	Batch(fn func())
+
 	// Snapshot returns a copy of the current regions, sorted
 	// by Start and covering the buffer's full rune range.
 	Snapshot() []Region
@@ -93,6 +103,14 @@ type store struct {
 	regions   []Region
 	totalLen  int
 	observers []func(p0, p1 int)
+
+	// Batch state. When batchDepth > 0, notify() does not fire
+	// observers; instead it widens batchP0/batchP1 to cover the
+	// passed range. When the outermost Batch() exits, a single
+	// notify fires with the accumulated range.
+	batchDepth int
+	batchP0    int
+	batchP1    int
 }
 
 // Observe registers fn for style-only update callbacks. See the
@@ -104,11 +122,47 @@ func (s *store) Observe(fn func(p0, p1 int)) {
 	s.observers = append(s.observers, fn)
 }
 
-// notify dispatches a style-only update to all observers.
+// notify dispatches a style-only update to all observers. When
+// a Batch is active, observers are NOT fired here — the range
+// is accumulated for a single notification at batch end.
 func (s *store) notify(p0, p1 int) {
+	if s.batchDepth > 0 {
+		if s.batchP0 == s.batchP1 {
+			// First range in this batch.
+			s.batchP0, s.batchP1 = p0, p1
+		} else {
+			if p0 < s.batchP0 {
+				s.batchP0 = p0
+			}
+			if p1 > s.batchP1 {
+				s.batchP1 = p1
+			}
+		}
+		return
+	}
 	for _, fn := range s.observers {
 		fn(p0, p1)
 	}
+}
+
+// Batch implements Store.Batch. Nestable: only the outermost
+// call fires the accumulated notification.
+func (s *store) Batch(fn func()) {
+	s.batchDepth++
+	if s.batchDepth == 1 {
+		s.batchP0, s.batchP1 = 0, 0
+	}
+	defer func() {
+		s.batchDepth--
+		if s.batchDepth == 0 && s.batchP0 < s.batchP1 {
+			p0, p1 := s.batchP0, s.batchP1
+			s.batchP0, s.batchP1 = 0, 0
+			for _, fnObs := range s.observers {
+				fnObs(p0, p1)
+			}
+		}
+	}()
+	fn()
 }
 
 func (s *store) Empty() bool {
