@@ -791,15 +791,76 @@ in the migration order as the single biggest correctness gain
 (suspected root of the scroll-overlap glitches that motivated
 B2.3 in the first place).
 
+### 2026-05-14 (later still 3) — R4 landed (scoped)
+
+R4 turned out to need scoping. The plan row's target ("pt1
+read from staging's `lines[-1]`") only works once
+insertbyteimpl is also restructured (R6) because:
+
+- `_draw` does insertion-point-aware layout: it walks the
+  staging frame's boxes with `pt = pt0` (the parent-coord
+  insertion point), letting cklinewrap0 wrap based on the
+  ACTUAL placement position. The staging frame's
+  relayoutFrom lays out from `staging.rect.Min`, not from
+  `pt0`, so the line-table doesn't capture this.
+- Downstream code at `insert.go:295, 316, 464` consumes
+  `pt1` as the visual end position of inserted content;
+  swapping the source mid-flow breaks it.
+
+Scoped R4:
+
+1. **Added tab newwid in `relayoutFrom`'s phase A** (parent-
+   frame path). After the wrap decision, if the box is a
+   tab, recompute `b.Wid` via `newwid0(pt, b)`. This makes
+   SetStyleRange / Delete / resize land correctly without
+   needing a separate post-relayout walker.
+2. **Stripped `_draw` of the redundant `canfit + splitbox`
+   calls.** R1's eager-split inside relayoutFrom guarantees
+   no box arriving at `_draw` is wider than `rect.Dx()`, so
+   the long-word split path in `_draw` was dead. Kept the
+   pt-accumulator + truncation + tab newwid for the staging-
+   frame use case.
+3. **Added helpers** `nextPositionAfterLast` and
+   `truncateOffscreen` in `relayout.go`. Both are line-
+   table-driven and ready for R6/R7 to consume; not yet
+   wired into bxscan (that wiring is part of restructuring
+   `insertbyteimpl` to use snapshot+diff).
+
+Stage 4: `TestSetStyleRange_PreservesTabWidth` failed because
+it pinned a wrong behavior — when bold styling grew the
+leading "a"'s width, the test expected the tab's Wid to be
+preserved (which made "b" drift off the tabstop column). The
+correct semantic is "tab Wid is recomputed so b stays on the
+tabstop." Updated the test assertions (with user approval) to
+check tabstop alignment instead of preservation. Newline Wids
+(position-independent 10000 placeholder) still preserved.
+
+Tests: 7 numbered requirements (R4.1–R4.5 + extensions) in
+`frame/draw_accumulator_test.go`. Existing TestBxscan,
+TestInsert, TestInsertAligned, TestSetStyleRange* all green.
+`./regression.sh` green.
+
+Outstanding for R6 (insertbyteimpl restructure):
+
+- Wire `nextPositionAfterLast` + `truncateOffscreen` into
+  bxscan, dropping the `_draw` call entirely.
+- Use `snapshotLines` + `diffLines` (R5) to compute paint
+  ops instead of the pt0→pt1 reconciliation loop.
+
+Next: B2.3.R5 — introduce `snapshotLines` + `diffLines`
+helpers per design §3.5. No mutator wired yet; unit tests
+construct pre/post `f.lines` states and assert the
+classification (identical / shifted / dirty) + run
+compression. `deleteimpl` is the first consumer in R6.
+
 ## Next-session candidates
 
-1. **B2.3.R4 — eliminate `_draw` accumulator.** Per
-   `frame-layout-design §6.4`, `bxscan` reads
-   `pt1 = lines[-1].TopY + lines[-1].LineH` on the staging
-   frame; `_draw`'s body keeps the paint walk but drops the
-   pt-accumulator and the canfit+splitbox path (those are
-   now in `relayoutFrom` via R1's eager split). Manual scroll
-   test on `test-md-layout.md` is the user-visible gate.
+1. **B2.3.R5 — `snapshotLines` + `diffLines` helpers.** Per
+   `frame-layout-design §3.5`. `lineSnap{FirstRune, TopY,
+   LineH, Style}` shape; `paintOp{Kind, Src, Dst}` type;
+   three-way per-line classification keyed by FirstRune;
+   adjacent same-ΔY runs compose into one blit. No mutator
+   consumes yet — R6 is first consumer.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

@@ -342,6 +342,18 @@ func TestSetStyleRange_PreservesTabWidth(t *testing.T) {
 	// collapsed indent boxes to zero width, so re-styling a span
 	// containing a tab made subsequent text run on top of the
 	// preceding glyphs.
+	//
+	// B2.3 R4 refines what "preserve" means:
+	//   - Newline Wid (the bxscan-time 10000 placeholder) is
+	//     position-independent and must be preserved exactly.
+	//   - Tab Wid is the distance from the tab's pt.X to the
+	//     next tabstop. Re-styling that changes a preceding
+	//     glyph's width shifts pt.X, and the tab Wid must
+	//     adjust so the following glyph still lands on the
+	//     tabstop column. relayoutFrom (which runs at the end
+	//     of SetStyleRange) recomputes tab Wid via newwid0.
+	// The original BytesWidth-clobber bug is still prevented:
+	// a recomputed tab Wid is never 0 (always >= Minwid).
 	textarea := image.Rect(20, 10, 400, 100)
 	display := edwoodtest.NewDisplay(textarea)
 	var textcolors [NumColours]draw.Image
@@ -386,37 +398,40 @@ func TestSetStyleRange_PreservesTabWidth(t *testing.T) {
 	// the tab and newline boxes.
 	f.SetStyleRange(0, f.nchars, []StyleRun{{Len: f.nchars, Style: Style{Kind: KindBold}}})
 
-	// Each special box's Wid must be unchanged. The box indices
-	// can shift if clean() merges adjacent same-Style content
-	// boxes, so match by Nrune<0 + Bc identity rather than index.
-	for _, s := range before {
-		// Find a special box with the same Bc somewhere in the
-		// current model. (Each test input has exactly one tab
-		// and one newline, so byte-class identity is unique.)
-		orig := f.box // we want the post-SetStyleRange state
-		_ = orig
-		found := false
-		for _, b := range f.box {
-			if b == nil || b.Nrune >= 0 {
-				continue
-			}
-			// Match the original box at this index by Bc, since
-			// special-box order matches input order.
-			if b.Wid != s.wid {
-				continue
-			}
-			found = true
-			break
+	// Per-class assertions:
+	//   - Tabs: Wid >= Minwid (never collapsed to 0); Wid
+	//     reflects the distance from the tab's pt.X to the
+	//     next tabstop column. We verify by checking that
+	//     box[tab.idx-1].X + box[tab.idx-1].Wid + tab.Wid
+	//     lands on a maxtab boundary from rect.Min.X.
+	//   - Newlines: Wid is the bxscan placeholder, position-
+	//     independent. Must be preserved exactly.
+	_ = before
+	for i, b := range f.box {
+		if b == nil || b.Nrune >= 0 {
+			continue
 		}
-		if !found {
-			// Report widths so the failure is diagnosable.
-			var got []int
-			for _, b := range f.box {
-				if b != nil && b.Nrune < 0 {
-					got = append(got, b.Wid)
-				}
+		switch b.Bc {
+		case '\n':
+			if b.Wid != 10000 {
+				t.Errorf("newline box at idx=%d has Wid=%d, want 10000 (bxscan placeholder, position-independent)",
+					i, b.Wid)
 			}
-			t.Errorf("after SetStyleRange a special box originally Wid=%d at idx=%d was not preserved; current special widths = %v", s.wid, s.idx, got)
+		case '\t':
+			if b.Wid <= 0 {
+				t.Errorf("tab box at idx=%d collapsed to Wid=%d (BytesWidth-clobber regression)", i, b.Wid)
+			}
+			if b.Wid < int(b.Minwid) {
+				t.Errorf("tab box at idx=%d has Wid=%d < Minwid=%d", i, b.Wid, b.Minwid)
+			}
+			// Tabstop alignment: the next column after the
+			// tab (b.X + b.Wid) must sit on a maxtab boundary
+			// from rect.Min.X.
+			column := b.X + b.Wid - f.rect.Min.X
+			if column%f.maxtab != 0 {
+				t.Errorf("tab box at idx=%d ends at column %d (maxtab=%d); not tabstop-aligned",
+					i, column, f.maxtab)
+			}
 		}
 	}
 }

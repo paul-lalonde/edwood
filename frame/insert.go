@@ -184,12 +184,15 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	// b.X/b.Y. The parent's post-merge relayoutFrom redoes
 	// this against the merged box list.
 	frame.relayoutFrom(0)
+	// B2.3 R4 (scoped): _draw's in-line layout-mutation work
+	// (canfit + splitbox for long words, newwid for tabs) is
+	// now redundant — relayoutFrom does eager split (R1) and
+	// tab Wid recompute (R4). _draw's body is stripped of
+	// those calls but retains its pt-accumulator walk and
+	// off-screen truncation, both of which the legacy
+	// insertbyteimpl consumes (R6/R7 restructure those).
+	// _draw is wholly deleted in R11.
 	pt1 := frame._draw(pt0)
-	// B2.3 R2: the parent's f.lastlinefull is set by the
-	// post-splice f.relayoutFrom(0) at insertbyteimpl's end
-	// (see insert.go bottom). The child→parent copy was an
-	// intermediate step from the legacy bxscan→_draw chain
-	// and is now redundant.
 
 	return pt0, pt1, frame
 }

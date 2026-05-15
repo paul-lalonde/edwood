@@ -155,6 +155,15 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 				// iteration of the outer for.
 				break
 			}
+			// B2.3 R4: tab Wid is position-dependent
+			// (tabstop alignment). Recompute now that
+			// pt.X is fixed for this iteration. Was
+			// previously done by the _draw accumulator;
+			// folding it here lets the line table
+			// describe the final geometry directly.
+			if b.Nrune < 0 && b.Bc == '\t' {
+				b.Wid = f.newwid0(pt, b)
+			}
 			// b stays on this line.
 			f.updateLineMaxes(b, &lineH, &lineA)
 			pt.X += b.Wid
@@ -198,6 +207,67 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		// drawn — but their geometry is current.
 		pt = image.Pt(f.rect.Min.X, lineStartY+lineH)
 	}
+}
+
+// nextPositionAfterLast returns the screen point where the
+// next character would land after the last box in f.box,
+// derived from the line table. Replaces the _draw pt-
+// accumulator walk in bxscan (B2.3 R4).
+//
+// For an empty frame, returns rect.Min. For a frame whose
+// last box is a newline, returns the left margin at the
+// next line's top. Otherwise returns (lastBox.X + lastBox.Wid,
+// lastLine.TopY).
+func (f *frameimpl) nextPositionAfterLast() image.Point {
+	if len(f.box) == 0 || len(f.lines) == 0 {
+		return f.rect.Min
+	}
+	last := f.lines[len(f.lines)-1]
+	lastBox := f.box[len(f.box)-1]
+	if lastBox.Nrune < 0 && lastBox.Bc == '\n' {
+		return image.Pt(f.rect.Min.X, last.TopY+last.LineH)
+	}
+	return image.Pt(lastBox.X+lastBox.Wid, last.TopY)
+}
+
+// truncateOffscreen drops boxes/lines whose layout puts them
+// at or past rect.Max.Y, adjusts f.nchars, and re-derives
+// f.lastlinefull. Returns the post-truncation pt for "next
+// character would land here," clamped to rect.Max.Y.
+//
+// Used by bxscan, which historically did this work via
+// _draw's pt.Y == rect.Max.Y check. Per the new design
+// (frame-layout-design §6.4), the staging frame's bxscan
+// path is the only caller that wants bounded-frame
+// semantics; the parent's relayoutFrom keeps off-screen
+// content for correct shift detection.
+func (f *frameimpl) truncateOffscreen() image.Point {
+	// Find the first line whose TopY is at or past rect.Max.Y.
+	// Everything from there is off-screen and gets dropped.
+	truncFrom := -1
+	for i, line := range f.lines {
+		if line.TopY >= f.rect.Max.Y {
+			truncFrom = i
+			break
+		}
+	}
+	if truncFrom >= 0 {
+		firstBox := f.lines[truncFrom].FirstBox
+		for _, b := range f.box[firstBox:] {
+			f.nchars -= nrune(b)
+		}
+		f.box = f.box[:firstBox]
+		// Re-relayout so f.lines is consistent with f.box and
+		// the deferred lastlinefull update fires from the
+		// truncated state. (Cheap — the loop runs at most
+		// O(remaining lines) and never grows f.box again.)
+		f.relayoutFrom(0)
+	}
+	pt := f.nextPositionAfterLast()
+	if pt.Y > f.rect.Max.Y {
+		pt.Y = f.rect.Max.Y
+	}
+	return pt
 }
 
 // coalesceAt reports whether box[nb] and box[nb+1] can be

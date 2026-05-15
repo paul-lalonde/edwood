@@ -516,37 +516,31 @@ func (f *frameimpl) _draw(pt image.Point) image.Point {
 			break
 		}
 
+		// B2.3 R4: the in-line canfit + splitbox calls are
+		// gone — R1's eager-split in relayoutFrom handles
+		// long-word breaks before _draw runs. The tab
+		// newwid call stays: _draw is the staging-frame
+		// walker that knows pt0 (the insertion point in
+		// parent coords), and tab Wid is position-
+		// dependent. relayoutFrom's tab handling is for
+		// the parent-frame path (SetStyleRange / Delete /
+		// resize) where pt.X reflects the actual placement;
+		// the bxscan path overrides via this newwid.
+		// R6 unifies these once insertbyteimpl restructures.
 		if b.Nrune > 0 {
-			n, fits := f.canfit(pt, b)
-			if !fits {
-				break
-			}
-			if n != b.Nrune {
-				f.splitbox(nb, n)
-				b = f.box[nb]
-			}
 			pt.X += b.Wid
-		} else {
-			if b.Bc == '\n' {
-				pt.X = f.rect.Min.X
-				// B2.2 R7: advance by the line's actual
-				// height. b.LineH was set by the child's
-				// relayout (R5); fall back to
-				// defaultfontheight when unset. Clamp to
-				// rect.Max.Y so the post-_draw pt1 value
-				// the caller compares against the frame's
-				// bottom edge doesn't overshoot.
-				h := b.LineH
-				if h == 0 {
-					h = f.defaultfontheight
-				}
-				pt.Y += h
-				if pt.Y > f.rect.Max.Y {
-					pt.Y = f.rect.Max.Y
-				}
-			} else {
-				pt.X += f.newwid(pt, b)
+		} else if b.Bc == '\n' {
+			pt.X = f.rect.Min.X
+			h := b.LineH
+			if h == 0 {
+				h = f.defaultfontheight
 			}
+			pt.Y += h
+			if pt.Y > f.rect.Max.Y {
+				pt.Y = f.rect.Max.Y
+			}
+		} else {
+			pt.X += f.newwid(pt, b)
 		}
 	}
 	// f.Logboxes("_draw -- end")
