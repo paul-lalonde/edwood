@@ -1254,6 +1254,46 @@ are fixed. The layout-once architecture is in place:
   blits, off-screen-aware paint vs blit, and identical-line
   skipping.
 
+### 2026-05-15 — Plain toggle; fill no-progress guard; `variable-height` tag
+
+Two commits land on top of the post-B2.3 stabilization work:
+
+- `7132984` text: Plain tag-bar toggle suppresses styling consumer-side.
+  New `Plain` entry in `globalexectab`; `plainx` handler mirrors
+  `spansoverlay`. `Text` gets a `plain bool`. When set:
+  - `Inserted` takes the unstyled byte path (skips `InsertWithStyle`).
+  - `attachSpans`'s `Observe` callback short-circuits before calling
+    `fr.SetStyleRange`, so producer-driven style updates don't repaint.
+  - `fill` takes the unstyled branch.
+  - `SetSelect` suppresses the `S` event, so external producers like
+    `md2spans` stop being prompted to refresh.
+  Toggling on issues one `fr.SetStyleRange(plain)` over the visible
+  rune range to strip current styling; toggling off issues one
+  `fr.SetStyleRange` with the current spans-store runs so styling
+  snaps back without requiring the producer to re-send. The spans
+  store is never modified — Plain is purely a consumer-side gate.
+
+- `ee91f8f` text: guard `fill` against degenerate-frame infinite loop.
+  `Text.fill`'s outer loop relied on `nl == 0` or `lastlinefull` to
+  exit. When the frame can't accept content (notably a test-scaffold
+  frame with `Maxlines = 0` and `nl != 0`), `fr.Insert` returns
+  without advancing `Nchars` and neither break fires; the loop spins
+  forever recomputing the same remaining count. After-Insert
+  no-progress check returns an error so the misconfiguration
+  surfaces. Fixes the 600s timeout observed in
+  `TestEditMultipleWindows` once the `B`-command spawned a body
+  whose mock frame couldn't grow. Top-level + frame tests now run
+  in ~6s total.
+
+Tag `variable-height` cut at this commit. Marks the milestone where
+styled, variable-height rendering works end-to-end: B2.3
+layout-once architecture (R1–R12) is in, the user-visible scroll-
+overlap stripe and missing-heading-gap bugs are fixed, the scroll
+wheel honors variable line heights, typing flicker is gone
+(`md2spans` switched to the tiled-`s` refresh idiom +
+`spans.Store.Batch`), and the Plain toggle lets the user opt out
+of styling per-window.
+
 ## Next-session candidates
 
 1. **B2.4 — Performance row.** Plain-text Insert throughput
