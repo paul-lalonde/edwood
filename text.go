@@ -834,6 +834,19 @@ func (t *Text) fill(fr frame.SelectScrollUpdater) error {
 		} else {
 			lastlinefull = fr.Insert(rp[:i], framePos)
 		}
+		// Degenerate-frame guard: if Insert refused to accept
+		// any runes (e.g. a test scaffold frame with Maxlines=0,
+		// or any other state where the frame physically cannot
+		// hold content), neither the `nl == 0` nor the
+		// `lastlinefull` break can fire when nl != 0, and the
+		// outer loop would spin forever recomputing the same
+		// remaining-rune count. Bail out with a real error so
+		// callers can surface the misconfiguration instead of
+		// hanging the test runner.
+		afterPos := fr.GetFrameFillStatus().Nchars
+		if afterPos == framePos {
+			return fmt.Errorf("fill: no progress (Insert returned without advancing Nchars; framePos=%d i=%d nl=%d)", framePos, i, nl)
+		}
 		if nl == 0 || lastlinefull {
 			break
 		}
