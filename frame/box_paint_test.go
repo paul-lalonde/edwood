@@ -140,30 +140,33 @@ func TestKindHidden_SkipsGlyphPaintInRepaintBoxRange(t *testing.T) {
 	}
 }
 
-// R-B4.12: drawtext and repaintBoxRange paint the same content
-// box identically. Pin this by re-styling a box to the SAME style
-// it already has — repaintBoxRange should produce paint ops whose
-// glyph and font reference are byte-identical to what drawtext
-// produced on initial Insert.
+// R-B4.12: drawtext and repaintBoxRange paint content boxes
+// using the same font-selection path. B2.3 R8 changed
+// SetStyleRange to skip repaint when the diff says the line
+// is identical, so this test now exercises a real style
+// transition (plain → bold). Both paint paths must produce
+// font ops appropriate to their style; the parity guarantee
+// is that the bold-styled box renders with FONT_BOLD whether
+// it came in via Insert (drawtext) or via SetStyleRange
+// (repaintBoxRange).
 func TestPaintParity_DrawtextAndRepaintAgreeOnFont(t *testing.T) {
 	fr, disp := setupVariantFrame(t)
 
-	// Insert bold text. drawtext records a Bytes op with the
-	// bold font name.
-	bold := Style{Kind: KindBold}
-	fr.InsertWithStyle([]rune("hello"), 0, []StyleRun{{Len: 5, Style: bold}})
-
-	initialBoldOps := opsContaining(disp, "FONT_BOLD")
-	if len(initialBoldOps) == 0 {
-		t.Fatalf("drawtext didn't record a FONT_BOLD op; cannot test parity")
+	// Insert plain text. drawtext records ops with the default
+	// font; no FONT_BOLD op yet.
+	fr.InsertWithStyle([]rune("hello"), 0, []StyleRun{{Len: 5, Style: Style{}}})
+	preBoldOps := len(opsContaining(disp, "FONT_BOLD"))
+	if preBoldOps != 0 {
+		t.Fatalf("plain Insert leaked a FONT_BOLD op (%d); test premises broken", preBoldOps)
 	}
-	gotInitial := len(initialBoldOps)
 
-	// Re-style to same bold style — repaintBoxRange paints again.
+	// Re-style to bold — repaintBoxRange paints the affected
+	// range with the bold font.
+	bold := Style{Kind: KindBold}
 	fr.SetStyleRange(0, 5, []StyleRun{{Len: 5, Style: bold}})
 
-	finalBoldOps := opsContaining(disp, "FONT_BOLD")
-	if len(finalBoldOps) <= gotInitial {
-		t.Errorf("repaintBoxRange did not add a new FONT_BOLD op; got %d vs initial %d", len(finalBoldOps), gotInitial)
+	postBoldOps := len(opsContaining(disp, "FONT_BOLD"))
+	if postBoldOps == 0 {
+		t.Errorf("SetStyleRange to bold did not produce any FONT_BOLD op (repaint path didn't use the bold font)")
 	}
 }

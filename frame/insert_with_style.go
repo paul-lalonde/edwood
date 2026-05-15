@@ -2,7 +2,6 @@ package frame
 
 import (
 	"fmt"
-	"image"
 )
 
 // InsertWithStyle inserts r at rune offset p0 with per-rune
@@ -98,40 +97,40 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 
 	runeStyles := expandStyles(styles, p1-p0)
 
-	// B2.2 R4.1: snapshot the Y just past the last box —
-	// effectively the total content height. If a SetStyleRange
-	// shifts any line vertically (LineH change on some
-	// preceding line), this value moves. Colour swaps and
-	// bold-at-constant-height leave it unchanged → keep the
-	// narrow repaint.
-	preBottomY := f.contentBottomY()
+	// B2.3 R8: snapshot the line table; diffLines below
+	// computes the paint plan and shift detection. Replaces
+	// the B2.2 R4.1 contentBottomY mechanism — the diff
+	// classifies styled lines as dirty (paint) and any line
+	// whose LineH changed (e.g., scale) as dirty + shifts
+	// subsequent lines naturally.
+	snap := f.snapshotLines()
 
 	// Split at the [p0, p1) boundaries so the affected runes
-	// occupy a contiguous box range.
+	// occupy a contiguous box range. This is the "boundary
+	// splitbox" distinct from §3.3's long-word split inside
+	// relayoutFrom.
 	nb0 := f.findbox(0, 0, p0)
 	nb1 := f.findbox(nb0, p0, p1)
 
-	// Walk boxes, applying styles. When the style changes mid-box,
-	// splitbox is called and nb1 grows. Box.Wid is recomputed
-	// against the new style's font variant so the box advances by
-	// the width the painter will actually use — without this, the
-	// first paint after a span lands clips the right edge of a
-	// bold glyph (the next box's background starts too early).
+	// Walk boxes, applying styles. When the style changes
+	// mid-box, splitbox is called and nb1 grows. Box.Wid is
+	// recomputed against the new style's font variant so the
+	// box advances by the width the painter will actually use.
 	runeIdx := 0
 	nb := nb0
 	for nb < nb1 {
 		b := f.box[nb]
 		if b.Nrune < 0 {
-			// Special box (tab or newline): occupies one rune
-			// but its width is metric/tabstop-driven, not
-			// font-glyph-derived. Update Style only.
+			// Special box (tab or newline): width is
+			// metric/tabstop-driven. Update Style only;
+			// relayoutFrom recomputes tab Wid on the
+			// post-style pt.X (R4).
 			b.Style = runeStyles[runeIdx]
 			runeIdx++
 			nb++
 			continue
 		}
 		boxRunes := b.Nrune
-		// Compute run of identical style within this box.
 		curStyle := runeStyles[runeIdx]
 		n := 1
 		for n < boxRunes && runeStyles[runeIdx+n] == curStyle {
@@ -152,31 +151,22 @@ func (f *frameimpl) SetStyleRange(p0, p1 int, styles []StyleRun) {
 		nb1++
 	}
 
-	// Merge adjacent same-Style boxes within the affected range,
-	// then refresh per-box X/Y/LineH/LineA. Both run BEFORE
-	// paint so the narrow repaint reads fresh box geometry.
-	cleanEnd := nb1 + 1
-	if cleanEnd > len(f.box) {
-		cleanEnd = len(f.box)
-	}
-	f.clean(f.ptofcharptb(p0, f.rect.Min, 0), nb0, cleanEnd)
+	// Relayout: eager-coalesce in relayoutFrom merges any
+	// boundary-split fragments that now carry equal styles
+	// (e.g., a no-op style change). The f.clean call from
+	// the legacy path is now redundant.
 	f.relayoutFrom(0)
 
-	// If the layout shifted vertically (preBottomY changed),
-	// the visible old-position pixels no longer match new-
-	// position geometry. Clear the body rect and repaint
-	// everything. Otherwise the narrow repaint suffices.
 	if f.background == nil {
 		return
 	}
-	col := f.cols[ColBack]
-	tcol := f.cols[ColText]
-	if f.contentBottomY() != preBottomY {
-		f.background.Draw(f.rect, col, nil, image.Point{})
-		f.repaintBoxRange(f.rect.Min, 0, len(f.box), tcol, col)
-	} else {
-		f.repaintBoxRange(f.rect.Min, nb0, nb1, tcol, col)
-	}
+
+	// Diff and issue paint ops. The styled lines have a new
+	// content digest → dirty → OpPaint. Lines below a height-
+	// changing style are shifted → OpBlit. Lines untouched
+	// by the style change are identical → no op.
+	ops := f.diffLines(snap)
+	f.issuePaintOps(ops)
 
 	// Preserve the user's selection highlight if it overlaps
 	// the styled range. The repaint just painted over the
@@ -215,22 +205,8 @@ func (f *frameimpl) hasNonDefaultLineHeight() bool {
 	return false
 }
 
-// contentBottomY returns the Y just past the last box —
-// effectively the total content height as laid out. If the
-// last box is on a line of height H starting at Y, returns
-// Y+H. Empty frame returns rect.Min.Y. Used by SetStyleRange
-// to detect a vertical shift (line-height change) that
-// invalidates the existing pixel layout, so we know whether
-// to trigger a full clear+repaint or stay on the parsimonious
-// narrow path.
-func (f *frameimpl) contentBottomY() int {
-	if len(f.box) == 0 {
-		return f.rect.Min.Y
-	}
-	last := f.box[len(f.box)-1]
-	lineH := last.LineH
-	if lineH == 0 {
-		lineH = f.defaultfontheight
-	}
-	return last.Y + lineH
-}
+// B2.3 R8 dropped contentBottomY — the line-table diff in
+// SetStyleRange supersedes it. The helper used to detect
+// vertical shifts induced by line-height changes; diffLines
+// classifies such lines as dirty + shifts the survivors below
+// naturally.

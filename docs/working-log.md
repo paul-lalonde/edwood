@@ -1050,11 +1050,60 @@ because the rune offsets don't shift; the diff should
 mostly classify identical lines as identical and just
 repaint the styled range.
 
+### 2026-05-14 (later still 7) — R8 landed
+
+`SetStyleRange` rewritten per design §6.3:
+
+- Pre-mutation `snapshotLines`.
+- Boundary `splitbox` at `[p0, p1)` edges via `findbox`.
+- Walk boxes, apply Style + recompute Wid; mid-box style
+  splits grow nb1.
+- `f.relayoutFrom(0)` — eager-coalesce merges any boundary
+  splits whose pieces ended up with identical styles.
+- `f.diffLines(snap)` + `f.issuePaintOps(ops)`.
+- Selection-highlight repaint if overlapping the styled
+  range.
+
+Removed:
+- `preBottomY := f.contentBottomY()` snapshot and the
+  `if contentBottomY() != preBottomY` conditional that
+  switched between full-clear-and-repaint and narrow-
+  repaint. diffLines handles both via the dirty/shifted
+  classification.
+- `f.clean(...)` (R1's eager-coalesce subsumes it).
+- The unused `contentBottomY` helper function itself.
+
+Tests:
+- 4 new requirements (R8.1–R8.4) in
+  `frame/set_style_range_diff_test.go`: no-reflow,
+  invariants hold, no-op style change.
+- All existing TestSetStyleRange_* green.
+
+Stage-4 wrong-test (with user approval per CLAUDE.md):
+`TestPaintParity_DrawtextAndRepaintAgreeOnFont` pinned the
+legacy "re-style to same style triggers redundant repaint"
+behavior. R8's optimization classifies a same-style restyle
+as identical (no op). Updated the test to use a real style
+transition (plain → bold) so the parity guard (drawtext and
+repaintBoxRange both produce font ops appropriate to their
+style) is preserved.
+
+`go test ./frame/` green.
+
+Next: B2.3.R9 — scroll/fill path via parent snapshot+diff.
+Per §6.4 the `Text.fill`/`Text.scroll` path should call
+`snapshotLines` on the parent before splicing nframe boxes;
+issue `diffLines` ops after. This is largely already
+happening because Insert now does this internally (R7);
+R9 may collapse to "audit + verify the Text-side has no
+remaining direct frame-pixel manipulation."
+
 ## Next-session candidates
 
-1. **B2.3.R8 — `SetStyleRange` via diff.** Simpler row.
-   Existing `TestSetStyleRange*` tests should largely stay
-   green.
+1. **B2.3.R9 — Scroll/fill via parent snapshot+diff.** Audit
+   the Text-side fill loop and any direct frame paint paths.
+   With R6+R7 in place, much of this may already work
+   correctly without code changes; R9 is mostly verification.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

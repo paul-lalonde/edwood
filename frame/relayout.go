@@ -203,9 +203,8 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		// Advance pt to the next line's top. We continue past
 		// rect.Max.Y rather than breaking — boxes past the
 		// visible cutoff still need their X/Y/LineH refreshed
-		// so layout-shift detection (contentBottomY in
-		// SetStyleRange, etc.) sees the true post-mutation
-		// extent. Paint walks (paintBox) bail when a box's Y
+		// so the §3.5 diff sees the true post-mutation extent
+		// of f.lines. Paint walks (paintBox) bail when a box's Y
 		// is outside the rect, so off-screen rows aren't
 		// drawn — but their geometry is current.
 		pt = image.Pt(f.rect.Min.X, lineStartY+lineH)
