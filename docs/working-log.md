@@ -1130,13 +1130,46 @@ the existing resize path handles this correctly (it should,
 since `frame.Init` already nils `f.lines` and `t.fill`
 follows).
 
+### 2026-05-14 (later still 9) — R10 audit-only
+
+Audit confirmed Text.Resize already works correctly via
+R1+R7. No production code changes.
+
+Resize path:
+- `Text.Resize` → `t.fr.Clear(false)` (clears box; my R7 fix
+  also nils `f.lines`).
+- `t.Redraw(r, odx, noredraw)` → `frame.Init` (resets state
+  + new rect via `setrects`) → `frame.Redraw` (bg fill) →
+  `t.fill` (chunked `fr.Insert` via R7).
+- Each chunked Insert snapshots, mutates, diffs. First
+  insert's snap is empty → all new lines dirty → painted
+  from scratch.
+
+The R7 "off-screen blit fix" handles content that was
+off-screen pre-resize and is now visible (paint instead of
+blit, so no stale-pixel import). Resize-grow paints fresh;
+resize-shrink stops fill at lastlinefull.
+
+The design's "single snapshot+diff over the entire resize"
+would be more efficient (only paint what changed) but the
+current "full clear + refill" path is correct and uses the
+diff machinery internally via t.fill. Future optimization
+row if profiling shows resize is a bottleneck.
+
+Next: B2.3.R11 — delete legacy walkers. Mechanical: remove
+`cklinewrap`, `cklinewrap0`, `advance`, `ptofcharptb`,
+`ptofcharnb`, `charofptimpl`, `lineHForAdvance`,
+`lineHAtPt`, and `_draw`. Compile errors at the call sites
+are the migration checklist. `_draw` still has callers
+inside bxscan; needs careful removal.
+
 ## Next-session candidates
 
-1. **B2.3.R10 — Frame rect resize.** Most likely also
-   audit-only since `Text.Resize` → `t.fr.Clear(false)` +
-   `t.Redraw(r, odx, noredraw)` which does Init + Redraw +
-   fill. Test by resizing windows that contain styled
-   content and watching for layout corruption.
+1. **B2.3.R11 — Delete legacy walkers.** Mechanical cleanup.
+   Each deletion exposes a chain of call sites that need
+   updating (or also deleting). `_draw` has the most
+   tendrils because bxscan still uses it for tab Wid +
+   nframe truncation.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
