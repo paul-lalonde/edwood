@@ -2,32 +2,78 @@ package frame
 
 import "image"
 
+// lineSummary describes one visible line of text. It is the
+// canonical answer to "which line is rune p on?", "how tall is
+// line k?", and "what's the bottom Y of content?". Per
+// frame-layout-design §2.2, the table is fully derived from
+// f.box and rebuilt by relayoutFrom in the same pass that fills
+// per-box fields. Per-box LineH/LineA mirror these values so
+// existing per-box readers keep working without an extra hop.
+//
+// FirstRune is the rune-coordinate identity of the line — the
+// sum of nrune(b) over f.box[:FirstBox]. It is stable across
+// box-list index shifts caused by inserts/deletes in earlier
+// lines, and is the key §3.5's diffLines uses to match
+// pre-mutation to post-mutation lines.
+type lineSummary struct {
+	FirstBox  int // index into f.box of the first box on this line
+	FirstRune int // sum of nrune() over f.box[:FirstBox]
+	TopY      int // line's top Y (== f.box[FirstBox].Y)
+	LineH     int // line's height in pixels (== f.box[FirstBox].LineH)
+	LineA     int // line's max ascent (== f.box[FirstBox].LineA)
+}
+
 // relayoutFrom walks f.box[nb0:] in a single forward pass,
-// populating each box's X, Y, LineH, and LineA fields. Per the
-// per-box-Y architecture (frame-rendering-spec §5.2), every
-// layout walk reads these fields rather than re-deriving pt
-// from scratch — but R2 only writes them. R3 migrates the walk
-// callers.
+// populating each box's X, Y, LineH, and LineA fields and
+// rebuilding the f.lines summary table for the affected
+// suffix. Per the per-box-Y architecture (frame-rendering-spec
+// §5.2, frame-layout-design §3), every layout walk reads these
+// fields rather than re-deriving pt from scratch.
 //
 // nb0 must name the START of a line (newline boundary or a
 // soft-wrap boundary). relayoutFrom does NOT walk back to find
 // a line start; callers that mutate mid-line must pass an
 // already-line-aligned nb0. Insert / Delete / SetStyleRange
 // pass 0 (full relayout) — cheap because the box list is
-// small. A future optimization can pass a tighter nb0 once R3
-// is in.
+// small.
 //
-// Pre-R4 every line has constant height (defaultfontheight),
-// so the "two-phase per line" pass collapses: phase A's
-// computed lineH/lineA are both defaultfontheight on every
-// line. The structure stays because R4 will set Style.Scale
-// → scaled font → larger boxHeight → real per-line max.
+// Per frame-layout-design §3.3, relayoutFrom is also the
+// single site that performs:
+//   - eager splitbox of content boxes whose Wid > rect.Dx()
+//     (long-word fallback), and
+//   - eager coalesce (inverse splitbox) of adjacent same-style
+//     same-category content boxes whose combined Wid fits on
+//     the current line.
+//
+// Both happen inline during phase A and are bounded by the
+// total rune count: splits strictly shrink the trailing
+// piece, merges strictly shrink len(f.box).
 func (f *frameimpl) relayoutFrom(nb0 int) {
 	if nb0 < 0 {
 		nb0 = 0
 	}
-	if nb0 >= len(f.box) {
+	if nb0 > len(f.box) {
 		return
+	}
+
+	// Truncate f.lines at the line containing nb0. For nb0 == 0
+	// this is empty; for nb0 > 0 we drop entries whose FirstBox
+	// >= nb0 (assumed line-aligned).
+	k := 0
+	for k < len(f.lines) && f.lines[k].FirstBox < nb0 {
+		k++
+	}
+	f.lines = f.lines[:k]
+
+	if nb0 == len(f.box) {
+		return
+	}
+
+	// firstRune accumulates the rune offset of the next line
+	// start as we walk forward. Seed from f.box[:nb0].
+	firstRune := 0
+	for i := 0; i < nb0; i++ {
+		firstRune += nrune(f.box[i])
 	}
 
 	// Seed pt at the start of box[nb0]. nb0==0 → rect.Min;
@@ -52,10 +98,36 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		lineStart := nb
 		lineStartX := pt.X
 		lineStartY := pt.Y
+		lineFirstRune := firstRune
 		lineH := f.defaultfontheight
 		lineA := f.font.Ascent()
 		for nb < len(f.box) {
+			// Eager coalesce (§3.3): while box[nb] and
+			// box[nb+1] are mergeable, splice them. Each
+			// iteration strictly shrinks len(f.box).
+			for f.coalesceAt(nb, pt.X) {
+				f.mergebox(nb)
+			}
+
 			b := f.box[nb]
+
+			// Eager split (§3.3, case 3): at a line start, if
+			// the box can't fit on any line (Wid > rect.Dx()),
+			// break it. canfit returns the max-fitting
+			// rune-prefix; fall back to k=1 if even one rune
+			// won't fit at this pt (mid-rune split is a B5.4
+			// follow-up).
+			if nb == lineStart && b.Nrune > 0 && b.Wid > f.rect.Dx() {
+				kfit, _ := f.canfit(pt, b)
+				if kfit <= 0 {
+					kfit = 1
+				}
+				if kfit < b.Nrune {
+					f.splitbox(nb, kfit)
+					b = f.box[nb] // leading piece
+				}
+			}
+
 			// Wrap decision mirrors cklinewrap0: content
 			// box wraps when its Wid doesn't fit at pt.X;
 			// special box wraps when Minwid doesn't fit.
@@ -74,6 +146,7 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 			// b stays on this line.
 			f.updateLineMaxes(b, &lineH, &lineA)
 			pt.X += b.Wid
+			firstRune += nrune(b)
 			nb++
 			if b.Nrune < 0 && b.Bc == '\n' {
 				// Hard wrap: newline is the line's last
@@ -83,7 +156,7 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		}
 
 		// Phase B: write X/Y/LineH/LineA over the line's
-		// box range.
+		// box range and append the line-table entry.
 		x := lineStartX
 		for i := lineStart; i < nb; i++ {
 			b := f.box[i]
@@ -92,6 +165,15 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 			b.LineH = lineH
 			b.LineA = lineA
 			x += b.Wid
+		}
+		if nb > lineStart {
+			f.lines = append(f.lines, lineSummary{
+				FirstBox:  lineStart,
+				FirstRune: lineFirstRune,
+				TopY:      lineStartY,
+				LineH:     lineH,
+				LineA:     lineA,
+			})
 		}
 
 		// Advance pt to the next line's top. We continue past
@@ -104,6 +186,27 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 		// drawn — but their geometry is current.
 		pt = image.Pt(f.rect.Min.X, lineStartY+lineH)
 	}
+}
+
+// coalesceAt reports whether box[nb] and box[nb+1] can be
+// merged per frame-layout-design §3.3's eager-coalesce rule:
+// both content boxes, same Style, same space/word category
+// (preserves B5 word-wrap), combined Wid still fits at ptX.
+func (f *frameimpl) coalesceAt(nb int, ptX int) bool {
+	if nb+1 >= len(f.box) {
+		return false
+	}
+	a, b := f.box[nb], f.box[nb+1]
+	if a.Nrune <= 0 || b.Nrune <= 0 {
+		return false
+	}
+	if a.Style != b.Style {
+		return false
+	}
+	if isSpaceOnlyBox(a) != isSpaceOnlyBox(b) {
+		return false
+	}
+	return ptX+a.Wid+b.Wid <= f.rect.Max.X
 }
 
 // updateLineMaxes folds box b's height and ascent into the

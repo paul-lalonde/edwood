@@ -640,15 +640,93 @@ pass — write the lineSummary type + populate from
 `relayoutFrom`'s phase B, no consumer migration yet, assert
 I-LAYOUT-2 / I-LAYOUT-3 fixtures.
 
+### 2026-05-14 (later) — B2.3 design revision + R1 landed
+
+Two-part session: a design-doc revision pass driven by inline
+review, then the first migration row.
+
+**Part 1 — design revision (commit `7889f31`).**
+
+Reviewed `frame-layout-design.md` end-to-end. Substantive
+changes:
+
+- §3.3 rewritten: long-word `splitbox` lives **inside**
+  `relayoutFrom`, not in `bxscan`. Eager split is inline in
+  phase A; multi-split propagation and iterator state under
+  splice are spelled out. Added a symmetric **eager coalesce**
+  (inverse `splitbox`) for adjacent same-style content boxes
+  whose combined `Wid` fits.
+- §3.4 expanded: position seed with "why `box[nb0-1]` is safe"
+  justification; entry-time `f.lines` truncation; line-count
+  shrinking case; `lastlinefull` under partial relayout;
+  `nb0 == len(f.box)` edge.
+- §3.5 new — **paint deltas via line-table diff**. `snapshotLines`
+  + `diffLines` helpers; three-way per-line classification
+  (identical / shifted / dirty) keyed by `FirstRune`; adjacent
+  same-ΔY runs compose into one blit (the wire-cheap path).
+- §6 mutators reworked through snapshot+diff. §6.5 new —
+  frame rect resize via the same primitives; `Text` owns refill
+  via `lastlinefull`.
+- §2.1 `frbox` comment now distinguishes content-vs-layout
+  writers (relayoutFrom mutates content fields via split /
+  coalesce). §2.2 `lineSummary` gained `FirstRune`.
+- §5 reader-replacement column uses real names; `_draw` row
+  restated as "accumulator only, paint walk remains".
+- §7 I-LAYOUT-1 scoped to layout fields; new I-LAYOUT-6 (no
+  layout-only fragmentation).
+- §8 migration order grew 9 → 12 rows: row 1 bundles split +
+  coalesce; new row 5 introduces snapshot/diff helpers; new
+  rows 9/10 for scroll-fill and resize. §9 test plan extended
+  to cover the new helpers and round-trips.
+
+Plan updated to mirror (`b53d67f`). Pre-tests refinement
+(`e04bc81`) added the space/word carve-out to eager-coalesce
+and I-LAYOUT-6 — without it, "hello" + " " would merge and
+defeat B5 word-wrap.
+
+**Part 2 — R1 implementation.**
+
+Per CODING-PROCESS:
+
+- **Stage 2 tests** in `frame/line_summary_test.go` (18
+  numbered requirements R1.1–R1.18). Failed at compile-time
+  on the missing `lines` field — the expected red state.
+- **Stage 3 implementation:** added `lineSummary` struct
+  in `frame/relayout.go`; `frameimpl.lines []lineSummary`
+  in `frame/frame.go`; rewrote `relayoutFrom` to populate
+  the table, eager-split at line-start when `b.Wid >
+  rect.Dx()` via `canfit` + `splitbox` (k=1 fallback for
+  the single-rune-wider-than-line case, mid-rune split
+  deferred to B5.4), eager-coalesce via the new
+  `coalesceAt` helper before each wrap decision, and
+  append a `lineSummary` entry per closed line.
+- **Stage 4 bug classification:** one pre-existing test
+  (`TestBxscan-long-word fallback splits across wrapped
+  lines`) failed because it pinned B2.2 R7's "wrap-to-
+  fresh-line-first-even-at-line-start" semantic — the new
+  design §3.3 case 3 intentionally produces a tighter
+  layout (first chunk sits at line-start Y rather than
+  pushing to an empty next line). Classified as **wrong
+  test** under the new design. Updated the test expectation
+  and comment with user approval.
+
+`./regression.sh` green. The legacy `splitbox` call in `_draw`
+(`frame/draw.go:518`) is now dead code on the bxscan path —
+relayoutFrom does the splitting before `_draw` runs — but it
+stays until R4 removes the `_draw` accumulator.
+
+Next: B2.3.R2 — move `lastlinefull` ownership into
+`relayoutFrom`. Drop the explicit reset in `deleteimpl`
+(commit `677ab5e`'s carryover); assert I-LAYOUT-4. Should be
+a small row given R1's groundwork.
+
 ## Next-session candidates
 
-1. **B2.3.R1 — per-line summary table.** First row of the
-   layout-once rewrite. See
-   `docs/designs/features/frame-layout-design.md` §2.2 +
-   §3 and PLAN row B2.3.R1. Add `lineSummary` struct +
-   `frameimpl.lines []lineSummary`; populate during
-   `relayoutFrom` phase B. No consumer migration — that's
-   R3 onward. Test gates: I-LAYOUT-2 / I-LAYOUT-3 fixtures.
+1. **B2.3.R2 — `lastlinefull` ownership.** Move into
+   `relayoutFrom` (derive from `lines[-1].TopY +
+   lines[-1].LineH >= rect.Max.Y`). Drop the explicit reset
+   in `deleteimpl`. Assert I-LAYOUT-4 across Insert / Delete /
+   SetStyleRange scenarios.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

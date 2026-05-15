@@ -452,6 +452,13 @@ type frameimpl struct {
 
 	box []*frbox // the boxes of text in this frame.
 
+	// lines is the per-visible-line summary table, populated by
+	// relayoutFrom in the same pass that writes per-box X/Y/LineH/
+	// LineA (frame-layout-design §2.2). Entry i describes the
+	// i-th visible line. Until B2.3.R3 consumers still walk f.box;
+	// the table is added in R1 with no consumer migration yet.
+	lines []lineSummary
+
 	sp0, sp1 int // bounds of a selection
 	maxtab   int // max size of a tab (in pixels)
 	nchars   int // number of runes in frame

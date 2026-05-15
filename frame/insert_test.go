@@ -134,17 +134,23 @@ func TestBxscan(t *testing.T) {
 			image.Pt(10+2*10, 15+13),
 		},
 		InsertTest{
-			// Phase B5 R-B5.4: a single 12-rune no-space
-			// string (120 px) in a 57-px-wide rect is the
-			// long-word fallback. cklinewrap0 wraps the
-			// whole box to a fresh line; canfit on the
-			// fresh line returns partial-fit; splitbox
-			// places the head and the tail wraps in turn.
-			// Compared to upstream's partial-fit-at-original-Y
-			// behavior (which placed the first chunk at
-			// y=15 and wrapped subsequent chunks), the new
-			// behavior shifts every chunk down by one line
-			// — the original Y stays empty.
+			// Phase B5 R-B5.4 / B2.3 R1: a single 12-rune
+			// no-space string (120 px) in a 57-px-wide rect
+			// is the long-word fallback. relayoutFrom's
+			// eager split (frame-layout-design §3.3 case 3)
+			// breaks the box on a fresh line by fitting the
+			// largest rune-prefix into the remaining line
+			// space; the trailing piece may itself be too
+			// wide and gets split again on the next line.
+			//
+			// At line start (pt.X = rect.Min.X) the first
+			// chunk fits at the current Y rather than
+			// wrapping to an empty next line first — a
+			// behavior change from B2.2 R7's empty-first-
+			// line semantic. The three chunks sit on lines
+			// 1/2/3 (Y = 15 / 28 / 41); the trailing pt is
+			// at (10+2*10, 41), i.e., the end of the third
+			// chunk.
 			"long-word fallback splits across wrapped lines",
 			&frameimpl{
 				font:              mockFont(),
@@ -157,7 +163,7 @@ func TestBxscan(t *testing.T) {
 			3,
 			[]*frbox{makeBox("a本ポポポ"), makeBox("ポポhel"), makeBox("lo")},
 			image.Pt(10, 15),
-			image.Pt(10+2*10, 15+13+13+13),
+			image.Pt(10+2*10, 15+13+13),
 		},
 		InsertTest{
 			"tabs and newlines placed in dedicated boxes",
