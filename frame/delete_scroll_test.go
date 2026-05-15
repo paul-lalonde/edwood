@@ -16,9 +16,12 @@ import (
 // versa.
 
 // TestR7_Delete_BlitHeight_PlainLines confirms regression: a
-// plain-text Delete continues to issue a blit whose height
-// equals defaultfontheight (the constant-line case is
-// unchanged).
+// plain-text Delete uses per-line heights for its blit work.
+// B2.3 R6 replaced the per-line blit chain with R5's
+// diff-driven blit: adjacent same-ΔY shifted lines compose
+// into one blit op whose Dy is the *total* shifted-run height,
+// not a single line. The constant-height case here is two
+// shifted lines (bbb\n + ccc), so Dy == 2 * defaultfontheight.
 func TestR7_Delete_BlitHeight_PlainLines(t *testing.T) {
 	iv := &invariants{
 		topcorner: image.Pt(20, 10),
@@ -32,13 +35,11 @@ func TestR7_Delete_BlitHeight_PlainLines(t *testing.T) {
 	// Delete "aaa\n" → blits "bbb\nccc" up to start at top.
 	fr.Delete(0, 4)
 
-	// Look for a blit op (mock display recorder produces
-	// "blit (x0,y0)-(x1,y1) [...] to (x2,y2)-(x3,y3) ...").
-	// Find the first one and confirm Dy = defaultfontheight.
 	dh := fr.(*frameimpl).defaultfontheight
 	got := firstBlitDy(g.DrawOps())
-	if got != dh {
-		t.Errorf("plain Delete blit Dy = %d, want %d (defaultfontheight)", got, dh)
+	if got != 2*dh {
+		t.Errorf("plain Delete blit Dy = %d, want %d (2 × defaultfontheight = total shifted-run height)",
+			got, 2*dh)
 	}
 }
 
@@ -76,17 +77,18 @@ func TestR7_Delete_BlitHeight_ScaledLine(t *testing.T) {
 
 	g := gdo(t, fr)
 	g.Clear()
-	// Delete "ab\n" → blit the scaled HH line up.
+	// Delete "ab\n" → blits both surviving lines (HH scaled +
+	// cd plain) up. Under B2.3 R6's diff-driven blit, adjacent
+	// same-ΔY shifted lines compose into one blit op whose Dy
+	// is the total shifted-run height (= scaled.LineH +
+	// plain.LineH).
 	fr.Delete(0, 3)
 
-	// Walking the line dimensions: post-delete the top line
-	// is the formerly-scaled HH (height 26). Source blit
-	// reads the original scaled-line pixels of height 26 and
-	// drops them onto the new top.
 	got := firstBlitDy(g.DrawOps())
-	if got != tallFont.Height() {
-		t.Errorf("scaled Delete blit Dy = %d, want %d (scaled font Height)",
-			got, tallFont.Height())
+	want := tallFont.Height() + fr.(*frameimpl).defaultfontheight
+	if got != want {
+		t.Errorf("scaled Delete blit Dy = %d, want %d (scaled LineH + plain LineH)",
+			got, want)
 	}
 }
 

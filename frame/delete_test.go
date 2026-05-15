@@ -124,33 +124,47 @@ func TestDelete(t *testing.T) {
 		{
 			// Delete a single character at line end as we'd see with a backspace
 			// key press.
+			//
+			// B2.3 R6: deleteimpl now uses diff-driven paint ops. A
+			// within-line content change classifies the line as
+			// "dirty" → OpPaint = full line-rect clear + per-box
+			// repaint (the latter via paintBox with clearBg=true).
+			// End-state visual is identical to the legacy
+			// surgical fill; the op sequence is broader.
 			name: "deleteSingleCharacterAtLineEnd",
 			fn:   deleteSingleCharacterAtLineEnd,
 			want: []string{
-				"fill (46,10)-(59,20) [2,0],[1,1]",
+				"fill (20,10)-(60,20) [0,0],[-,1]",
+				"fill (20,10)-(46,20) [0,0],[2,1]",
+				`screen-800x600 <- string "0a" atpoint: (20,10) [0,0] fill: black`,
 			},
 			textarea: image.Rect(20, 10, 60, 40),
 		},
 		{
 			// Delete a single character in the middle of a terminal line.
+			// B2.3 R6: see deleteSingleCharacterAtLineEnd.
 			name: "deleteSingleCharacterInMiddle",
 			fn:   deleteSingleCharacterInMiddle,
 			want: []string{
-				"blit (46,10)-(59,20) [2,0],[1,1], to (33,10)-(46,20) [1,0],[1,1]",
-				"fill (46,10)-(46,20) [2,0],[0,1]",
-				"fill (46,10)-(59,20) [2,0],[1,1]",
+				"fill (20,10)-(60,20) [0,0],[-,1]",
+				"fill (20,10)-(46,20) [0,0],[2,1]",
+				`screen-800x600 <- string "0b" atpoint: (20,10) [0,0] fill: black`,
 			},
 			textarea: image.Rect(20, 10, 60, 40),
 		},
 		{
-			// Delete a newline to create a wrapped line. TODO(rjk): This op blits a
-			// line to itself. This is visually fine but is wasted work. None of the
-			// drawops generated here are necessary for a correct screen update.
+			// Delete a newline to create a wrapped line.
+			// B2.3 R6: line 0 ("0ab1cd") is dirty (content changed
+			// from "0ab" → "0ab1cd"). Line 1 ("2ef") may or may
+			// not be classified as shifted depending on layout.
+			// The new op sequence is line-rect clear + per-box
+			// repaint instead of the legacy blit + fill.
 			name: "deleteNewlineTocreateWrappedLine",
 			fn:   deleteNewlineTocreateWrappedLine,
 			want: []string{
-				"blit (20,20)-(59,30) [0,1],[3,1], to (20,20)-(59,30) [0,1],[3,1]",
-				"fill (59,20)-(59,30) [3,1],[0,1]",
+				"fill (20,10)-(60,20) [0,0],[-,1]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
+				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
 			},
 			textarea: image.Rect(20, 10, 60, 40),
 		},
@@ -211,14 +225,16 @@ func TestDelete(t *testing.T) {
 		},
 		{
 			// Ripple up a multiline deletion, text off the bottom.
+			// B2.3 R6: the surviving content (line 2 "cd2") shifts
+			// up to the top via a blit (diff-driven). The vacated
+			// bottom region clears with one fill op. Compared to
+			// the legacy 5-op sequence (two per-line blits + three
+			// fills), this is 2 ops covering the same end state.
 			name: "rippleUpMultiLine",
 			fn:   rippleUpMultiLine,
 			want: []string{
 				"blit (20,30)-(60,40) [0,2],[-,1], to (20,10)-(60,20) [0,0],[-,1]",
-				"blit (20,40)-(60,40) [0,3],[-,0], to (20,20)-(60,20) [0,1],[-,0]",
-				"fill (20,20)-(60,30) [0,1],[-,1]",
-				"fill (20,30)-(60,40) [0,2],[-,1]",
-				"fill (20,40)-(20,50) [0,3],[0,1]",
+				"fill (20,20)-(60,40) [0,1],[-,2]",
 			},
 			textarea: image.Rect(20, 10, 60, 40),
 		},

@@ -897,12 +897,87 @@ ops. Delete the inner per-box loop and the legacy
 `contentBottomY` snapshot. First mutator-side consumer of
 the new helpers.
 
+### 2026-05-14 (later still 5) — R6 landed
+
+`deleteimpl` rewritten per design §6.2:
+
+1. Pre-mutation: `snapshotLines()` + capture `oldBottom`
+   (lines[-1].TopY + LineH).
+2. `findbox` splits at p0/p1 boundaries; `closebox` splices
+   out [n0, n1).
+3. `f.nchars -= p1 - p0`; selection bounds adjusted.
+4. `relayoutFrom(0)` — eager-coalesce re-merges boundary
+   fragments; lastlinefull re-derived (R2's defer).
+5. `diffLines(snap)` + `issuePaintOps(ops)` — issues blit
+   ops for shifted runs and OpPaint for dirty lines.
+6. Vacated region at bottom cleared explicitly.
+7. Tick + nlines update.
+
+Removed:
+- The legacy per-box `cklinewrap0` / `cklinewrap` / `canfit`
+  / `splitbox` / `advance` inner blit walk.
+- The trailing "blit up the remainder" step (now subsumed
+  by the diff's run-compressed blits).
+- The `f.clean(...)` call (R1's eager-coalesce in
+  relayoutFrom is a superset).
+
+Added in `frame/diff_lines.go`:
+- `issuePaintOps(ops)`: blit Src→Dst for OpBlit; clear rect
+  + repaintBoxRange for OpPaint.
+- `linesInDstYRange(minY, maxY)`: helper to map a Dst rect
+  back to f.lines indices for the per-box repaint.
+
+**Stage-4: implementation accident in R2 found and fixed.**
+The deferred `lastlinefull`-setting was registered AFTER an
+early-return for the `nb0 == len(f.box)` case (empty or
+past-end). R6's test for Delete-to-empty exposed this:
+deleting all content left `lastlinefull` at its previous
+value (`true`) because the defer never fired. Moved the
+defer to the top of `relayoutFrom`, before any early
+return. Bug fixed in-place; the R6 commit picks it up.
+
+**Stage-4: wrong-test classifications (with user approval).**
+R6 intentionally changes the draw-op sequence from
+per-box surgical updates (legacy) to line-batch blits +
+line-rect paints (new design). Same end-state on the
+rendered frame, different op recorder output.
+
+- `TestR7_Delete_BlitHeight_PlainLines` /
+  `TestR7_Delete_BlitHeight_ScaledLine`: updated to expect
+  R5's run-compressed multi-line blits (Dy = total shifted-
+  run height, not single-line height).
+- `TestDelete` sub-cases `deleteSingleCharacterAtLineEnd`,
+  `deleteSingleCharacterInMiddle`,
+  `deleteNewlineTocreateWrappedLine`, `rippleUpMultiLine`:
+  updated `want:` to match the new line-rect paint sequence.
+- 4 SVG baselines in `frame/testdata/TestDelete/` regenerated
+  to match.
+
+Tests: 5 new (R6.1–R6.6) in `frame/delete_diff_test.go`:
+single-line / across-lines / vacates-bottom / delete-all /
+I-LAYOUT invariants hold post-Delete.
+
+`./regression.sh` green at commit.
+
+Outstanding for R7: the same restructure but for
+`insertbyteimpl`. Note that R7's blits move DOWNWARD
+(ΔY > 0), which means input-order blits would overwrite
+Src regions before reading them. `issuePaintOps` will need
+either bottom-to-top blit ordering or a separate code path
+for downward shifts.
+
+Next: B2.3.R7 — `insertbyteimpl` via snapshot+diff. Same
+pattern as R6 but the blits shift content DOWN to make
+room for the insertion.
+
 ## Next-session candidates
 
-1. **B2.3.R6 — `deleteimpl` via snapshot+diff.** First
-   mutator-side consumer of R5's helpers. Existing
-   `TestDelete*` should stay green; manual fixture
-   (selection delete + scroll-up) gates correctness.
+1. **B2.3.R7 — `insertbyteimpl` via snapshot+diff.** Pattern:
+   pre-mutation snapshot, bxscan new boxes, splice, relayout,
+   diff, issue ops. `issuePaintOps` needs to reverse blit
+   ordering for downward shifts (or split into a separate
+   pass). Manual fixture (paste a large block at the top of a
+   filled frame) gates correctness.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

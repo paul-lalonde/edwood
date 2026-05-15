@@ -52,6 +52,21 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 	if nb0 < 0 {
 		nb0 = 0
 	}
+
+	// I-LAYOUT-4: lastlinefull is derived from the line table.
+	// Set at every return path — must be registered BEFORE the
+	// early returns below so the empty-box / nb0-past-end paths
+	// still reset the field after truncation.
+	defer func() {
+		f.lastlinefull = false
+		if n := len(f.lines); n > 0 {
+			last := f.lines[n-1]
+			if last.TopY+last.LineH >= f.rect.Max.Y {
+				f.lastlinefull = true
+			}
+		}
+	}()
+
 	if nb0 > len(f.box) {
 		return
 	}
@@ -90,18 +105,6 @@ func (f *frameimpl) relayoutFrom(nb0 int) {
 			pt.Y += prev.LineH
 		}
 	}
-
-	// I-LAYOUT-4: lastlinefull is derived from the line table.
-	// Set at every return path including the empty-content case.
-	defer func() {
-		f.lastlinefull = false
-		if n := len(f.lines); n > 0 {
-			last := f.lines[n-1]
-			if last.TopY+last.LineH >= f.rect.Max.Y {
-				f.lastlinefull = true
-			}
-		}
-	}()
 
 	nb := nb0
 	for nb < len(f.box) {

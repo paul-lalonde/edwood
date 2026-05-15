@@ -97,6 +97,57 @@ func (f *frameimpl) lineDigest(lineIdx int) uint64 {
 	return h
 }
 
+// issuePaintOps applies a sequence of paint ops to the
+// frame's background, then returns. Blit ops move existing
+// pixels (Src → Dst). Paint ops clear the Dst rect with the
+// frame's background color and repaint the boxes whose lines
+// fall within the Dst Y range.
+//
+// Blits are issued in input order — fine for ΔY < 0 (Delete's
+// upward shift) but R7 Insert (downward shift) will need
+// bottom-to-top ordering. The simple loop here is the R6
+// minimum; reordering machinery lands with R7.
+func (f *frameimpl) issuePaintOps(ops []paintOp) {
+	for _, op := range ops {
+		switch op.Kind {
+		case OpBlit:
+			f.background.Draw(op.Dst, f.background, nil, op.Src.Min)
+		case OpPaint:
+			f.background.Draw(op.Dst, f.cols[ColBack], nil, image.Point{})
+			startLine, endLine := f.linesInDstYRange(op.Dst.Min.Y, op.Dst.Max.Y)
+			if startLine < 0 {
+				continue
+			}
+			startBox := f.lines[startLine].FirstBox
+			endBox := len(f.box)
+			if endLine < len(f.lines) {
+				endBox = f.lines[endLine].FirstBox
+			}
+			f.repaintBoxRange(image.Point{}, startBox, endBox, f.cols[ColText], f.cols[ColBack])
+		}
+	}
+}
+
+// linesInDstYRange returns [startLine, endLine) such that
+// f.lines[i] for i in that range has TopY in [minY, maxY).
+// Returns (-1, -1) when no line lies in the range.
+func (f *frameimpl) linesInDstYRange(minY, maxY int) (int, int) {
+	start := -1
+	for i, l := range f.lines {
+		if l.TopY >= minY && l.TopY < maxY {
+			if start < 0 {
+				start = i
+			}
+		} else if start >= 0 {
+			return start, i
+		}
+	}
+	if start < 0 {
+		return -1, -1
+	}
+	return start, len(f.lines)
+}
+
 // diffLines classifies each post-mutation line in f.lines
 // against the pre-mutation snapshot and returns a sequence
 // of paint ops in screen order (top-to-bottom).
