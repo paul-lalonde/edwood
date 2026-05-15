@@ -343,36 +343,40 @@ calls `relayoutFrom`:
 
 ```go
 type lineSnap struct {
-    FirstRune int  // rune offset of lines[i].FirstBox at snap time
+    FirstRune int     // rune offset of lines[i].FirstBox at snap time
     TopY      int
     LineH     int
-    Style     uint64  // optional digest of the line's box styles
+    Digest    uint64  // content hash (Ptr + Style.Kind + Bc + Nrune)
+                     // across the line's boxes
 }
 
 // snapshotLines returns one entry per visible line at call time.
 func (f *frameimpl) snapshotLines() []lineSnap
 ```
 
-`FirstRune` is the canonical identity of a line (independent
-of box-list index, which the mutation will perturb). `Style`
-is an optional fast digest — implementations may start without
-it and treat any line that changed `FirstRune` or `LineH` as
-dirty.
+`Digest` is the **primary match key**. An insert at the start
+of the buffer shifts every subsequent line's rune coordinate,
+so `FirstRune` is NOT a stable identity across rune-shifting
+mutations (the design's earlier wording on this point was
+wrong). `Digest` is a content hash that survives such shifts:
+the content "a\n" digests to the same value before and after
+an "\n" insertion in front of it. `FirstRune` is retained in
+the snap for debugging and for breaking ties in future
+LCS-style matchers, but the R5 implementation does not
+consult it.
 
 **Three-way per-line classification.** For each *new* line
-`new[i]`, locate the *old* line `old[j]` with the same
-`FirstRune` (binary search by `FirstRune` in the snapshot,
-which is sorted by construction):
+`new[i]`, locate the earliest unused *old* line `old[j]` with
+the same `Digest` and same `LineH` (forward greedy scan over
+the snapshot, advancing the cursor after each match):
 
-- **Identical.** `old[j].TopY == new[i].TopY` **and**
-  `old[j].LineH == new[i].LineH` **and** style-digest matches
-  (or, conservatively, the line's box content is unchanged).
-  → No paint, no blit.
-- **Shifted.** Same content (FirstRune match + style/box
-  unchanged) but `TopY` differs. → Blit; ΔY = `new[i].TopY -
-  old[j].TopY`.
-- **Dirty.** No matching `old[j]`, or content/height changed.
-  → Full repaint of the line's rect.
+- **Identical.** `old[j].TopY == new[i].TopY`. → No paint, no
+  blit.
+- **Shifted.** `old[j].TopY != new[i].TopY`. → Blit;
+  ΔY = `new[i].TopY - old[j].TopY`.
+- **Dirty.** No forward match — either the line's content is
+  new, or all old lines with that digest already matched. →
+  Full repaint of the line's rect.
 
 Lines in `old` with no match in `new` (deleted lines) are
 covered implicitly — their pixels are either overwritten by a

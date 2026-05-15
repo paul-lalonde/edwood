@@ -853,14 +853,56 @@ construct pre/post `f.lines` states and assert the
 classification (identical / shifted / dirty) + run
 compression. `deleteimpl` is the first consumer in R6.
 
+### 2026-05-14 (later still 4) — R5 landed; design corrected
+
+Added `frame/diff_lines.go` with:
+
+- `lineSnap{FirstRune, TopY, LineH, Digest}` — pre-mutation
+  snapshot entry.
+- `paintOp{Kind, Src, Dst}` + `OpPaint` / `OpBlit` constants.
+- `snapshotLines()`, `lineDigest(i)`, `diffLines(snap)`.
+
+`lineDigest` is FNV-1a over each box's `Ptr` bytes +
+`Style.Kind` + `Bc` + `Nrune` for the line's box range.
+
+**Design correction mid-row.** The first cut of `diffLines`
+matched new→old lines by `FirstRune` (per design §3.5's
+language: "FirstRune is the canonical identity, stable
+across box-list shifts caused by inserts/deletes within
+earlier lines"). The shifted-run test failed because that
+language was wrong — inserting "\n" at position 0 shifts
+every subsequent line's rune coordinate by +1, so no
+FirstRune match is found and every line classifies as
+dirty. Replaced with **forward-greedy digest matching**:
+for each new line, find the earliest unused old line whose
+content digest equals the new line's, scanning forward in
+the snap. This correctly identifies "moved content" as a
+blit. Updated §3.5 to reflect — `FirstRune` is retained in
+the snap for debugging and possible future LCS-style
+matchers but isn't consulted today.
+
+Tests: 9 numbered requirements (R5.1–R5.9) in
+`frame/diff_lines_test.go`. All green. `./regression.sh`
+green.
+
+Helpers are introduced but not yet consumed by any mutator;
+R6 wires `deleteimpl` as the first consumer, R7
+`insertbyteimpl`, R8 `SetStyleRange`, R9 the scroll/fill
+path, R10 resize.
+
+Next: B2.3.R6 — restructure `deleteimpl` to use
+`snapshotLines` + `diffLines`. Pre-mutation snapshot, mutate
+box list, one `relayoutFrom(0)`, one `diffLines(snap)`, issue
+ops. Delete the inner per-box loop and the legacy
+`contentBottomY` snapshot. First mutator-side consumer of
+the new helpers.
+
 ## Next-session candidates
 
-1. **B2.3.R5 — `snapshotLines` + `diffLines` helpers.** Per
-   `frame-layout-design §3.5`. `lineSnap{FirstRune, TopY,
-   LineH, Style}` shape; `paintOp{Kind, Src, Dst}` type;
-   three-way per-line classification keyed by FirstRune;
-   adjacent same-ΔY runs compose into one blit. No mutator
-   consumes yet — R6 is first consumer.
+1. **B2.3.R6 — `deleteimpl` via snapshot+diff.** First
+   mutator-side consumer of R5's helpers. Existing
+   `TestDelete*` should stay green; manual fixture
+   (selection delete + scroll-up) gates correctness.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
