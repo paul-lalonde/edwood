@@ -178,52 +178,29 @@ func (f *frameimpl) bxscan(inby []byte, p, bn int, runeStyles []Style) (image.Po
 	pt0 := frame.ptOfCharReader(p)
 
 	frame.box = newboxes
-	// B2.2 R7: full relayout BEFORE _draw so cklinewrap's
-	// lineHForAdvance has correct line-by-line LineH lookups
-	// and nframe.drawtext's offset walk reads accurate
-	// b.X/b.Y. The parent's post-merge relayoutFrom redoes
-	// this against the merged box list.
-	frame.relayoutFrom(0)
 	// B2.3 R4 (scoped): _draw's in-line layout-mutation work
 	// (canfit + splitbox for long words, newwid for tabs) is
 	// now redundant — relayoutFrom does eager split (R1) and
 	// tab Wid recompute (R4). _draw's body is stripped of
 	// those calls but retains its pt-accumulator walk and
-	// off-screen truncation, both of which the legacy
-	// insertbyteimpl consumes (R6/R7 restructure those).
-	// _draw is wholly deleted in R11.
+	// off-screen truncation: pt1 is the post-truncation,
+	// insertion-point-aware end-of-content position the
+	// TestBxscan suite verifies. A future cleanup row may
+	// inline the walker here and delete _draw + cklinewrap*.
+	frame.relayoutFrom(0)
 	pt1 := frame._draw(pt0)
 
 	return pt0, pt1, frame
 }
 
-func (f *frameimpl) chop(pt image.Point, p, bn int) {
-	if bn >= len(f.box) {
-		f.Logboxes(" -- chop, invalid bn=%d --\n", bn)
-		panic("chop bn too large")
-	}
+// B2.3 R11 deleted chop. The legacy insertbyteimpl called it
+// to truncate boxes past rect.Max.Y; R7 replaced that flow
+// with truncateOffscreen, which works off the line table.
 
-	//  better version
-	for i, bx := range f.box[bn:] {
-		pt = f.cklinewrap(pt, bx)
-		if pt.Y >= f.rect.Max.Y {
-			f.nchars = p
-			f.nlines = f.maxlines
-			f.box = f.box[0 : bn+i]
-			return
-		}
-
-		p += nrune(bx)
-		pt = f.advance(pt, bx)
-	}
-
-	f.nchars = p
-	f.nlines = f.maxlines
-}
-
-type points struct {
-	pt0, pt1 image.Point
-}
+// B2.3 R11 deleted the points struct. The legacy convergence
+// loop in insertbyteimpl accumulated per-box (pt0, pt1)
+// pairs for the per-box blit walk; R7 replaced the whole
+// loop with snapshotLines + diffLines + issuePaintOps.
 
 func (f *frameimpl) Insert(r []rune, p0 int) bool {
 	f.lk.Lock()

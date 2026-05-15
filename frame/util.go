@@ -41,26 +41,10 @@ func (f *frameimpl) canfit(pt image.Point, b *frbox) (int, bool) {
 	return 0, false
 }
 
-// cklinewrap returns a new point for where the given the box b should be
-// placed. NB: this code is not going to do the right thing with a newline box.
-func (f *frameimpl) cklinewrap(p image.Point, b *frbox) (ret image.Point) {
-	ret = p
-	if b.Nrune < 0 {
-		if int(b.Minwid) > f.rect.Max.X-p.X {
-			ret.X = f.rect.Min.X
-			ret.Y = p.Y + f.lineHForAdvance(p)
-		}
-	} else {
-		if b.Wid > f.rect.Max.X-p.X {
-			ret.X = f.rect.Min.X
-			ret.Y = p.Y + f.lineHForAdvance(p)
-		}
-	}
-	if ret.Y > f.rect.Max.Y {
-		ret.Y = f.rect.Max.Y
-	}
-	return ret
-}
+// B2.3 R11 deleted cklinewrap (no callers; clean / chop /
+// ptofcharptb / charofptimpl were the only consumers and all
+// gone). cklinewrap0 remains, used by _draw on the staging
+// frame for pt1 computation.
 
 func (f *frameimpl) cklinewrap0(p image.Point, b *frbox) (ret image.Point) {
 	ret = p
@@ -117,28 +101,9 @@ func (f *frameimpl) lineHForAdvance(p image.Point) int {
 	return f.defaultfontheight
 }
 
-func (f *frameimpl) advance(p image.Point, b *frbox) image.Point {
-	if b.Nrune < 0 && b.Bc == '\n' {
-		p.X = f.rect.Min.X
-		// Advance by the line's actual height — using the
-		// box b's own LineH when populated (relayout-fresh),
-		// else fall back to looking up the line at p, else
-		// defaultfontheight. Without this, cklinewrap-driven
-		// walks on a frame containing scaled-heading lines
-		// drift away from the true layout's Y.
-		h := b.LineH
-		if h == 0 {
-			h = f.lineHForAdvance(p)
-		}
-		p.Y += h
-		if p.Y > f.rect.Max.Y {
-			p.Y = f.rect.Max.Y
-		}
-	} else {
-		p.X += b.Wid
-	}
-	return p
-}
+// B2.3 R11 deleted advance (no callers; the legacy walker
+// family is gone). _draw handles its own pt advancement
+// inline in the staging-frame pt1 walk.
 
 // newwid returns the width of a given box and mutates the
 // appropriately.
@@ -179,45 +144,10 @@ func (f *frameimpl) newwid0(pt image.Point, b *frbox) int {
 	return x - pt.X
 }
 
-// TODO(rjk): Possibly does not work correctly.
-// clean merges boxes where possible over boxes [n0, n1)
-func (f *frameimpl) clean(pt image.Point, n0, n1 int) {
-	// log.Println("clean", pt, n0, n1, f.rect.Max.X)
-	//	f.Logboxes("--- clean: starting ---")
-	c := f.rect.Max.X
-	nb := 0
-	for nb = n0; nb < n1-1; nb++ {
-		b := f.box[nb]
-		pt = f.cklinewrap(pt, b)
-		for f.box[nb].Nrune >= 0 &&
-			nb < n1-1 &&
-			f.box[nb+1].Nrune >= 0 &&
-			f.box[nb].Style == f.box[nb+1].Style &&
-			// Phase B5: preserve word/space boundaries.
-			// Merging a word box with an adjacent space box
-			// (or vice versa) would defeat cklinewrap's
-			// word-boundary soft-wrap. Two adjacent
-			// space-only boxes still merge with each other,
-			// as do two adjacent non-space boxes.
-			isSpaceOnlyBox(f.box[nb]) == isSpaceOnlyBox(f.box[nb+1]) &&
-			pt.X+f.box[nb].Wid+f.box[nb+1].Wid < c {
-			f.mergebox(nb)
-			n1--
-		}
-		pt = f.advance(pt, f.box[nb])
-	}
-
-	for _, b := range f.box[nb:] {
-		pt = f.cklinewrap(pt, b)
-		pt = f.advance(pt, b)
-	}
-	// B2.3 R2: lastlinefull is owned by relayoutFrom. Every
-	// clean() call site (Insert / Delete / SetStyleRange)
-	// invokes relayoutFrom afterwards, which derives
-	// lastlinefull from the line table per I-LAYOUT-4. The
-	// historical pt-walk setter here was redundant.
-	//	f.Logboxes("--- clean: end")
-}
+// B2.3 R11 deleted clean. R1's eager-coalesce inside
+// relayoutFrom merges adjacent same-style same-category
+// boxes; R6/R7/R8 dropped every clean() call from the
+// mutator paths.
 
 func nbyte(f *frbox) int {
 	return len(f.Ptr)

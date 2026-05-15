@@ -188,7 +188,7 @@ func TestDrawSelClear_PreservesStyledForeground(t *testing.T) {
 	fr.Insert([]rune("hello world"), 0)
 	fr.SetStyleRange(0, 5, []StyleRun{{Len: 5, Style: colored}})
 
-	pt := fi.ptofcharptb(0, fi.rect.Min, 0)
+	pt := fi.ptOfCharReader(0)
 	fi.drawselimpl(pt, 0, 5, true) // highlight
 	g := display.(edwoodtest.GettableDrawOps)
 	snapshot := len(g.DrawOps())
@@ -232,7 +232,7 @@ func TestSetStyleRange_PreservesHighlightOverOverlap(t *testing.T) {
 	fiA := frA.(*frameimpl)
 	// Establish a real highlight via drawselimpl so highlighton
 	// is set; sp0/sp1 are populated.
-	fiA.drawselimpl(fiA.ptofcharptb(0, fiA.rect.Min, 0), 0, 5, true)
+	fiA.drawselimpl(fiA.ptOfCharReader(0), 0, 5, true)
 	baseA := len(getOps(dispA))
 	frA.SetStyleRange(2, 4, []StyleRun{{Len: 2, Style: Style{}}})
 	overlapOps := len(getOps(dispA)) - baseA
@@ -241,7 +241,7 @@ func TestSetStyleRange_PreservesHighlightOverOverlap(t *testing.T) {
 	frB, dispB := setupStyledFrame(t)
 	frB.Insert([]rune("hello world"), 0)
 	fiB := frB.(*frameimpl)
-	fiB.drawselimpl(fiB.ptofcharptb(0, fiB.rect.Min, 0), 0, 5, true)
+	fiB.drawselimpl(fiB.ptOfCharReader(0), 0, 5, true)
 	baseB := len(getOps(dispB))
 	frB.SetStyleRange(8, 10, []StyleRun{{Len: 2, Style: Style{}}})
 	nonOverlapOps := len(getOps(dispB)) - baseB

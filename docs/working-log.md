@@ -1163,13 +1163,55 @@ Next: B2.3.R11 — delete legacy walkers. Mechanical: remove
 are the migration checklist. `_draw` still has callers
 inside bxscan; needs careful removal.
 
+### 2026-05-14 (later still 10) — R11 partial deletion
+
+**Deleted** (no remaining callers):
+- `charofptimpl` — replaced by `charOfPtReader` (R3).
+- `ptofcharptb`, `ptofcharnb` — replaced by `ptOfCharReader`.
+- `grid` — only caller was `charofptimpl`.
+- `clean` — R1's eager-coalesce in `relayoutFrom` subsumes.
+- `chop` — R7 removed the only caller.
+- `cklinewrap`, `advance` — orphan after the above deletions.
+- The `points` struct in `insert.go` (legacy convergence-
+  loop entry; R7 dropped the loop).
+- `TestClean` in `util_test.go`.
+
+**Switched**:
+- `unlockedproxy.Charofpt` → `charOfPtReader`.
+- `set_style_range_test.go` `ptofcharptb` calls →
+  `ptOfCharReader`.
+
+**Kept** (still live):
+- `_draw` — used by bxscan for staging pt1 + nframe
+  truncation. Full deletion requires reworking the bxscan
+  pt1 contract (TestBxscan checks it; production
+  insertbyteimpl no longer uses it).
+- `cklinewrap0` — used by `_draw`.
+- `lineHForAdvance` — used by `cklinewrap0`.
+- `lineHAtPt` — used by `tick()` to size the caret to
+  the line's height.
+
+The R11 plan-row text suggested deleting `lineHForAdvance`,
+`lineHAtPt`, and `_draw` outright. Scope-reducing because
+their consumers (`_draw` for staging pt1, `tick()` for caret
+height) are still load-bearing. A future row can rewrite
+bxscan to compute pt1 from the line table directly + inline
+the caret-line height lookup, which would unlock the rest.
+
+`go test ./frame/` green.
+
+Next: B2.3.R12 — wire validators (`-validateboxes` /
+`-validatelayout`) to assert the I-LAYOUT-* invariants
+under the existing test flags. Mostly mechanical: hook the
+invariants into `validateboxmodel` and the paint walks.
+
 ## Next-session candidates
 
-1. **B2.3.R11 — Delete legacy walkers.** Mechanical cleanup.
-   Each deletion exposes a chain of call sites that need
-   updating (or also deleting). `_draw` has the most
-   tendrils because bxscan still uses it for tab Wid +
-   nframe truncation.
+1. **B2.3.R12 — Wire I-LAYOUT-* validators.** Last row of
+   B2.3. Add `-validatelayout` flag (or extend the existing
+   `-validateboxes`); assert I-LAYOUT-1..6 in
+   `validateboxmodel` and the paint walks. Should be green
+   by construction at this point in the migration.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

@@ -134,74 +134,10 @@ func TestCanfit(t *testing.T) {
 	})
 }
 
-// Verifies that clean produces a valid box mode.
-func TestClean(t *testing.T) {
-	//	newlinebox := makeBox("\n")
-	//	tabbox := makeBox("\t")
-	hellobox := makeBox("hi")
-	worldbox := makeBox("wo")
-
-	comparecore(t, "TestClean", []BoxTester{
-		SimpleBoxModelTest{
-			"empty frame",
-			&frameimpl{
-				font: mockFont(),
-				rect: image.Rect(10, 15, 10+57, 15+57),
-				box:  []*frbox{},
-			},
-			func(f *frameimpl) { f.clean(image.Pt(10, 15), 0, 1) },
-			0,
-			[]*frbox{},
-		},
-		SimpleBoxModelTest{
-			"one frame, 0,1",
-			&frameimpl{
-				font: mockFont(),
-				rect: image.Rect(10, 15, 10+57, 15+57),
-				box:  []*frbox{worldbox},
-			},
-			func(f *frameimpl) { f.clean(image.Pt(10, 15), 0, 1) },
-			1,
-			[]*frbox{worldbox},
-		},
-		SimpleBoxModelTest{
-			"one frame, 1,1",
-			&frameimpl{
-				font: mockFont(),
-				rect: image.Rect(10, 15, 10+57, 15+57),
-				box:  []*frbox{worldbox},
-			},
-			func(f *frameimpl) { f.clean(image.Pt(10, 15), 1, 1) },
-			1,
-			[]*frbox{worldbox},
-		},
-		SimpleBoxModelTest{
-			"two frame, 0,2",
-			&frameimpl{
-				font: mockFont(),
-				rect: image.Rect(10, 15, 10+57, 15+57),
-				box:  []*frbox{hellobox, worldbox},
-			},
-			func(f *frameimpl) { f.clean(image.Pt(10, 15), 0, 2) },
-			1,
-			[]*frbox{makeBox("hiwo")},
-		},
-		/*		// Failure suppression. I think that this is wrong. But currently I do not
-				// understand the semantics of how clean should actually work.
-				SimpleBoxModelTest{
-					"three frame, 0,4",
-					&Frame{
-						Font:   mockFont(),
-						Rect:   image.Rect(10, 15, 10+57, 15+57),
-						box:    []*frbox{hellobox, worldbox, makeBox("r"), makeBox("ld")},
-					},
-					func(f *Frame) { f.clean(image.Pt(10, 15), 0, 4) },
-					2,
-					[]*frbox{makeBox("hiwor"), makeBox("ld")},
-				},
-		*/
-	})
-}
+// B2.3 R11 deleted TestClean along with the clean() helper.
+// R1's eager-coalesce inside relayoutFrom replaces clean's
+// merge functionality; eager-coalesce is tested in
+// frame/line_summary_test.go (R1.13–R1.16, R1.18).
 
 func TestNewwid0(t *testing.T) {
 	f := &frameimpl{

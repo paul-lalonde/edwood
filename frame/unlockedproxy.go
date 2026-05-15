@@ -19,7 +19,7 @@ func (up *selectscrollupdaterimpl) GetFrameFillStatus() FrameFillStatus {
 func (up *selectscrollupdaterimpl) Charofpt(pt image.Point) int {
 	// log.Println("selectscrollupdaterimpl.Charofpt")
 	f := (*frameimpl)(up)
-	return f.charofptimpl(pt)
+	return f.charOfPtReader(pt)
 }
 
 func (up *selectscrollupdaterimpl) DefaultFontHeight() int {
