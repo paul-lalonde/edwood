@@ -253,10 +253,23 @@ all geometry-driven box-list mutation in one place. (See
 §6.1.)
 
 **Eager coalesce — inverse splitbox.** Before deciding wrap at
-box `nb`, if `box[nb]` and `box[nb+1]` carry the same `Style`
-and `box[nb].Wid + box[nb+1].Wid` fits at `pt.X`, splice them
-into a single box at `nb` (concatenated `Ptr`, summed `Nrune`,
-recomputed `Wid`) and re-evaluate. This is the symmetric
+box `nb`, if `box[nb]` and `box[nb+1]`:
+
+- carry the same `Style`,
+- are both content boxes (neither has `Nrune < 0`),
+- share their space/word category (i.e., `isSpaceOnlyBox(nb) ==
+  isSpaceOnlyBox(nb+1)`), and
+- together with `pt.X` still fit on the line
+  (`box[nb].Wid + box[nb+1].Wid <= rect.Max.X - pt.X`),
+
+splice them into a single box at `nb` (concatenated `Ptr`,
+summed `Nrune`, recomputed `Wid`) and re-evaluate.
+
+The space/word carve-out preserves B5's word-boundary soft
+wrap: `cklinewrap0` relies on every word/space transition
+living at a box boundary so the next *whole* content box can
+be wrapped without mid-word splitting. Merging "hello" with
+the following space box would defeat this. This is the symmetric
 inverse of the long-word split above: a previous layout (or a
 prior splitbox) may have left adjacent same-style fragments
 that no longer need to be separate — deletion of mid-line
@@ -690,13 +703,18 @@ After any `relayoutFrom`, for every adjacent pair `box[i]`,
 `box[i+1]` that satisfies *all* of:
 
 - same `Style`,
-- neither is a hard newline (`Bc != '\n'`),
+- both are content boxes (neither has `Nrune < 0`, so neither
+  is a hard newline or tab),
+- same space/word category (`isSpaceOnlyBox(i) ==
+  isSpaceOnlyBox(i+1)`),
 - `box[i].Y == box[i+1].Y` (same line),
-- `box[i].Wid + box[i+1].Wid <= rect.Dx() - (box[i].X - rect.Min.X)`,
+- `box[i].Wid + box[i+1].Wid <= rect.Max.X - box[i].X`,
 
 the pair could be coalesced without changing the layout. The
 invariant asserts the eager coalesce in §3.3 leaves none such
-pairs in `f.box`.
+pairs in `f.box`. The space/word carve-out mirrors the §3.3
+rule: B5's word-wrap relies on word/space transitions sitting
+at box boundaries.
 
 **Test:** `validateboxmodel` scan under `-validateboxes`.
 Useful both as a correctness gate for the coalesce
