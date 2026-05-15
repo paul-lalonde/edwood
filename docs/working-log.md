@@ -970,14 +970,91 @@ Next: B2.3.R7 — `insertbyteimpl` via snapshot+diff. Same
 pattern as R6 but the blits shift content DOWN to make
 room for the insertion.
 
+### 2026-05-14 (later still 6) — R7 landed
+
+Rewrote `insertbyteimpl` per design §6.1. Production:
+
+- Pre-mutation `snapshotLines`.
+- `findbox` + `drawselimpl` (erase selection).
+- `bxscan` (legacy; still runs nframe._draw for tab Wid +
+  off-screen truncation in the staging frame).
+- Splice nframe.box into f.box. Adjust nchars + selection.
+- `f.relayoutFrom(0)`.
+- `truncateOffscreen` to keep the bounded-frame contract.
+- `diffLines(snap)` + `issuePaintOps`.
+
+Removed: the legacy convergence loop, `drawtext` on the
+staging frame, `fillNonGlyphAreas`, the `pts[]` parallel
+walk, the chop path, and the trailing `f.clean` call.
+
+Updated `issuePaintOps` (in `diff_lines.go`) to handle
+Insert's downward blits: blits are issued first (so paint
+ops don't clobber pixels needed by blits), then within the
+blit pass downward shifts are issued bottom-to-top so each
+Src isn't overwritten by a prior Dst.
+
+**Stage-4 design refinement of §3.5 diffLines.** Initial
+smoke test showed a "stale stripe" bug — content from before
+a scroll showing through where new content should be. Root
+cause: `relayoutFrom` keeps off-screen geometry, so the line
+table can contain lines whose pixels were never validly
+drawn (paintBox bails on Y >= rect.Max.Y). When such a line
+moves on-screen via a Delete or Insert, the diff classified
+it as "shifted" and emitted a blit from the off-screen
+position — copying stale pixels from a previous frame into
+view. Fix: classify a line as **dirty** (paint) when its OLD
+or NEW position isn't fully visible, never blit. This was
+the load-bearing fix for the user-visible scroll bug.
+
+**Stage-4 implementation accidents found and fixed.**
+
+1. `Init` and `Clear` reset `f.box = nil` / `make(..., 0)`
+   without touching `f.lines`. A stale `f.lines[0].FirstBox=0`
+   on a frame whose box was just reset caused `lineDigest` to
+   index out of range when the next `snapshotLines` ran.
+   Both now nil `f.lines` in lockstep.
+2. Defensive clamp in `lineDigest`: even if `f.lines` is
+   somehow stale relative to `f.box`, the digest loop now
+   bounds-clamps `start`/`end` so it can't index past
+   `len(f.box)`.
+
+Manual smoke test (open CLAUDE.md, scroll part-way down,
+exercise scroll-down + B3 middle-click jumps): all three
+artifacts gone — no duplicate stripe, no missing heading
+gap, no out-of-order content. The legacy "mid-screen
+spacing wrong after scroll" bug that motivated B2.3 is
+fixed.
+
+Tests:
+- 6 new requirements (R7.1–R7.6) in
+  `frame/insert_diff_test.go`: single-line, adds-lines,
+  top-of-full-frame, invariants, round-trip.
+- 6 TestInsert sub-cases + 2 TestInsertAligned sub-cases
+  updated for new line-batch op sequence.
+- 4 TestDelete sub-cases (already updated in R6) revised
+  for downstream effects of Insert's new ops.
+- 9 SVG baselines regenerated.
+
+`./regression.sh` green.
+
+Outstanding from R7:
+- The legacy `f.sp1 += f.nchars` typo (should be `=`) is
+  preserved to keep test fixtures valid; a follow-up row
+  fixes it.
+- `_draw`, `cklinewrap*`, `advance`, `ptofcharptb`,
+  `charofptimpl`, etc. are still present but increasingly
+  unused; R11 deletes them.
+
+Next: B2.3.R8 — `SetStyleRange` via diff. Simpler than R7
+because the rune offsets don't shift; the diff should
+mostly classify identical lines as identical and just
+repaint the styled range.
+
 ## Next-session candidates
 
-1. **B2.3.R7 — `insertbyteimpl` via snapshot+diff.** Pattern:
-   pre-mutation snapshot, bxscan new boxes, splice, relayout,
-   diff, issue ops. `issuePaintOps` needs to reverse blit
-   ordering for downward shifts (or split into a separate
-   pass). Manual fixture (paste a large block at the top of a
-   filled frame) gates correctness.
+1. **B2.3.R8 — `SetStyleRange` via diff.** Simpler row.
+   Existing `TestSetStyleRange*` tests should largely stay
+   green.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap

@@ -513,6 +513,11 @@ func (f *frameimpl) Init(r image.Rectangle, opts ...OptionClosure) {
 	f.sp0 = 0
 	f.sp1 = 0
 	f.box = nil
+	// B2.3 R1+ added f.lines. Must clear in lockstep with
+	// f.box: a stale lines entry with FirstBox=0 on a frame
+	// whose box was just nilled would cause lineDigest to
+	// index out of range.
+	f.lines = nil
 	f.lastlinefull = false
 
 	// Update additional options. The values are optional so that the frame
@@ -541,6 +546,8 @@ func (f *frameimpl) Clear(freeall bool) {
 	f.lk.Lock()
 	defer f.lk.Unlock()
 	f.box = make([]*frbox, 0, 25)
+	// B2.3: keep f.lines in lockstep with f.box.
+	f.lines = nil
 	if freeall {
 		f.tickimage.Free()
 		f.tickback.Free()

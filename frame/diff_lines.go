@@ -79,6 +79,16 @@ func (f *frameimpl) lineDigest(lineIdx int) uint64 {
 	if lineIdx+1 < len(f.lines) {
 		end = f.lines[lineIdx+1].FirstBox
 	}
+	// Defensive clamp: a stale f.lines (e.g., reused frame
+	// where f.box was reset without clearing f.lines) could
+	// otherwise index out of range. Init/Clear keep them in
+	// lockstep, but bound the loop anyway.
+	if start < 0 {
+		start = 0
+	}
+	if end > len(f.box) {
+		end = len(f.box)
+	}
 	for i := start; i < end; i++ {
 		b := f.box[i]
 		for _, by := range b.Ptr {
@@ -103,28 +113,52 @@ func (f *frameimpl) lineDigest(lineIdx int) uint64 {
 // frame's background color and repaint the boxes whose lines
 // fall within the Dst Y range.
 //
-// Blits are issued in input order — fine for ΔY < 0 (Delete's
-// upward shift) but R7 Insert (downward shift) will need
-// bottom-to-top ordering. The simple loop here is the R6
-// minimum; reordering machinery lands with R7.
+// Ordering: blits first (so paints don't clobber pixels the
+// blits need to read), then paints. Blits are ordered by ΔY
+// direction: upward shifts (Delete) issue top-to-bottom so
+// each blit's Dst sits above its Src; downward shifts (Insert)
+// issue bottom-to-top so each blit's Src is not yet
+// overwritten by a prior blit's Dst. Mixed directions are rare
+// in practice (typical mutators produce a single run-
+// compressed blit).
 func (f *frameimpl) issuePaintOps(ops []paintOp) {
+	// Pass 1: blits, ordered by direction.
+	var downward []paintOp
 	for _, op := range ops {
-		switch op.Kind {
-		case OpBlit:
-			f.background.Draw(op.Dst, f.background, nil, op.Src.Min)
-		case OpPaint:
-			f.background.Draw(op.Dst, f.cols[ColBack], nil, image.Point{})
-			startLine, endLine := f.linesInDstYRange(op.Dst.Min.Y, op.Dst.Max.Y)
-			if startLine < 0 {
-				continue
-			}
-			startBox := f.lines[startLine].FirstBox
-			endBox := len(f.box)
-			if endLine < len(f.lines) {
-				endBox = f.lines[endLine].FirstBox
-			}
-			f.repaintBoxRange(image.Point{}, startBox, endBox, f.cols[ColText], f.cols[ColBack])
+		if op.Kind != OpBlit {
+			continue
 		}
+		dy := op.Dst.Min.Y - op.Src.Min.Y
+		if dy > 0 {
+			downward = append(downward, op)
+		} else {
+			// dy <= 0: upward shift (or no shift, which
+			// shouldn't appear but is safe to issue early).
+			f.background.Draw(op.Dst, f.background, nil, op.Src.Min)
+		}
+	}
+	for i := len(downward) - 1; i >= 0; i-- {
+		op := downward[i]
+		f.background.Draw(op.Dst, f.background, nil, op.Src.Min)
+	}
+
+	// Pass 2: paints. Each OpPaint covers a disjoint Y range,
+	// so within-pass order is irrelevant.
+	for _, op := range ops {
+		if op.Kind != OpPaint {
+			continue
+		}
+		f.background.Draw(op.Dst, f.cols[ColBack], nil, image.Point{})
+		startLine, endLine := f.linesInDstYRange(op.Dst.Min.Y, op.Dst.Max.Y)
+		if startLine < 0 {
+			continue
+		}
+		startBox := f.lines[startLine].FirstBox
+		endBox := len(f.box)
+		if endLine < len(f.lines) {
+			endBox = f.lines[endLine].FirstBox
+		}
+		f.repaintBoxRange(image.Point{}, startBox, endBox, f.cols[ColText], f.cols[ColBack])
 	}
 }
 
@@ -206,6 +240,23 @@ func (f *frameimpl) diffLines(snap []lineSnap) []paintOp {
 		}
 		old := snap[match]
 		oi = match + 1
+		// A blit's Src pixels must be valid (i.e., they were
+		// rendered at the snap's position). If the old line
+		// was partially or fully off-screen, paintBox bailed
+		// on it and the Src pixels are stale (whatever was
+		// drawn there in some previous frame). Painting is
+		// the only safe choice.
+		oldFullyVisible := old.TopY >= f.rect.Min.Y &&
+			old.TopY+old.LineH <= f.rect.Max.Y
+		newFullyVisible := newLine.TopY >= f.rect.Min.Y &&
+			newLine.TopY+newLine.LineH <= f.rect.Max.Y
+		if !oldFullyVisible || !newFullyVisible {
+			// Off-screen on either side: paint if the new
+			// position is visible at all; skip if entirely
+			// off-screen (paintBox will bail anyway).
+			cls[i] = entry{clsDirty, 0}
+			continue
+		}
 		if old.TopY == newLine.TopY {
 			cls[i] = entry{clsIdentical, 0}
 		} else {

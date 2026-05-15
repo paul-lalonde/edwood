@@ -489,9 +489,14 @@ func TestInsert(t *testing.T) {
 		},
 		{
 			// Inserts ab at the start of the line with no wrapping or ripple.
+			// B2.3 R7: insertbyteimpl now uses snapshot+diff. Lines
+			// not in the snap are dirty → OpPaint clears the line
+			// rect and repaints boxes; end-state visual is
+			// identical to the legacy box-by-box paint.
 			name: "simpleInsertShortString",
 			fn:   simpleInsertShortString,
 			want: []string{
+				"fill (20,10)-(400,20) [0,0],[-,1]",
 				"fill (20,10)-(46,20) [0,0],[2,1]",
 				`screen-800x600 <- string "ab" atpoint: (20,10) [0,0] fill: black`,
 			},
@@ -499,12 +504,14 @@ func TestInsert(t *testing.T) {
 		},
 		{
 			// A short but newline containing string that fits inserted at the start.
+			// B2.3 R7: see simpleInsertShortString.
 			name: "multiInsertShortString",
 			fn:   multiInsertShortString,
 			want: []string{
-				"fill (20,10)-(400,20) [0,0],[-,1]",
-				"fill (20,20)-(46,30) [0,1],[2,1]",
+				"fill (20,10)-(400,30) [0,0],[-,2]",
+				"fill (20,10)-(46,20) [0,0],[2,1]",
 				`screen-800x600 <- string "ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(46,30) [0,1],[2,1]",
 				`screen-800x600 <- string "cd" atpoint: (20,20) [0,1] fill: black`,
 			},
 			textarea: image.Rect(20, 10, 400, 100),
@@ -551,14 +558,22 @@ func TestInsert(t *testing.T) {
 		},
 		{
 			// Insert into a line with a tab
+			// B2.3 R7: snapshot+diff produces a paint op covering
+			// the line where the insertion landed; the legacy per-
+			// box blit chain is gone.
 			name: "insertTabAndChar",
 			fn:   insertTabAndChar,
 			want: []string{
-				"blit (33,10)-(46,20) [1,0],[1,1], to (124,10)-(137,20) [8,0],[1,1]",
-				"fill (33,10)-(124,20) [1,0],[7,1]",
-				"fill (46,10)-(124,20) [2,0],[6,1]",
-				"fill (33,10)-(46,20) [1,0],[1,1]",
-				`screen-800x600 <- string "X" atpoint: (33,10) [1,0] fill: black`,
+				"fill (20,10)-(400,20) [0,0],[-,1]",
+				"fill (20,10)-(33,20) [0,0],[1,1]",
+				`screen-800x600 <- string "a" atpoint: (20,10) [0,0] fill: black`,
+				"fill (124,10)-(137,20) [8,0],[1,1]",
+				`screen-800x600 <- string "b" atpoint: (124,10) [8,0] fill: black`,
+				"fill (20,10)-(400,20) [0,0],[-,1]",
+				"fill (20,10)-(46,20) [0,0],[2,1]",
+				`screen-800x600 <- string "aX" atpoint: (20,10) [0,0] fill: black`,
+				"fill (124,10)-(137,20) [8,0],[1,1]",
+				`screen-800x600 <- string "b" atpoint: (124,10) [8,0] fill: black`,
 			},
 			textarea: image.Rect(20, 10, 400, 100),
 		},
@@ -589,45 +604,56 @@ func TestInsert(t *testing.T) {
 		{
 			// Insert a single character that forces conversion of non-wrapped to
 			// wrapped with wripple to end.
+			// B2.3 R7: snapshot+diff. First Insert fills the frame
+			// (5 lines × line-rect clear + paint). Second Insert
+			// (the 'X') is mid-line: line 0 becomes dirty, lines
+			// 1+ shift down by one lineH → one run-compressed
+			// downward blit + paint for the affected lines.
 			name:     "insertForcesWrap",
 			fn:       insertForcesWrap,
 			textarea: image.Rect(20, 10, 60, 60),
 			want: []string{
-				"fill (20,10)-(60,20) [0,0],[-,1]",
-				"fill (20,20)-(60,50) [0,1],[-,3]",
-				"fill (20,50)-(59,60) [0,4],[3,1]",
+				"fill (20,10)-(60,60) [0,0],[-,5]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
 				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(59,30) [0,1],[3,1]",
 				`screen-800x600 <- string "1cd" atpoint: (20,20) [0,1] fill: black`,
+				"fill (20,30)-(59,40) [0,2],[3,1]",
 				`screen-800x600 <- string "2ef" atpoint: (20,30) [0,2] fill: black`,
+				"fill (20,40)-(59,50) [0,3],[3,1]",
 				`screen-800x600 <- string "3gh" atpoint: (20,40) [0,3] fill: black`,
+				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "4ij" atpoint: (20,50) [0,4] fill: black`,
-				"blit (20,30)-(60,50) [0,2],[-,2], to (20,40)-(60,60) [0,3],[-,2]",
-				"blit (59,20)-(60,30) [3,1],[-,1], to (59,30)-(60,40) [3,2],[-,1]",
-				"blit (20,20)-(59,30) [0,1],[3,1], to (20,30)-(59,40) [0,2],[3,1]",
-				"fill (33,20)-(60,30) [1,1],[-,1]",
-				"blit (46,10)-(59,20) [2,0],[1,1], to (20,20)-(33,30) [0,1],[1,1]",
-				"fill (46,10)-(60,20) [2,0],[-,1]",
-				"fill (20,20)-(20,30) [0,1],[0,1]",
-				`screen-800x600 <- string "X" atpoint: (46,10) [2,0] fill: black`,
+				"blit (20,20)-(60,50) [0,1],[-,3], to (20,30)-(60,60) [0,2],[-,3]",
+				"fill (20,10)-(60,30) [0,0],[-,2]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
+				`screen-800x600 <- string "0aX" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(33,30) [0,1],[1,1]",
+				`screen-800x600 <- string "b" atpoint: (20,20) [0,1] fill: black`,
 			},
 		},
 		{
 			// Append a pair of characters at the end of the otherwise full text
 			// area.
+			// B2.3 R7: the appended "XX" lands past rect.Max.Y, so
+			// truncateOffscreen drops it. diffLines sees the frame
+			// unchanged and emits no ops. The recorded ops are
+			// just the first Insert that filled the frame.
 			name:     "appendAtEnd",
 			fn:       appendAtEnd,
 			textarea: image.Rect(20, 10, 60, 60),
 			want: []string{
-				"fill (20,10)-(60,20) [0,0],[-,1]",
-				"fill (20,20)-(60,50) [0,1],[-,3]",
-				"fill (20,50)-(59,60) [0,4],[3,1]",
+				"fill (20,10)-(60,60) [0,0],[-,5]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
 				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(59,30) [0,1],[3,1]",
 				`screen-800x600 <- string "1cd" atpoint: (20,20) [0,1] fill: black`,
+				"fill (20,30)-(59,40) [0,2],[3,1]",
 				`screen-800x600 <- string "2ef" atpoint: (20,30) [0,2] fill: black`,
+				"fill (20,40)-(59,50) [0,3],[3,1]",
 				`screen-800x600 <- string "3gh" atpoint: (20,40) [0,3] fill: black`,
+				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "4ij" atpoint: (20,50) [0,4] fill: black`,
-				"fill (59,50)-(60,60) [3,4],[-,1]",
-				"fill (20,60)-(20,70) [0,5],[0,1]",
 			},
 		},
 
@@ -721,21 +747,25 @@ func TestInsert(t *testing.T) {
 		},
 		{
 			// Insert a new line that pushes another newline down.
+			// B2.3 R7: snapshot+diff. First fr.Insert fills 4 lines.
+			// Second insert ("\n") pushes line 3 down; the line
+			// shifts cleanly via one blit + the new blank line
+			// paints (line-rect clear).
 			name:     "insertsRippledNewLine",
 			fn:       insertsRippledNewLine,
 			textarea: image.Rect(20, 10, 60, 60),
 			want: []string{
-
-				"fill (20,10)-(60,20) [0,0],[-,1]",
-				"fill (20,20)-(60,50) [0,1],[-,3]",
-				"fill (20,50)-(20,60) [0,4],[0,1]",
+				"fill (20,10)-(60,50) [0,0],[-,4]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
 				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(59,30) [0,1],[3,1]",
 				`screen-800x600 <- string "1cd" atpoint: (20,20) [0,1] fill: black`,
+				"fill (20,30)-(59,40) [0,2],[3,1]",
 				`screen-800x600 <- string "2ef" atpoint: (20,30) [0,2] fill: black`,
+				"fill (20,40)-(59,50) [0,3],[3,1]",
 				`screen-800x600 <- string "3gh" atpoint: (20,40) [0,3] fill: black`,
 				"blit (20,40)-(60,50) [0,3],[-,1], to (20,50)-(60,60) [0,4],[-,1]",
 				"fill (20,40)-(60,50) [0,3],[-,1]",
-				"fill (20,50)-(20,60) [0,4],[0,1]",
 			},
 		},
 		{

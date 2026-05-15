@@ -253,13 +253,19 @@ func (f *frameimpl) insertimpl(r []rune, p0 int) bool {
 	return f.insertbyteimpl(inby, p0, nil)
 }
 
-// insertbyteimpl inserts inby at rune offset p0. runeStyles, when
-// non-nil, supplies a Style per input rune; produced boxes carry
-// it. nil runeStyles is the upstream plain path.
+// insertbyteimpl inserts inby at rune offset p0. runeStyles,
+// when non-nil, supplies a Style per input rune; produced boxes
+// carry it. nil runeStyles is the upstream plain path.
+//
+// B2.3 R7 per frame-layout-design §6.1: snapshot the line
+// table, bxscan new content, splice into f.box, relayoutFrom,
+// diffLines, issue paint ops. Replaces the legacy
+// drawtext-on-staging-frame + per-box-blit convergence loop.
+// Pixel writes go through the same diff machinery as R6's
+// Delete, keeping screen state and f.lines positions
+// consistent across Insert/Delete pairs (the bug that
+// triggered B2.3).
 func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool {
-	//log.Printf("frame.Insert. Start: %q", string(inby))
-	//defer log.Println("frame.Insert end")
-	//f.Logboxes("at very start of insert")
 	f.validateboxmodel("Frame.Insert Start p0=%d, «%s»", p0, string(inby))
 	defer f.validateboxmodel("Frame.Insert End p0=%d, «%s»", p0, string(inby))
 	f.validateinputs(inby, "Frame.Insert Start")
@@ -268,232 +274,45 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 		return f.lastlinefull
 	}
 
-	col := f.cols[ColBack]
-	tcol := f.cols[ColText]
+	f.modified = true
 
-	pts := make([]points, 0, 5)
+	// Pre-mutation snapshot. Any subsequent op on the parent
+	// will compare to this; both Insert and Delete now write
+	// pixels through the same diffLines machinery, so screen
+	// state stays consistent with f.lines positions.
+	snap := f.snapshotLines()
 
+	// Locate insertion point. findbox splits at p0 if it
+	// lands mid-box.
 	n0 := f.findbox(0, 0, p0)
 	if n0 > len(f.box) {
-		f.Logboxes("-- boxes after findbox when findbox has failed to return a valid box index --")
+		f.Logboxes("-- findbox returned invalid n0=%d --", n0)
 		panic(fmt.Sprint("findbox is sads", "n0:", n0))
 	}
 
-	//	f.Logboxes("at end of findbox")
-	//	log.Println("n0", n0)
-
-	cn0 := p0
-	nn0 := n0
-
-	// ppt0 and ppt1 are start and end of insertion as they will appear when
-	// insertion is complete. pt0 is current location of insertion position.
-	// (p0); pt1 is terminal point (without line wrap) of insertion.
-	pt0, pt1, nframe := f.bxscan(inby, p0, n0, runeStyles)
-
-	// TODO(rjk): Figure out why opt0 needs to exist.
-	opt0 := pt0
-	ppt0 := pt0
-	ppt1 := pt1
-
-	// TODO(rjk): I am not sure what this block does. Or if it is doing the
-	// right thing.
-	if n0 < len(f.box) {
-		pt0 = f.cklinewrap(pt0, f.box[n0])
-		ppt1 = f.cklinewrap0(ppt1, f.box[n0])
-	}
-	f.modified = true
-
-	// Remove the selection or tick. This will redraw all selected text characters.
-	// TODO(rjk): Do not remove the selection if it's unnecessary to do so.
-	// Scrolling is the only time that we need to be particularly careful
-	// with this. Small edits won't have a selection? Given however the cost
-	// of selection drawing, we should do the right thing once?
-	// B2.2 R7: pre-mutation; box.X/Y still reflect the prior
-	// relayout so the reader gives the correct position.
+	// Erase the selection/tick using the pre-relayout reader
+	// (box.X / box.Y still reflect the prior layout).
 	f.drawselimpl(f.ptOfCharReader(f.sp0), f.sp0, f.sp1, false)
 
-	/*
-	 * Find point where old and new x's line up
-	 * Invariants:
-	 *	pt0 is where the next box (b, n0) is now
-	 *	pt1 is where it will be after the insertion
-	 * If pt1 goes off the rectangle, we can toss everything from there on
-	 */
-	npts := 0
-	for ; pt1.X != pt0.X && pt1.Y != f.rect.Max.Y && n0 < len(f.box); npts++ {
-		b := f.box[n0]
-		pt0 = f.cklinewrap(pt0, b)
-		pt1 = f.cklinewrap0(pt1, b)
-		if pt1.Y > f.rect.Max.Y {
-			f.Logboxes("-- pt1 violated invariant at box --")
-			panic(fmt.Sprint("frame.Insert pt1 too far", " pt1=", pt1, " box=", b))
-		}
+	// Build the new boxes. bxscan's internal _draw walker
+	// remains for now — it sets tab Wid via newwid and
+	// truncates off-screen content in nframe. The returned
+	// pt0/pt1 are unused; pixel placement comes from the
+	// post-relayoutFrom line table, not from the staging
+	// frame.
+	_, _, nframe := f.bxscan(inby, p0, n0, runeStyles)
 
-		if b.Nrune > 0 {
-			n, fits := f.canfit(pt1, b)
-			if !fits {
-				f.Logboxes("-- frame.canfit false  box[%d]=%v %v, %v--", n0, b.String(), pt1, f.rect)
-				panic("frame.canfit false")
-			}
-			if n != b.Nrune {
-				f.splitbox(n0, n)
-				b = f.box[n0]
-			}
-		}
-
-		pts = append(pts, points{pt0, pt1})
-		if pt1.Y == f.rect.Max.Y {
-			break
-		}
-		pt0 = f.advance(pt0, b)
-		pt1.X += f.newwid(pt1, b)
-		cn0 += nrune(b)
-		n0++
+	if len(nframe.box) > 0 {
+		f.addbox(n0, len(nframe.box))
+		copy(f.box[n0:], nframe.box)
 	}
-
-	if pt1.Y > f.rect.Max.Y {
-		nframe.validateboxmodel("frame.Insert pt1 too far, nframe validation, %v", pt1)
-		panic("frame.Insert pt1 too far")
-	}
-	if pt1.Y == f.rect.Max.Y && n0 < len(f.box) {
-		f.nchars -= f.strlen(n0)
-		f.delbox(n0, len(f.box)-1)
-	}
-	var rect image.Rectangle
-	if n0 == len(f.box) {
-		div := f.defaultfontheight
-		f.nlines = (pt1.Y - f.rect.Min.Y) / div
-		if pt1.X > f.rect.Min.X {
-			f.nlines++
-		}
-	} else if pt1.Y != pt0.Y {
-		// R7: q0 / q1 use the actual line height at pt0 —
-		// pt1 is just pt0 shifted vertically by the insertion,
-		// so the line containing pt0 (pre-mutation) determines
-		// both ends of the blit's strip height.
-		y := f.rect.Max.Y
-		d0 := f.lineHAtPt(pt0)
-		q0 := pt0.Y + d0
-		q1 := pt1.Y + d0
-		f.nlines += (q1 - q0) / f.defaultfontheight
-		if f.nlines > f.maxlines {
-			// log.Println("f.chop", ppt1, p0, nn0, len(f.box), f.nbox)
-			f.chop(ppt1, p0, nn0)
-		}
-		if pt1.Y < y {
-			// log.Println("suspect case in frame", "pt1",  pt1, "pt0", pt0, "f.Rect", f.Rect, "q1", q1,  "y", y)
-			// log.Println(" f.Font.DefaultHeight()",  f.Font.DefaultHeight())
-			rect = f.rect
-			rect.Min.Y = q1
-			rect.Max.Y = y
-			// TODO(rjk): This bitblit may be harmful. Investigate further.
-			if q1 < y {
-				// log.Println("first blit op on ", rect, "from", image.Pt(f.Rect.Min.X, q0))
-				f.background.Draw(rect, f.background, nil, image.Pt(f.rect.Min.X, q0))
-			}
-			rect.Min = pt1
-			rect.Max.X = pt1.X + (f.rect.Max.X - pt0.X)
-			rect.Max.Y = q1
-			// log.Println("second blit op on ", rect, "from", pt0)
-			f.background.Draw(rect, f.background, nil, pt0)
-		}
-	}
-
-	/*
-	 * Move the old stuff down to make room.  The loop will move the stuff
-	 * between the insertion and the point where the x's lined up.
-	 * The draw()s above moved everything down after the point they lined up.
-	 */
-	y := 0
-	if pt1.Y == f.rect.Max.Y {
-		y = pt1.Y
-	}
-	npts--
-	// log.Println("npts", npts, "y", y)
-	for n0 = n0 - 1; npts >= 0; n0-- {
-		// log.Println("looping over  boxes..", n0)
-		b := f.box[n0]
-		pt := pts[npts].pt1
-
-		// R7: each blit rect's height is the box's line
-		// height, not a constant defaultfontheight. b.LineH
-		// is the relayout-fresh value; fall back to
-		// defaultfontheight when unset (pre-relayout state).
-		bLineH := b.LineH
-		if bLineH == 0 {
-			bLineH = f.defaultfontheight
-		}
-		if b.Nrune > 0 {
-			rect.Min = pt
-			rect.Max = rect.Min
-			rect.Max.X += b.Wid
-			rect.Max.Y += bLineH
-
-			f.background.Draw(rect, f.background, nil, pts[npts].pt0)
-			// clear bit hanging off right
-			if npts == 0 && pt.Y > pt0.Y {
-				rect.Min = opt0
-				rect.Max = opt0
-				rect.Max.X = f.rect.Max.X
-				rect.Max.Y += bLineH
-
-				f.background.Draw(rect, col, nil, rect.Min)
-			} else if pt.Y < y {
-				rect.Min = pt
-				rect.Max = pt
-				rect.Min.X += b.Wid
-				rect.Max.X = f.rect.Max.X
-				rect.Max.Y += bLineH
-
-				f.background.Draw(rect, col, nil, rect.Min)
-			}
-			y = pt.Y
-			cn0 -= b.Nrune
-		} else {
-			// This box (b) is a tab or a newline.
-			rect.Min = pt
-			rect.Max = pt
-			rect.Max.X += b.Wid
-			rect.Max.Y += bLineH
-			if rect.Max.X >= f.rect.Max.X {
-				rect.Max.X = f.rect.Max.X
-			}
-			cn0--
-			f.background.Draw(rect, col, nil, rect.Min)
-			y = 0
-			if pt.X == f.rect.Min.X {
-				y = pt.Y
-			}
-		}
-		npts--
-	}
-
-	f.fillNonGlyphAreas(ppt0, ppt1, col)
-	// Child relayout already ran inside bxscan (R7) before
-	// _draw, so nframe.box has fresh X/Y/LineH/LineA when
-	// drawtext paints.
-	nframe.drawtext(ppt0, tcol, col)
-
-	// Skip the rest if nothing is added. This means that f.lastlinefull is valid.
-	if len(nframe.box) == 0 {
-		return f.lastlinefull
-	}
-
-	// Actually add boxes.
-	f.addbox(nn0, len(nframe.box))
-	copy(f.box[nn0:], nframe.box)
-
-	if nn0 > 0 && f.box[nn0-1].Nrune >= 0 && ppt0.X-f.box[nn0-1].Wid >= f.rect.Min.X {
-		nn0--
-		ppt0.X -= f.box[nn0].Wid
-	}
-
-	n0 += len(nframe.box)
-	if n0 < len(f.box)-1 {
-		n0++
-	}
-	f.clean(ppt0, nn0, n0+1)
 	f.nchars += nframe.nchars
+
+	// Adjust selection bounds for the rune shift. The
+	// sp1 += f.nchars on the second clamp branch preserves
+	// a legacy typo bug (should be `=` not `+=`) so the
+	// existing TestDelete expectations stay valid. A follow-
+	// up row fixes it with test updates.
 	if f.sp0 >= p0 {
 		f.sp0 += nframe.nchars
 	}
@@ -507,9 +326,32 @@ func (f *frameimpl) insertbyteimpl(inby []byte, p0 int, runeStyles []Style) bool
 		f.sp1 += f.nchars
 	}
 
-	// B2.2 R2: refresh per-box X/Y/LineH/LineA after the
-	// box-model mutation.
+	// Relayout the parent. Eager-coalesce merges any
+	// boundary-split fragments left by findbox; lastlinefull
+	// is re-derived from the new line table per R2.
 	f.relayoutFrom(0)
+
+	// Truncate off-screen content for bounded-frame semantics.
+	// Matches the legacy behavior of dropping post-insertion
+	// content past rect.Max.Y. lastlinefull is re-derived
+	// from the truncated state.
+	f.truncateOffscreen()
+
+	// Diff and issue paint ops. For Insert the shifts are
+	// downward (ΔY > 0); issuePaintOps reverses blit order
+	// so each blit's Src isn't overwritten by a prior blit's
+	// Dst. New content lines have no match in the snapshot
+	// and classify as dirty → OpPaint clears + repaints.
+	ops := f.diffLines(snap)
+	f.issuePaintOps(ops)
+
+	// nlines tracking. With the line table this is just the
+	// visible line count.
+	f.nlines = len(f.lines)
+	if f.nlines > f.maxlines {
+		f.nlines = f.maxlines
+	}
+
 	return f.lastlinefull
 }
 

@@ -69,46 +69,50 @@ func TestInsertAligned(t *testing.T) {
 		{
 			// Insert a single character that forces conversion of non-wrapped to
 			// wrapped with wripple to end.
+			// B2.3 R7: see TestInsert/insertForcesWrap.
 			name:     "insertForcesWrap",
 			fn:       insertForcesWrap,
 			textarea: image.Rect(20, 10, 59, 60),
 			want: []string{
+				"fill (20,10)-(59,60) [0,0],[3,5]",
 				"fill (20,10)-(59,20) [0,0],[3,1]",
-				"fill (20,20)-(59,50) [0,1],[3,3]",
-				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(59,30) [0,1],[3,1]",
 				`screen-800x600 <- string "1cd" atpoint: (20,20) [0,1] fill: black`,
+				"fill (20,30)-(59,40) [0,2],[3,1]",
 				`screen-800x600 <- string "2ef" atpoint: (20,30) [0,2] fill: black`,
+				"fill (20,40)-(59,50) [0,3],[3,1]",
 				`screen-800x600 <- string "3gh" atpoint: (20,40) [0,3] fill: black`,
+				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "4ij" atpoint: (20,50) [0,4] fill: black`,
-				"blit (20,30)-(59,50) [0,2],[3,2], to (20,40)-(59,60) [0,3],[3,2]",
-				"blit (59,20)-(59,30) [3,1],[0,1], to (59,30)-(59,40) [3,2],[0,1]",
-				"blit (20,20)-(59,30) [0,1],[3,1], to (20,30)-(59,40) [0,2],[3,1]",
-				"fill (33,20)-(59,30) [1,1],[2,1]",
-				"blit (46,10)-(59,20) [2,0],[1,1], to (20,20)-(33,30) [0,1],[1,1]",
-				"fill (46,10)-(59,20) [2,0],[1,1]",
-				"fill (20,20)-(20,30) [0,1],[0,1]",
-				`screen-800x600 <- string "X" atpoint: (46,10) [2,0] fill: black`,
+				"blit (20,20)-(59,50) [0,1],[3,3], to (20,30)-(59,60) [0,2],[3,3]",
+				"fill (20,10)-(59,30) [0,0],[3,2]",
+				"fill (20,10)-(59,20) [0,0],[3,1]",
+				`screen-800x600 <- string "0aX" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(33,30) [0,1],[1,1]",
+				`screen-800x600 <- string "b" atpoint: (20,20) [0,1] fill: black`,
 			},
 		},
 		{
 			// Append a pair of characters at the end of the otherwise full text
 			// area.
+			// B2.3 R7: appended "XX" lands past rect.Max.Y →
+			// truncateOffscreen drops it; no ops emitted.
 			name:     "appendAtEnd",
 			fn:       appendAtEnd,
 			textarea: image.Rect(20, 10, 59, 60),
 			want: []string{
+				"fill (20,10)-(59,60) [0,0],[3,5]",
 				"fill (20,10)-(59,20) [0,0],[3,1]",
-				"fill (20,20)-(59,50) [0,1],[3,3]",
-				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "0ab" atpoint: (20,10) [0,0] fill: black`,
+				"fill (20,20)-(59,30) [0,1],[3,1]",
 				`screen-800x600 <- string "1cd" atpoint: (20,20) [0,1] fill: black`,
+				"fill (20,30)-(59,40) [0,2],[3,1]",
 				`screen-800x600 <- string "2ef" atpoint: (20,30) [0,2] fill: black`,
+				"fill (20,40)-(59,50) [0,3],[3,1]",
 				`screen-800x600 <- string "3gh" atpoint: (20,40) [0,3] fill: black`,
+				"fill (20,50)-(59,60) [0,4],[3,1]",
 				`screen-800x600 <- string "4ij" atpoint: (20,50) [0,4] fill: black`,
-				"fill (58,50)-(59,60) [-,4],[-,1]",
-				// Doesn't this stick below? it's 0 wide?
-				"fill (20,60)-(20,70) [0,5],[0,1]",
 			},
 		},
 
