@@ -119,39 +119,68 @@ func (f *frameimpl) Charofpt(pt image.Point) int {
 	return f.charOfPtReader(pt)
 }
 
-// charOfPtReader is the B2.2 R3 pure-reader Charofpt. It finds
-// the box whose stored rect (X, Y, X+Wid, Y+LineH) contains pt
-// and walks runes within that box to identify the exact rune.
-// Same rationale as ptOfCharReader.
+// charOfPtReader is the B2.3 R3 pure-reader Charofpt. It
+// binary-searches f.lines by TopY to find the line containing
+// pt.Y, then walks only that line's boxes — O(log lines + per-
+// line boxes) rather than O(total boxes). Per frame-layout-
+// design §4.2.
 func (f *frameimpl) charOfPtReader(pt image.Point) int {
-	p := 0
-	for _, b := range f.box {
-		// Skip boxes whose line is fully above pt.Y.
-		if b.Y+b.LineH <= pt.Y {
-			p += nrune(b)
-			continue
+	if len(f.lines) == 0 {
+		return 0
+	}
+	if pt.Y < f.lines[0].TopY {
+		return 0
+	}
+
+	// Largest i such that lines[i].TopY <= pt.Y. Lines are
+	// Y-sorted by I-LAYOUT-3 so binary search is valid.
+	lo, hi := 0, len(f.lines)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if f.lines[mid].TopY <= pt.Y {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
-		// Stop once we've passed pt vertically.
-		if b.Y > pt.Y {
-			break
+	}
+	lineIdx := lo - 1
+	line := f.lines[lineIdx]
+
+	// Click below the last line's bottom → end of content.
+	// Derive the end-of-content rune offset from the box list
+	// directly (not f.nchars) so this works even when callers
+	// construct a frame inline without maintaining nchars.
+	if lineIdx == len(f.lines)-1 && pt.Y >= line.TopY+line.LineH {
+		p := line.FirstRune
+		for i := line.FirstBox; i < len(f.box); i++ {
+			p += nrune(f.box[i])
 		}
-		// b is on the line containing pt.Y. Skip boxes left
-		// of pt.X.
+		return p
+	}
+
+	// Resolve this line's box range, then walk only those boxes.
+	boxStart := line.FirstBox
+	boxEnd := len(f.box)
+	if lineIdx+1 < len(f.lines) {
+		boxEnd = f.lines[lineIdx+1].FirstBox
+	}
+
+	p := line.FirstRune
+	for i := boxStart; i < boxEnd; i++ {
+		b := f.box[i]
 		if b.X+b.Wid <= pt.X {
 			p += nrune(b)
 			continue
 		}
-		// b overlaps pt.X. If b is special (tab/newline),
-		// the whole box maps to "before pt" or "after pt"
-		// based on X.
+		// b overlaps pt.X.
 		if b.Nrune < 0 {
 			if b.X > pt.X {
-				break
+				return p
 			}
 			p += nrune(b)
 			continue
 		}
-		// Content box: walk runes.
+		// Content box: walk runes by X.
 		font := f.fontFor(b.Style)
 		x := b.X
 		s := 0

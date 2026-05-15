@@ -755,14 +755,51 @@ Next: B2.3.R3 — route `Charofpt` through the line-summary
 table. Binary search by `TopY`; the inner walk uses
 `FirstRune` to identify rune offsets inside a line.
 
+### 2026-05-14 (later still 2) — R3 landed
+
+`charOfPtReader` rewritten in `frame/ptofchar.go`:
+
+- Binary search `f.lines` by `TopY` (lines are Y-sorted by
+  I-LAYOUT-3) to find the target line in O(log n).
+- Walk only that line's boxes via `FirstBox`..next-line's-
+  `FirstBox`. Inner walk seeds `p` from `line.FirstRune`.
+- Above-content / empty-frame / below-content cases handled
+  via explicit shortcuts. End-of-content rune offset is
+  derived from the box list (not `f.nchars`) so inline-
+  constructed test fixtures work.
+
+Tests: 10 numbered requirements (R3.1–R3.10) in
+`frame/charofpt_line_table_test.go`. Plain-text parity test
+sweeps a grid of click positions across a 4-line frame; all
+results stay within `[FirstRune, nextLine.FirstRune]` for
+their respective lines.
+
+Stage-4 minor: one existing `TestCharofpt` case (inline-
+constructed frame, no `nchars`) initially failed because the
+first cut of my new code returned `f.nchars` for below-
+content clicks. Fixed by deriving end-of-content from the
+box list directly. Not a wrong-design — just a more robust
+implementation. No test changes needed.
+
+`./regression.sh` green. Legacy `charofptimpl` retained for
+the `unlockedproxy.Charofpt` path; deleted in R11.
+
+Next: B2.3.R4 — eliminate `_draw` as an accumulator walker.
+`bxscan` reads `pt1` from the staging frame's last line-table
+entry instead of `_draw`'s pt accumulator. This is called out
+in the migration order as the single biggest correctness gain
+(suspected root of the scroll-overlap glitches that motivated
+B2.3 in the first place).
+
 ## Next-session candidates
 
-1. **B2.3.R3 — `Charofpt` through line-summary table.**
-   Implement `charOfPtReader` to binary-search `f.lines` by
-   `TopY`, then walk that line's boxes by `X`. Click-on-
-   heading must hit a rune inside the heading. Plain-text
-   frames byte-identical. Instrumentation counter for box-
-   walk steps to confirm the O(log lines) shape.
+1. **B2.3.R4 — eliminate `_draw` accumulator.** Per
+   `frame-layout-design §6.4`, `bxscan` reads
+   `pt1 = lines[-1].TopY + lines[-1].LineH` on the staging
+   frame; `_draw`'s body keeps the paint walk but drops the
+   pt-accumulator and the canfit+splitbox path (those are
+   now in `relayoutFrom` via R1's eager split). Manual scroll
+   test on `test-md-layout.md` is the user-visible gate.
 2. Phase B5.3 — rewrite the 16 knowntofail sub-tests against
    the B5 layout. Use `frame/testdata/*/_trial.html` as the
    reference; verify each one shows the intended wrap
