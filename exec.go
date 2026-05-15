@@ -75,6 +75,7 @@ var globalexectab = []Exectab{
 	{"New", newx, false, true /*unused*/, true /*unused*/},
 	{"Newcol", newcol, false, true /*unused*/, true /*unused*/},
 	{"Paste", paste, true, true, true /*unused*/},
+	{"Plain", plainx, false, true /*unused*/, true /*unused*/},
 	{"Put", put, false, true /*unused*/, true /*unused*/},
 	{"Putall", putall, false, true /*unused*/, true /*unused*/},
 	{"Redo", undo, false, false, true /*unused*/},
@@ -535,6 +536,29 @@ func boxoutlines(et, _, _ *Text, _, _ bool, _ string) {
 		state = "on"
 	}
 	warning(nil, "Box outlines %s for %s\n", state, et.w.body.file.Name())
+}
+
+// plainx is the "Plain" tag command. Toggles consumer-side
+// suppression of spans-driven styling on the et window's body:
+// when on, Inserted uses the unstyled path, the spans-Observe
+// callback skips repaints, the S event is suppressed, and the
+// current visible styling is stripped. When off, the existing
+// spans state is re-applied so styling snaps back without
+// requiring a producer to re-send.
+func plainx(et, _, _ *Text, _, _ bool, _ string) {
+	if et == nil || et.w == nil {
+		return
+	}
+	body := &et.w.body
+	if body.fr == nil {
+		return
+	}
+	on := body.TogglePlain()
+	state := "off"
+	if on {
+		state = "on"
+	}
+	warning(nil, "Plain %s for %s\n", state, et.w.body.file.Name())
 }
 
 // spansoverlay is the "Spans" tag command. Toggles the Text's

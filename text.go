@@ -46,6 +46,40 @@ func (t *Text) ToggleSpansOverlay() bool {
 	return t.showSpans
 }
 
+// TogglePlain flips the "Plain" mode on the body Text. When
+// enabled, this Text behaves as if no spans store were attached:
+// Inserted uses the unstyled path, the spans-Observe callback
+// skips fr.SetStyleRange, the S event is suppressed (producers
+// stop being prompted to refresh), and the currently visible
+// styling is cleared via fr.SetStyleRange(plain) over the
+// frame's rune range. When disabled, the current spans state is
+// re-applied to the visible range so existing styles snap back.
+// The spans store itself is never modified — Plain is a
+// consumer-side gate.
+//
+// Returns the new state.
+func (t *Text) TogglePlain() bool {
+	t.plain = !t.plain
+	if t.fr == nil || t.spans == nil {
+		return t.plain
+	}
+	nchars := t.fr.GetFrameFillStatus().Nchars
+	if nchars == 0 {
+		return t.plain
+	}
+	if t.plain {
+		// Strip visible styling in one SetStyleRange call.
+		t.fr.SetStyleRange(0, nchars, []frame.StyleRun{
+			{Len: nchars, Style: frame.Style{}},
+		})
+	} else {
+		// Re-apply current spans over the visible range.
+		runs := t.spans.GetStyleRuns(t.org, t.org+nchars)
+		t.fr.SetStyleRange(0, nchars, runs)
+	}
+	return t.plain
+}
+
 // paintSpansOverlay draws an outline rectangle per non-plain
 // region in the spans store. Per invariant I-12, a region that
 // soft-wraps across multiple visual lines produces one outline
@@ -109,7 +143,12 @@ func (t *Text) paintSpansOverlay() {
 func (t *Text) attachSpans(s spans.Store) {
 	t.spans = s
 	s.Observe(func(p0, p1 int) {
-		if t.fr == nil {
+		if t.fr == nil || t.plain {
+			// Plain mode: ignore producer-driven style
+			// updates. The spans store still accumulates
+			// them; on toggle-off they're applied
+			// wholesale via the visible-range
+			// SetStyleRange in TogglePlain.
 			return
 		}
 		v0 := t.org
@@ -189,6 +228,18 @@ type Text struct {
 	// (used to shift content) would otherwise fire the hook
 	// with a stale t.org and draw overlays at wrong positions.
 	suppressSpansOverlay bool
+
+	// plain is the "Plain" tag-bar toggle. When true, this
+	// Text behaves as if it had no spans store: Inserted uses
+	// the unstyled fr.InsertByte path, the attachSpans Observe
+	// callback skips fr.SetStyleRange, and SetSelect suppresses
+	// the S event (so external producers like md2spans stop
+	// being told to refresh). Toggling on clears visible
+	// styling via fr.SetStyleRange(plain) over the frame's
+	// rune range; toggling off re-applies the current spans
+	// state. The spans store itself is unchanged — Plain just
+	// gates the consumer side.
+	plain bool
 
 	org       int // Origin of the frame within the buffer
 	q0        int
@@ -660,11 +711,13 @@ func (t *Text) Inserted(oq0 file.OffsetTuple, b []byte, nr int) {
 	} else {
 		if t.fr != nil && q0 <= t.org+(t.fr.GetFrameFillStatus().Nchars) {
 			framePos := q0 - t.org
-			if t.spans != nil && !t.spans.Empty() {
+			if t.spans != nil && !t.spans.Empty() && !t.plain {
 				// Styled path: spans observer fired before this
 				// callback (§8.1), so GetStyleRuns reflects the
 				// post-insert state. Convert bytes → runes so
 				// InsertWithStyle can index by rune offset.
+				// Skipped when t.plain is set (the "Plain"
+				// toggle); plain mode uses the unstyled path.
 				runes := []rune(string(b))
 				styles := t.spans.GetStyleRuns(q0, q0+nr)
 				t.fr.InsertWithStyle(runes, framePos, styles)
@@ -774,7 +827,7 @@ func (t *Text) fill(fr frame.SelectScrollUpdater) error {
 
 		framePos := fr.GetFrameFillStatus().Nchars
 		var lastlinefull bool
-		if t.spans != nil && !t.spans.Empty() {
+		if t.spans != nil && !t.spans.Empty() && !t.plain {
 			docStart := t.org + framePos
 			styles := t.spans.GetStyleRuns(docStart, docStart+i)
 			lastlinefull = fr.InsertWithStyle(rp[:i], framePos, styles)
@@ -1532,8 +1585,9 @@ func (t *Text) SetSelect(q0, q1 int) {
 	// listener is open (w.Eventf gates on nopen[QWevent]), and
 	// the selection actually changed. Body-only and the
 	// spans-store check are explicit here; the listener gate is
-	// applied inside Eventf.
-	if t.what == Body && t.spans != nil && t.w != nil &&
+	// applied inside Eventf. The Plain toggle also suppresses
+	// the S event so producers stop being prompted to refresh.
+	if t.what == Body && t.spans != nil && !t.plain && t.w != nil &&
 		(oldQ0 != q0 || oldQ1 != q1) {
 		t.w.Eventf("S%d %d 0 0 \n", q0, q1)
 	}
