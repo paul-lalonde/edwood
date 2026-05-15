@@ -146,4 +146,3 @@ func (f *frameimpl) charOfPtReader(pt image.Point) int {
 	}
 	return p
 }
-

@@ -28,6 +28,11 @@ func (up *selectscrollupdaterimpl) DefaultFontHeight() int {
 	return f.defaultfontheight
 }
 
+func (up *selectscrollupdaterimpl) LineYOffset(n int) int {
+	f := (*frameimpl)(up)
+	return f.lineYOffsetLocked(n)
+}
+
 func (up *selectscrollupdaterimpl) Delete(p0, p1 int) int {
 	// log.Println("selectscrollupdaterimpl.Delete")
 	f := (*frameimpl)(up)

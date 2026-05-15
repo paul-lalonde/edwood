@@ -997,7 +997,13 @@ func (t *Text) Type(r rune) {
 	}
 
 	caseDown := func() {
-		q0 = t.org + t.fr.Charofpt(image.Pt(t.fr.Rect().Min.X, t.fr.Rect().Min.Y+n*t.fr.DefaultFontHeight()))
+		// B2.3: scroll-down by n VISIBLE lines. Variable-
+		// height content (scaled headings) means n lines
+		// isn't n*DefaultFontHeight pixels; LineYOffset asks
+		// the frame for the actual top-Y of line n from its
+		// line-summary table.
+		yOff := t.fr.LineYOffset(n)
+		q0 = t.org + t.fr.Charofpt(image.Pt(t.fr.Rect().Min.X, t.fr.Rect().Min.Y+yOff))
 		t.SetOrigin(q0, true)
 	}
 	caseUp := func() {

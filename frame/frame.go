@@ -33,6 +33,16 @@ type SelectScrollUpdater interface {
 	// TODO(rjk): Reconsider this for Frames containing many styles.
 	DefaultFontHeight() int
 
+	// LineYOffset returns the screen Y (relative to rect.Min.Y)
+	// at which the top of visible line n sits. For variable-
+	// height content (styled / scaled lines) this differs from
+	// n * DefaultFontHeight; callers that walk by "line index"
+	// (e.g., scroll-wheel handlers) should use this rather than
+	// multiplying by the default height. For n past the last
+	// visible line, returns the total visible-content height.
+	// Per B2.3 the value comes from the line-summary table.
+	LineYOffset(n int) int
+
 	// Delete deletes from the Frame the text between p0 and p1; p1 points at
 	// the first rune beyond the deletion. Returns the number of whole lines
 	// removed.
@@ -501,6 +511,25 @@ func (f *frameimpl) DefaultFontHeight() int {
 	f.lk.Lock()
 	defer f.lk.Unlock()
 	return f.defaultfontheight
+}
+
+func (f *frameimpl) LineYOffset(n int) int {
+	f.lk.Lock()
+	defer f.lk.Unlock()
+	return f.lineYOffsetLocked(n)
+}
+
+// lineYOffsetLocked is the body of LineYOffset, callable from
+// the unlocked proxy. Caller must hold f.lk.
+func (f *frameimpl) lineYOffsetLocked(n int) int {
+	if n <= 0 || len(f.lines) == 0 {
+		return 0
+	}
+	if n >= len(f.lines) {
+		last := f.lines[len(f.lines)-1]
+		return last.TopY + last.LineH - f.rect.Min.Y
+	}
+	return f.lines[n].TopY - f.rect.Min.Y
 }
 
 // TODO(rjk): This may do unnecessary work for some option settings.
